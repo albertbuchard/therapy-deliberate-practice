@@ -8,6 +8,7 @@ Production-grade monorepo for a psychotherapy deliberate-practice platform.
 /apps
   /web
   /api
+  /worker
 /packages
   /shared
 /services
@@ -28,8 +29,8 @@ Production-grade monorepo for a psychotherapy deliberate-practice platform.
 ```
 cp .env.example .env
 npm install
-npm run dev -w apps/web
-npm run dev -w apps/api
+npm run build -w apps/web
+npm run dev:worker
 ```
 
 ### Run with Docker Compose
@@ -38,9 +39,46 @@ npm run dev -w apps/api
 docker compose -f infra/docker-compose.yml up
 ```
 
-## Cloudflare
+## Cloudflare Worker (full-stack)
 
-API is built with Hono and ready for Cloudflare Workers. Configure `wrangler.toml` with D1 + R2.
+The full-stack Worker lives in `apps/worker`. It serves the built Vite assets from `apps/web/dist`
+and routes API traffic under `/api/v1/*` to the Hono app.
+
+### D1 setup & migrations
+
+Create the D1 database (one-time) and update `apps/worker/wrangler.jsonc` with the returned
+`database_id`:
+
+```
+npx wrangler d1 create deliberate_practice
+```
+
+Apply migrations locally and remotely:
+
+```
+npx wrangler d1 execute deliberate_practice --file=infra/migrations/0001_init.sql --local
+npx wrangler d1 execute deliberate_practice --file=infra/migrations/0001_init.sql --remote
+```
+
+Optional: seed demo exercise data:
+
+```
+npx wrangler d1 execute deliberate_practice --file=infra/seeds/0001_demo_exercises.sql --local
+npx wrangler d1 execute deliberate_practice --file=infra/seeds/0001_demo_exercises.sql --remote
+```
+
+### Worker dev & deploy
+
+```
+npm run build -w apps/web
+npm run dev:worker
+```
+
+Deploy:
+
+```
+npm run deploy:worker
+```
 
 ## Configuration
 
@@ -49,4 +87,3 @@ API is built with Hono and ready for Cloudflare Workers. Configure `wrangler.tom
 - `LOCAL_STT_URL`
 - `LOCAL_LLM_URL`
 - `LOCAL_LLM_MODEL`
-- `DB_PATH`

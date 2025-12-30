@@ -1,5 +1,5 @@
 import type { SttProvider } from "@deliberate/shared";
-import { env } from "../env";
+import type { RuntimeEnv } from "../env";
 
 const healthCheck = async (url: string) => {
   try {
@@ -10,12 +10,12 @@ const healthCheck = async (url: string) => {
   }
 };
 
-export const LocalWhisperSttProvider = (): SttProvider => ({
+export const LocalWhisperSttProvider = (runtimeEnv: RuntimeEnv): SttProvider => ({
   kind: "local",
   model: "whisper-large-v3",
-  healthCheck: () => healthCheck(env.localSttUrl),
+  healthCheck: () => healthCheck(runtimeEnv.localSttUrl),
   transcribe: async (audio) => {
-    const response = await fetch(`${env.localSttUrl}/transcribe`, {
+    const response = await fetch(`${runtimeEnv.localSttUrl}/transcribe`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ audio })
@@ -27,23 +27,32 @@ export const LocalWhisperSttProvider = (): SttProvider => ({
   }
 });
 
-export const OpenAISttProvider = (): SttProvider => ({
+const decodeBase64ToBytes = (base64: string) => {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+export const OpenAISttProvider = (runtimeEnv: RuntimeEnv): SttProvider => ({
   kind: "openai",
   model: "whisper-1",
-  healthCheck: async () => Boolean(env.openaiApiKey),
+  healthCheck: async () => Boolean(runtimeEnv.openaiApiKey),
   transcribe: async (audio) => {
-    if (!env.openaiApiKey) {
+    if (!runtimeEnv.openaiApiKey) {
       throw new Error("OpenAI key missing");
     }
     const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.openaiApiKey}`
+        Authorization: `Bearer ${runtimeEnv.openaiApiKey}`
       },
       body: (() => {
         const form = new FormData();
         form.append("model", "whisper-1");
-        form.append("file", new Blob([Buffer.from(audio, "base64")]), "audio.webm");
+        form.append("file", new Blob([decodeBase64ToBytes(audio)]), "audio.webm");
         return form;
       })()
     });

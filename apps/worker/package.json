@@ -1,0 +1,18 @@
+{
+  "name": "@deliberate/worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@deliberate/api": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250311.0",
+    "wrangler": "^3.100.0"
+  }
+}

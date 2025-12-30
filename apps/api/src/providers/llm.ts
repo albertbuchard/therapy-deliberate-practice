@@ -1,5 +1,5 @@
 import type { LlmProvider, EvaluationInput, EvaluationResult } from "@deliberate/shared";
-import { env } from "../env";
+import type { RuntimeEnv } from "../env";
 
 const healthCheck = async (url: string) => {
   try {
@@ -10,12 +10,12 @@ const healthCheck = async (url: string) => {
   }
 };
 
-export const LocalMlxLlmProvider = (): LlmProvider => ({
+export const LocalMlxLlmProvider = (runtimeEnv: RuntimeEnv): LlmProvider => ({
   kind: "local",
-  model: env.localLlmModel,
-  healthCheck: () => healthCheck(env.localLlmUrl),
+  model: runtimeEnv.localLlmModel,
+  healthCheck: () => healthCheck(runtimeEnv.localLlmUrl),
   evaluateDeliberatePractice: async (input) => {
-    const response = await fetch(`${env.localLlmUrl}/evaluate`, {
+    const response = await fetch(`${runtimeEnv.localLlmUrl}/evaluate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input)
@@ -27,12 +27,12 @@ export const LocalMlxLlmProvider = (): LlmProvider => ({
   }
 });
 
-export const OpenAILlmProvider = (): LlmProvider => ({
+export const OpenAILlmProvider = (runtimeEnv: RuntimeEnv): LlmProvider => ({
   kind: "openai",
   model: "gpt-4o-mini",
-  healthCheck: async () => Boolean(env.openaiApiKey),
+  healthCheck: async () => Boolean(runtimeEnv.openaiApiKey),
   evaluateDeliberatePractice: async (input: EvaluationInput) => {
-    if (!env.openaiApiKey) {
+    if (!runtimeEnv.openaiApiKey) {
       throw new Error("OpenAI key missing");
     }
     const systemPrompt =
@@ -40,7 +40,7 @@ export const OpenAILlmProvider = (): LlmProvider => ({
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.openaiApiKey}`,
+        Authorization: `Bearer ${runtimeEnv.openaiApiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
