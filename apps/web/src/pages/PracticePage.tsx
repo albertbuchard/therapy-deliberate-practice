@@ -71,7 +71,11 @@ export const PracticePage = () => {
       dispatch(setTranscript(result.transcript.text));
       dispatch(setRecordingState("ready"));
     } catch (err) {
-      setError("Unable to evaluate response. Please try again.");
+      const message =
+        typeof err === "object" && err && "data" in err && (err as { data?: { error?: string } }).data
+          ? (err as { data?: { error?: string } }).data?.error
+          : null;
+      setError(message ?? "Unable to evaluate response. Please try again.");
       dispatch(setRecordingState("ready"));
     }
   };

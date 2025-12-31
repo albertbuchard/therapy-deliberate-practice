@@ -5,10 +5,11 @@ import { LocalWhisperSttProvider, OpenAISttProvider } from "./stt";
 
 export const selectSttProvider = async (
   mode: ProviderMode,
-  env: RuntimeEnv
+  env: RuntimeEnv,
+  openaiApiKey: string
 ): Promise<SttProvider> => {
   const local = LocalWhisperSttProvider(env);
-  const cloud = OpenAISttProvider(env);
+  const cloud = OpenAISttProvider({ apiKey: openaiApiKey });
 
   if (mode === "local_only") {
     if (!(await local.healthCheck())) {
@@ -35,10 +36,11 @@ export const selectSttProvider = async (
 
 export const selectLlmProvider = async (
   mode: ProviderMode,
-  env: RuntimeEnv
+  env: RuntimeEnv,
+  openaiApiKey: string
 ): Promise<LlmProvider> => {
   const local = LocalMlxLlmProvider(env);
-  const cloud = OpenAILlmProvider(env);
+  const cloud = OpenAILlmProvider({ apiKey: openaiApiKey });
 
   if (mode === "local_only") {
     if (!(await local.healthCheck())) {

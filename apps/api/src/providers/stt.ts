@@ -36,18 +36,18 @@ export const LocalWhisperSttProvider = (env: RuntimeEnv): SttProvider => ({
   }
 });
 
-export const OpenAISttProvider = (env: RuntimeEnv): SttProvider => ({
+export const OpenAISttProvider = ({ apiKey }: { apiKey: string }): SttProvider => ({
   kind: "openai",
   model: "whisper-1",
-  healthCheck: async () => Boolean(env.openaiApiKey),
+  healthCheck: async () => Boolean(apiKey),
   transcribe: async (audio) => {
-    if (!env.openaiApiKey) {
+    if (!apiKey) {
       throw new Error("OpenAI key missing");
     }
     const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.openaiApiKey}`
+        Authorization: `Bearer ${apiKey}`
       },
       body: (() => {
         const form = new FormData();

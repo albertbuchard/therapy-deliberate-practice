@@ -2,7 +2,10 @@ import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 
 type AuthState = {
   userId: string | null;
-  token: string | null;
+  email: string | null;
+  accessToken: string | null;
+  isAuthenticated: boolean;
+  authChecked: boolean;
   isAdmin: boolean;
   adminEmail: string | null;
   adminAuthenticated: boolean;
@@ -10,8 +13,11 @@ type AuthState = {
 };
 
 const initialState: AuthState = {
-  userId: "demo-user",
-  token: null,
+  userId: null,
+  email: null,
+  accessToken: null,
+  isAuthenticated: false,
+  authChecked: false,
   isAdmin: false,
   adminEmail: null,
   adminAuthenticated: false,
@@ -22,9 +28,21 @@ const authSlice = createSlice({
   name: "auth",
   initialState,
   reducers: {
-    setUser(state, action: PayloadAction<{ userId: string; token?: string }>) {
+    setUser(
+      state,
+      action: PayloadAction<{
+        userId: string | null;
+        email: string | null;
+        accessToken: string | null;
+        isAuthenticated: boolean;
+        authChecked: boolean;
+      }>
+    ) {
       state.userId = action.payload.userId;
-      state.token = action.payload.token ?? null;
+      state.email = action.payload.email;
+      state.accessToken = action.payload.accessToken;
+      state.isAuthenticated = action.payload.isAuthenticated;
+      state.authChecked = action.payload.authChecked;
     },
     setAdminStatus(
       state,

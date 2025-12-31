@@ -8,6 +8,7 @@ Production-grade monorepo for a psychotherapy deliberate-practice platform.
 /apps
   /web
   /api
+  /worker
 /packages
   /shared
 /services
@@ -16,25 +17,145 @@ Production-grade monorepo for a psychotherapy deliberate-practice platform.
 /infra
 ```
 
-## Local development
-
-### Prereqs
+## Prerequisites
 
 - Node 20
-- Docker (optional)
+- npm 10+
+- Wrangler (`npm install -g wrangler`)
+- A Supabase project (Google + GitHub OAuth enabled)
+- Cloudflare account (for D1 + Worker deploys)
 
-### Run locally
+## Environment setup
+
+### Local `.env` (API + shared defaults)
+
+Copy the root env file and fill in the required values for local API dev (`apps/api` uses `DB_PATH`).
 
 ```
 cp .env.example .env
+```
+
+Add/confirm the following variables in the root `.env`:
+
+```
+AI_MODE=local_prefer
+OPENAI_API_KEY=sk-...
+OPENAI_KEY_ENCRYPTION_SECRET=your-32+char-secret
+SUPABASE_JWT_SECRET=your-supabase-jwt-secret
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+LOCAL_STT_URL=http://localhost:7001
+LOCAL_LLM_URL=http://localhost:7002
+LOCAL_LLM_MODEL=mlx-community/Mistral-7B-Instruct-v0.2
+DB_PATH=./infra/local.db
+ENV=development
+BYPASS_ADMIN_AUTH=true
+DEV_ADMIN_TOKEN=local-admin-token
+```
+
+### Web env (`apps/web/.env`)
+
+Create a Vite env file for the frontend:
+
+```
+cd apps/web
+cat <<'ENV' > .env
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+ENV
+```
+
+### Worker env (Cloudflare)
+
+In `apps/worker/wrangler.jsonc`, define non-secret vars and bind the D1 database:
+
+- `AI_MODE`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_JWT_SECRET`
+- `LOCAL_STT_URL`
+- `LOCAL_LLM_URL`
+- `LOCAL_LLM_MODEL`
+
+Use Wrangler secrets for sensitive values:
+
+```
+cd apps/worker
+wrangler secret put OPENAI_API_KEY
+wrangler secret put OPENAI_KEY_ENCRYPTION_SECRET
+wrangler secret put SUPABASE_JWT_SECRET
+```
+
+## Supabase configuration
+
+1. In Supabase → **Authentication** → **Providers**, enable **Google** and **GitHub**.
+2. Configure OAuth redirect URLs:
+   - `http://localhost:5173/login`
+   - `https://your-production-domain.com/login`
+3. Grab the **Project URL** and **Anon public key** for `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+4. Grab the **JWT secret** (Project Settings → API → JWT Secret) for `SUPABASE_JWT_SECRET`.
+
+## D1 setup & migrations
+
+All Wrangler commands must be run from `apps/worker`.
+
+### Create the database
+
+```
+cd apps/worker
+wrangler d1 create deliberate_practice
+```
+
+Copy the resulting `database_id` into `apps/worker/wrangler.jsonc` under the `DB` binding.
+
+### Local D1 (development)
+
+```
+cd apps/worker
+wrangler d1 execute DB --file=../../infra/migrations/0001_init.sql --local
+wrangler d1 execute DB --file=../../infra/migrations/0002_add_exercise_content.sql --local
+wrangler d1 execute DB --file=../../infra/migrations/0003_add_user_settings.sql --local
+wrangler d1 execute DB --file=../../infra/seed.sql --local
+```
+
+### Remote D1 (production)
+
+Run these in order from `apps/worker`:
+
+```
+cd apps/worker
+npx wrangler d1 execute DB --remote --file=../../infra/migrations/0001_init.sql
+npx wrangler d1 execute DB --remote --file=../../infra/migrations/0002_add_exercise_content.sql
+npx wrangler d1 execute DB --remote --file=../../infra/migrations/0003_add_user_settings.sql
+npx wrangler d1 execute DB --remote --file=../../infra/seed.sql
+```
+
+> ✅ The three commands above are required verbatim for the remote setup.
+
+### Local SQLite for `apps/api`
+
+For the Node dev server (`apps/api`), initialize the SQLite database:
+
+```
+sqlite3 infra/local.db < infra/migrations/0001_init.sql
+sqlite3 infra/local.db < infra/migrations/0002_add_exercise_content.sql
+sqlite3 infra/local.db < infra/migrations/0003_add_user_settings.sql
+sqlite3 infra/local.db < infra/seed.sql
+```
+
+## Running locally
+
+### Web + API (node)
+
+```
 npm install
 npm run dev -w apps/web
 npm run dev -w apps/api
 ```
 
-### Run full-stack Worker locally
+### Full-stack Worker (serves web + API)
 
-Build the frontend first so the Worker can serve static assets, then run Wrangler from `apps/worker`:
+Build the frontend first so the Worker can serve static assets:
 
 ```
 npm run build -w apps/web
@@ -42,40 +163,33 @@ cd apps/worker
 npm run dev
 ```
 
-### Run with Docker Compose
+### Local inference services (optional)
 
 ```
 docker compose -f infra/docker-compose.yml up
 ```
 
-## Cloudflare
+## Deployment (Worker)
 
-The `apps/worker` package deploys a single Cloudflare Worker that serves the Vite app as static assets and mounts the Hono API under `/api/v1`.
+1. Build the web app:
+   ```
+   npm run build -w apps/web
+   ```
+2. Deploy the Worker:
+   ```
+   cd apps/worker
+   wrangler deploy
+   ```
+3. Ensure Worker secrets/vars are set (see Environment setup section).
 
-1. Create the D1 database (one time) and update `apps/worker/wrangler.jsonc` with the generated `database_id`.
-2. Apply migrations with Wrangler commands (local or remote).
+## Configuration reference
 
-### D1 setup & migrations
-
-```
-cd apps/worker
-wrangler d1 create deliberate_practice
-wrangler d1 execute DB --file=../../infra/migrations/0001_init.sql --local
-wrangler d1 execute DB --file=../../infra/migrations/0001_init.sql
-```
-
-### Optional: seed demo exercise
-
-```
-cd apps/worker
-wrangler d1 execute DB --file=../../infra/seed.sql --local
-wrangler d1 execute DB --file=../../infra/seed.sql
-```
-
-## Configuration
-
-- `AI_MODE` = local_prefer | openai_only | local_only
+- `AI_MODE` = `local_prefer` | `openai_only` | `local_only`
 - `OPENAI_API_KEY`
+- `OPENAI_KEY_ENCRYPTION_SECRET` (required; encrypts user keys at rest)
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_JWT_SECRET` (required for Supabase JWT verification)
 - `ADMIN_EMAILS` (comma-separated allowlist for admin access)
 - `ADMIN_GROUPS` (optional comma-separated Cloudflare Access group IDs)
 - `CF_ACCESS_AUD` (Cloudflare Access application audience)
@@ -86,6 +200,8 @@ wrangler d1 execute DB --file=../../infra/seed.sql
 - `LOCAL_LLM_URL`
 - `LOCAL_LLM_MODEL`
 - `DB_PATH` (Node-only SQLite path for `apps/api` dev server)
+- `VITE_SUPABASE_URL` (web)
+- `VITE_SUPABASE_ANON_KEY` (web)
 
 ## Admin library (authoring/import)
 

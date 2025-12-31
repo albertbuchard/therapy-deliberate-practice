@@ -27,12 +27,12 @@ export const LocalMlxLlmProvider = (env: RuntimeEnv): LlmProvider => ({
   }
 });
 
-export const OpenAILlmProvider = (env: RuntimeEnv): LlmProvider => ({
+export const OpenAILlmProvider = ({ apiKey }: { apiKey: string }): LlmProvider => ({
   kind: "openai",
   model: "gpt-4o-mini",
-  healthCheck: async () => Boolean(env.openaiApiKey),
+  healthCheck: async () => Boolean(apiKey),
   evaluateDeliberatePractice: async (input: EvaluationInput) => {
-    if (!env.openaiApiKey) {
+    if (!apiKey) {
       throw new Error("OpenAI key missing");
     }
     const systemPrompt =
@@ -40,7 +40,7 @@ export const OpenAILlmProvider = (env: RuntimeEnv): LlmProvider => ({
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.openaiApiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({

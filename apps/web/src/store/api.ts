@@ -5,6 +5,7 @@ import type {
   EvaluationResult,
   DeliberatePracticeTaskV2
 } from "@deliberate/shared";
+import type { RootState } from ".";
 
 export type AdminWhoami = {
   isAuthenticated: boolean;
@@ -12,11 +13,38 @@ export type AdminWhoami = {
   email: string | null;
 };
 
+export type UserProfile = {
+  id: string;
+  email: string | null;
+  created_at: string | null;
+  hasOpenAiKey: boolean;
+};
+
+export type UserSettings = {
+  aiMode: "local_prefer" | "openai_only" | "local_only";
+  localSttUrl: string;
+  localLlmUrl: string;
+  storeAudio: boolean;
+  hasOpenAiKey: boolean;
+};
+
+export type UserSettingsInput = {
+  aiMode: UserSettings["aiMode"];
+  localSttUrl: string | null;
+  localLlmUrl: string | null;
+  storeAudio: boolean;
+};
+
 export const api = createApi({
   reducerPath: "api",
   baseQuery: fetchBaseQuery({
     baseUrl: "/api/v1",
-    prepareHeaders: (headers) => {
+    prepareHeaders: (headers, { getState }) => {
+      const state = getState() as RootState;
+      const token = state.auth.accessToken;
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
       if (import.meta.env.DEV) {
         const devToken = window.localStorage.getItem("devAdminToken");
         if (devToken) {
@@ -30,6 +58,24 @@ export const api = createApi({
   endpoints: (builder) => ({
     getAdminWhoami: builder.query<AdminWhoami, void>({
       query: () => "/admin/whoami"
+    }),
+    getMe: builder.query<UserProfile, void>({
+      query: () => "/me"
+    }),
+    getMeSettings: builder.query<UserSettings, void>({
+      query: () => "/me/settings"
+    }),
+    updateMeSettings: builder.mutation<UserSettings, UserSettingsInput>({
+      query: (body) => ({ url: "/me/settings", method: "PUT", body })
+    }),
+    updateOpenAiKey: builder.mutation<{ ok: boolean; hasOpenAiKey: boolean }, { openaiApiKey: string }>({
+      query: (body) => ({ url: "/me/openai-key", method: "PUT", body })
+    }),
+    deleteOpenAiKey: builder.mutation<{ ok: boolean; hasOpenAiKey: boolean }, void>({
+      query: () => ({ url: "/me/openai-key", method: "DELETE" })
+    }),
+    validateOpenAiKey: builder.mutation<{ ok: boolean; error?: string }, { openaiApiKey?: string }>({
+      query: (body) => ({ url: "/me/openai-key/validate", method: "POST", body })
     }),
     getExercises: builder.query<Exercise[], { tag?: string; difficulty?: number; q?: string }>({
       query: (params) => ({ url: "/exercises", params }),
@@ -60,7 +106,7 @@ export const api = createApi({
       query: (body) => ({ url: "/admin/import-exercise", method: "POST", body }),
       invalidatesTags: ["Exercise"]
     }),
-    startAttempt: builder.mutation<{ attempt_id: string }, { exercise_id: string; user_id: string }>({
+    startAttempt: builder.mutation<{ attempt_id: string }, { exercise_id: string }>({
       query: (body) => ({ url: "/attempts/start", method: "POST", body }),
       invalidatesTags: ["Attempt"]
     }),
@@ -70,7 +116,7 @@ export const api = createApi({
     }),
     getAttempts: builder.query<
       Array<{ id: string; exercise_id: string; overall_score: number; overall_pass: boolean; completed_at: string }>,
-      { user_id?: string; exercise_id?: string }
+      { exercise_id?: string }
     >({
       query: (params) => ({ url: "/attempts", params }),
       providesTags: ["Attempt"]
@@ -80,6 +126,12 @@ export const api = createApi({
 
 export const {
   useGetAdminWhoamiQuery,
+  useGetMeQuery,
+  useGetMeSettingsQuery,
+  useUpdateMeSettingsMutation,
+  useUpdateOpenAiKeyMutation,
+  useDeleteOpenAiKeyMutation,
+  useValidateOpenAiKeyMutation,
   useGetExercisesQuery,
   useGetExerciseQuery,
   useUpdateExerciseMutation,
