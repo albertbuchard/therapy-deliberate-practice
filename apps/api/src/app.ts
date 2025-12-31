@@ -217,6 +217,27 @@ const checkRateLimit = (key: string) => {
   return true;
 };
 
+const validateOpenAiApiKey = async (
+  apiKey: string
+): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const resp = await fetch("https://api.openai.com/v1/models", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+
+    if (resp.ok) return { ok: true };
+
+    if (resp.status === 401) return { ok: false, error: "OpenAI rejected this key (401)." };
+    if (resp.status === 429) return { ok: false, error: "OpenAI rate-limited this key (429)." };
+
+    return { ok: false, error: `OpenAI validation failed (${resp.status}).` };
+  } catch (err) {
+    console.error("OpenAI validation network error", err);
+    return { ok: false, error: "Unable to reach OpenAI for validation." };
+  }
+};
+
 const mapCriterionDescription = (
   criterion: z.infer<typeof llmParseSchema>["task"]["criteria"][number]
 ) => {
@@ -1211,53 +1232,47 @@ Now produce JSON that matches EXACTLY this schema:
       log.warn("OpenAI key validation rate limited", { userId: user.id });
       return c.json({ ok: false, error: "Too many validation attempts. Try again shortly." }, 429);
     }
-    const body = await c.req.json().catch(() => ({}));
-    const schema = z
-      .object({
-        openaiApiKey: z.string().trim().min(20).optional()
-      })
-      .optional();
-    const data = schema?.parse(body) ?? {};
-    let apiKey = data?.openaiApiKey;
-    if (!apiKey) {
-      const settings = await getUserSettingsRow(user.id);
-      if (
-        settings?.openai_key_ciphertext &&
-        settings.openai_key_iv &&
-        env.openaiKeyEncryptionSecret
-      ) {
-        apiKey = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
-          ciphertextB64: settings.openai_key_ciphertext,
-          ivB64: settings.openai_key_iv
-        });
-      } else if (settings?.openai_key_ciphertext && !env.openaiKeyEncryptionSecret) {
-        log.error("Missing OpenAI encryption secret during validation", { userId: user.id });
-        return c.json({ ok: false, error: "OPENAI_KEY_ENCRYPTION_SECRET is not configured." }, 500);
+    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+    const provided = typeof body.openaiApiKey === "string" ? body.openaiApiKey.trim() : "";
+
+    let keyToValidate = provided;
+
+    if (!keyToValidate) {
+      const rows = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.user_id, user.id))
+        .limit(1);
+
+      const record = rows[0];
+
+      if (!record?.openai_key_ciphertext || !record?.openai_key_iv) {
+        return c.json({ ok: false, error: "No key provided and no key stored." }, 400);
       }
-    }
 
-    if (!apiKey) {
-      log.warn("No OpenAI key available for validation", { userId: user.id });
-      return c.json({ ok: false, error: "No OpenAI key available to validate." }, 400);
-    }
+      if (!env.openaiKeyEncryptionSecret) {
+        return c.json(
+          {
+            ok: false,
+            error: "Server misconfigured: OPENAI_KEY_ENCRYPTION_SECRET is not set."
+          },
+          500
+        );
+      }
 
-    try {
-      const response = await fetch("https://api.openai.com/v1/models", {
-        headers: { Authorization: `Bearer ${apiKey}` }
+      keyToValidate = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
+        ciphertextB64: record.openai_key_ciphertext,
+        ivB64: record.openai_key_iv
       });
-      if (!response.ok) {
-        log.warn("OpenAI key validation failed", { userId: user.id, status: response.status });
-        return c.json({ ok: false, error: "OpenAI key validation failed." }, 200);
-      }
+    }
+
+    const result = await validateOpenAiApiKey(keyToValidate);
+    if (result.ok) {
       log.info("OpenAI key validated", { userId: user.id });
-      return c.json({ ok: true });
-    } catch (error) {
-      log.error("OpenAI validation request failed", {
-        userId: user.id,
-        error: serializeError(error)
-      });
-      return c.json({ ok: false, error: "Unable to reach OpenAI for validation." }, 200);
+    } else {
+      log.warn("OpenAI key validation failed", { userId: user.id, error: result.error });
     }
+    return c.json(result, result.ok ? 200 : 400);
   });
 
   app.post("/api/v1/attempts/start", async (c) => {
