@@ -195,6 +195,118 @@ export const deliberatePracticeTaskV2Schema = z.object({
   })
 });
 
+export const llmParseSchema = z.object({
+  version: z.literal("2.0"),
+  task: z.object({
+    name: z.string(),
+    short_name: z.string(),
+    skill_domain: z.string(),
+    skill_difficulty_label: z.enum(["beginner", "intermediate", "advanced"]).nullable(),
+    skill_difficulty_numeric: z.number().min(1).max(5),
+    description: z.string(),
+    objective_overview: z.string(),
+    preparations: z.array(z.string()),
+    source: z.object({
+      citation_text: z.string().nullable(),
+      source_url: z.string().nullable()
+    }),
+    expected_therapist_response: z.object({
+      must_do: z.array(z.string()),
+      should_do: z.array(z.string()),
+      must_avoid: z.array(z.string()),
+      style_constraints: z.array(z.string())
+    }),
+    criteria: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        description: z.string(),
+        behavioral_markers: z.array(z.string()),
+        common_mistakes: z.array(z.string()),
+        what_counts_as_evidence: z.array(z.string()),
+        weight: z.number().nullable()
+      })
+    ),
+    objectives: z.array(
+      z.object({
+        id: z.string(),
+        criterion_ids: z.array(z.string()),
+        label: z.string(),
+        description: z.string(),
+        rubric: z.object({
+          score_min: z.literal(0),
+          score_max: z.literal(4),
+          anchors: z.array(
+            z.object({
+              score: z.union([
+                z.literal(0),
+                z.literal(1),
+                z.literal(2),
+                z.literal(3),
+                z.literal(4)
+              ]),
+              meaning: z.string()
+            })
+          )
+        })
+      })
+    ),
+    practice_instructions: z.object({
+      timebox_minutes: z.number().nullable(),
+      steps: z.array(z.string()),
+      feedback_process: z.array(z.string()),
+      difficulty_adjustment_rule: z.string().nullable(),
+      role_switching: z.string().nullable()
+    }),
+    roleplay_sets: z.array(
+      z.object({
+        difficulty_label: z.enum(["beginner", "intermediate", "advanced"]),
+        difficulty_numeric: z.number().min(1).max(5),
+        client_statements: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string().nullable(),
+            affect_tag: z.string().nullable(),
+            text: z.string(),
+            primary_themes: z.array(z.string()),
+            linked_criterion_ids: z.array(z.string()),
+            extracted_cue_ids: z.array(z.string())
+          })
+        )
+      })
+    ),
+    example_dialogues: z.array(
+      z.object({
+        id: z.string(),
+        difficulty_label: z.enum(["beginner", "intermediate", "advanced"]).nullable(),
+        client_turn: z.string(),
+        therapist_turn: z.string(),
+        criterion_callouts: z.array(
+          z.object({
+            criterion_id: z.string(),
+            evidence_in_therapist_turn: z.string()
+          })
+        )
+      })
+    ),
+    patient_cues: z.array(
+      z.object({
+        id: z.string(),
+        difficulty: z.number().min(1).max(5),
+        label: z.string(),
+        evidence_quote: z.string(),
+        why_it_matters: z.string(),
+        therapist_response_hint: z.string(),
+        difficulty_reason: z.string(),
+        applies_to_statement_ids: z.array(z.string())
+      })
+    ),
+    tags: z.array(z.string())
+  })
+});
+
+export type LlmParseResult = z.infer<typeof llmParseSchema>;
+
 export const evaluationResultSchema = z.object({
   version: z.literal("1.0"),
   exercise_id: z.string(),

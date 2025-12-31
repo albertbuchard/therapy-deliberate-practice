@@ -1,4 +1,5 @@
-import { EvaluationResult, EvaluationInput } from "./types";
+import type { EvaluationResult, EvaluationInput } from "./types";
+import type { LlmParseResult } from "./schemas";
 
 export type Transcript = {
   text: string;
@@ -18,4 +19,5 @@ export type LlmProvider = {
   model?: string;
   healthCheck: () => Promise<boolean>;
   evaluateDeliberatePractice: (input: EvaluationInput) => Promise<EvaluationResult>;
+  parseExercise: (input: { sourceText: string }) => Promise<LlmParseResult>;
 };
