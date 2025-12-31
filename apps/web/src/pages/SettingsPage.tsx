@@ -91,8 +91,15 @@ export const SettingsPage = () => {
 
   const handleValidateKey = async () => {
     setValidationStatus(null);
+    const typed = openAiKey.trim();
+
+    if (!typed && !settings.hasOpenAiKey) {
+      setValidationStatus("Add a key (or save one first) before validating.");
+      return;
+    }
+
     try {
-      const result = await validateKey({ openaiApiKey: openAiKey.trim() || undefined }).unwrap();
+      const result = await validateKey(typed ? { openaiApiKey: typed } : {}).unwrap();
       if (result.ok) {
         setValidationStatus("Key is valid and ready for practice.");
       } else {
