@@ -40,3 +40,16 @@ export const attempts = sqliteTable("attempts", {
   overall_score: real("overall_score").notNull(),
   model_info: text("model_info", { mode: "json" })
 });
+
+export const userSettings = sqliteTable("user_settings", {
+  user_id: text("user_id").primaryKey(),
+  ai_mode: text("ai_mode").notNull().default("local_prefer"),
+  local_stt_url: text("local_stt_url"),
+  local_llm_url: text("local_llm_url"),
+  store_audio: integer("store_audio", { mode: "boolean" }).notNull().default(false),
+  openai_key_ciphertext: text("openai_key_ciphertext"),
+  openai_key_iv: text("openai_key_iv"),
+  openai_key_kid: text("openai_key_kid"),
+  updated_at: integer("updated_at").notNull(),
+  created_at: integer("created_at").notNull()
+});

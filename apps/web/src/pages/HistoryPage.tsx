@@ -1,9 +1,7 @@
 import { useGetAttemptsQuery } from "../store/api";
-import { useAppSelector } from "../store/hooks";
 
 export const HistoryPage = () => {
-  const userId = useAppSelector((state) => state.auth.userId);
-  const { data, isLoading } = useGetAttemptsQuery({ user_id: userId ?? undefined });
+  const { data, isLoading } = useGetAttemptsQuery({});
 
   return (
     <div className="space-y-8">

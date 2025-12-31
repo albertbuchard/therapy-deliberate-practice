@@ -9,6 +9,7 @@ type SettingsState = {
   privacy: {
     storeAudio: boolean;
   };
+  hasOpenAiKey: boolean;
 };
 
 const initialState: SettingsState = {
@@ -19,13 +20,30 @@ const initialState: SettingsState = {
   },
   privacy: {
     storeAudio: false
-  }
+  },
+  hasOpenAiKey: false
 };
 
 const settingsSlice = createSlice({
   name: "settings",
   initialState,
   reducers: {
+    hydrateSettings(
+      state,
+      action: PayloadAction<{
+        aiMode: SettingsState["aiMode"];
+        localSttUrl: string;
+        localLlmUrl: string;
+        storeAudio: boolean;
+        hasOpenAiKey: boolean;
+      }>
+    ) {
+      state.aiMode = action.payload.aiMode;
+      state.localEndpoints.stt = action.payload.localSttUrl;
+      state.localEndpoints.llm = action.payload.localLlmUrl;
+      state.privacy.storeAudio = action.payload.storeAudio;
+      state.hasOpenAiKey = action.payload.hasOpenAiKey;
+    },
     setAiMode(state, action: PayloadAction<SettingsState["aiMode"]>) {
       state.aiMode = action.payload;
     },
@@ -37,9 +55,13 @@ const settingsSlice = createSlice({
     },
     setStoreAudio(state, action: PayloadAction<boolean>) {
       state.privacy.storeAudio = action.payload;
+    },
+    setHasOpenAiKey(state, action: PayloadAction<boolean>) {
+      state.hasOpenAiKey = action.payload;
     }
   }
 });
 
-export const { setAiMode, setLocalEndpoint, setStoreAudio } = settingsSlice.actions;
+export const { hydrateSettings, setAiMode, setLocalEndpoint, setStoreAudio, setHasOpenAiKey } =
+  settingsSlice.actions;
 export const settingsReducer = settingsSlice.reducer;

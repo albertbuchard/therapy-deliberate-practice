@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { exercises, attempts } from "./db/schema";
-import { eq } from "drizzle-orm";
+import { exercises, attempts, users, userSettings } from "./db/schema";
+import { and, eq } from "drizzle-orm";
 import {
   evaluationResultSchema,
   practiceRunInputSchema,
@@ -18,6 +18,8 @@ import type { ProviderMode, RuntimeEnv } from "./env";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { createAdminAuth, resolveAdminStatus } from "./middleware/adminAuth";
+import { createUserAuth } from "./middleware/userAuth";
+import { decryptOpenAiKey, encryptOpenAiKey } from "./utils/crypto";
 
 export type ApiDatabase = DrizzleD1Database | BetterSQLite3Database;
 
@@ -194,6 +196,24 @@ const buildPracticeInstructions = (
     practice.role_switching ? `Role switching: ${practice.role_switching}` : ""
   ].filter(Boolean);
   return sections.join("\n\n");
+};
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 10;
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+
+const checkRateLimit = (key: string) => {
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    rateLimitBuckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (bucket.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  bucket.count += 1;
+  return true;
 };
 
 const mapCriterionDescription = (
@@ -375,6 +395,24 @@ const exerciseFromTask = (
 export const createApiApp = ({ env, db }: ApiDependencies) => {
   const app = new Hono();
   const adminAuth = createAdminAuth(env);
+  const userAuth = createUserAuth(env, db);
+
+  const getUserSettingsRow = async (userId: string) => {
+    const [settings] = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.user_id, userId))
+      .limit(1);
+    return settings ?? null;
+  };
+
+  const normalizeSettings = (settings: typeof userSettings.$inferSelect) => ({
+    aiMode: settings.ai_mode,
+    localSttUrl: settings.local_stt_url ?? env.localSttUrl,
+    localLlmUrl: settings.local_llm_url ?? env.localLlmUrl,
+    storeAudio: settings.store_audio ?? false,
+    hasOpenAiKey: Boolean(settings.openai_key_ciphertext && settings.openai_key_iv)
+  });
 
   app.use(async (c, next) => {
     const requestId = c.req.header("x-request-id") ?? nanoid();
@@ -397,11 +435,11 @@ export const createApiApp = ({ env, db }: ApiDependencies) => {
   app.get("/api/v1/health", (c) => c.json({ status: "ok" }));
 
   app.get("/api/v1/health/local-ai", async (c) => {
-    const stt = await selectSttProvider("local_only", env).then(
+    const stt = await selectSttProvider("local_only", env, env.openaiApiKey).then(
       () => true,
       () => false
     );
-    const llm = await selectLlmProvider("local_only", env).then(
+    const llm = await selectLlmProvider("local_only", env, env.openaiApiKey).then(
       () => true,
       () => false
     );
@@ -466,6 +504,11 @@ export const createApiApp = ({ env, db }: ApiDependencies) => {
   });
 
   app.use("/api/v1/admin/*", adminAuth);
+
+  app.use("/api/v1/me/*", userAuth);
+  app.use("/api/v1/attempts", userAuth);
+  app.use("/api/v1/attempts/*", userAuth);
+  app.use("/api/v1/practice/*", userAuth);
 
   app.post("/api/v1/admin/parse-exercise", async (c) => {
     const body = await c.req.json();
@@ -979,14 +1022,155 @@ Now produce JSON that matches EXACTLY this schema:
     return c.json({ id: validated.id, slug: validated.slug });
   });
 
+  app.get("/api/v1/me", async (c) => {
+    const user = c.get("user");
+    const [record] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    const settings = await getUserSettingsRow(user.id);
+    return c.json({
+      id: user.id,
+      email: user.email,
+      created_at: record?.created_at ? new Date(record.created_at).toISOString() : null,
+      hasOpenAiKey: Boolean(settings?.openai_key_ciphertext && settings?.openai_key_iv)
+    });
+  });
+
+  app.get("/api/v1/me/settings", async (c) => {
+    const user = c.get("user");
+    const settings = await getUserSettingsRow(user.id);
+    if (!settings) {
+      return c.json({ error: "Settings not found" }, 404);
+    }
+    return c.json(normalizeSettings(settings));
+  });
+
+  app.put("/api/v1/me/settings", async (c) => {
+    const user = c.get("user");
+    const body = await c.req.json();
+    const schema = z.object({
+      aiMode: z.enum(["local_prefer", "openai_only", "local_only"]),
+      localSttUrl: z.string().url().nullable().optional(),
+      localLlmUrl: z.string().url().nullable().optional(),
+      storeAudio: z.boolean()
+    });
+    const data = schema.parse(body);
+    const normalizeUrl = (value?: string | null) => {
+      if (!value) return null;
+      const trimmed = value.trim();
+      return trimmed ? trimmed : null;
+    };
+    await db
+      .update(userSettings)
+      .set({
+        ai_mode: data.aiMode,
+        local_stt_url: normalizeUrl(data.localSttUrl),
+        local_llm_url: normalizeUrl(data.localLlmUrl),
+        store_audio: data.storeAudio,
+        updated_at: Date.now()
+      })
+      .where(eq(userSettings.user_id, user.id));
+    const settings = await getUserSettingsRow(user.id);
+    if (!settings) {
+      return c.json({ error: "Settings not found" }, 404);
+    }
+    return c.json(normalizeSettings(settings));
+  });
+
+  app.put("/api/v1/me/openai-key", async (c) => {
+    const user = c.get("user");
+    const body = await c.req.json();
+    const schema = z.object({
+      openaiApiKey: z
+        .string()
+        .trim()
+        .min(20)
+        .refine((value) => value.startsWith("sk-"), { message: "Invalid OpenAI key" })
+    });
+    const data = schema.parse(body);
+    if (!env.openaiKeyEncryptionSecret) {
+      return c.json({ error: "OPENAI_KEY_ENCRYPTION_SECRET is not configured" }, 500);
+    }
+    const encrypted = await encryptOpenAiKey(env.openaiKeyEncryptionSecret, data.openaiApiKey);
+    await db
+      .update(userSettings)
+      .set({
+        openai_key_ciphertext: encrypted.ciphertextB64,
+        openai_key_iv: encrypted.ivB64,
+        openai_key_kid: encrypted.kid,
+        updated_at: Date.now()
+      })
+      .where(eq(userSettings.user_id, user.id));
+    return c.json({ ok: true, hasOpenAiKey: true });
+  });
+
+  app.delete("/api/v1/me/openai-key", async (c) => {
+    const user = c.get("user");
+    await db
+      .update(userSettings)
+      .set({
+        openai_key_ciphertext: null,
+        openai_key_iv: null,
+        openai_key_kid: null,
+        updated_at: Date.now()
+      })
+      .where(eq(userSettings.user_id, user.id));
+    return c.json({ ok: true, hasOpenAiKey: false });
+  });
+
+  app.post("/api/v1/me/openai-key/validate", async (c) => {
+    const user = c.get("user");
+    if (!checkRateLimit(`openai-validate:${user.id}`)) {
+      return c.json({ ok: false, error: "Too many validation attempts. Try again shortly." }, 429);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const schema = z
+      .object({
+        openaiApiKey: z.string().trim().min(20).optional()
+      })
+      .optional();
+    const data = schema?.parse(body) ?? {};
+    let apiKey = data?.openaiApiKey;
+    if (!apiKey) {
+      const settings = await getUserSettingsRow(user.id);
+      if (
+        settings?.openai_key_ciphertext &&
+        settings.openai_key_iv &&
+        env.openaiKeyEncryptionSecret
+      ) {
+        apiKey = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
+          ciphertextB64: settings.openai_key_ciphertext,
+          ivB64: settings.openai_key_iv
+        });
+      } else if (settings?.openai_key_ciphertext && !env.openaiKeyEncryptionSecret) {
+        return c.json({ ok: false, error: "OPENAI_KEY_ENCRYPTION_SECRET is not configured." }, 500);
+      }
+    }
+
+    if (!apiKey) {
+      return c.json({ ok: false, error: "No OpenAI key available to validate." }, 400);
+    }
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      if (!response.ok) {
+        return c.json({ ok: false, error: "OpenAI key validation failed." }, 200);
+      }
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ ok: false, error: "Unable to reach OpenAI for validation." }, 200);
+    }
+  });
+
   app.post("/api/v1/attempts/start", async (c) => {
     const body = await c.req.json();
-    const schema = z.object({ exercise_id: z.string(), user_id: z.string() });
+    const schema = z.object({ exercise_id: z.string() });
     const data = schema.parse(body);
+    const user = c.get("user");
     const id = nanoid();
     await db.insert(attempts).values({
       id,
-      user_id: data.user_id,
+      user_id: user.id,
       exercise_id: data.exercise_id,
       started_at: Date.now(),
       completed_at: null,
@@ -1005,7 +1189,11 @@ Now produce JSON that matches EXACTLY this schema:
     const body = await c.req.json();
     const schema = z.object({ audio_ref: z.string() });
     const data = schema.parse(body);
-    await db.update(attempts).set({ audio_ref: data.audio_ref }).where(eq(attempts.id, attemptId));
+    const user = c.get("user");
+    await db
+      .update(attempts)
+      .set({ audio_ref: data.audio_ref })
+      .where(and(eq(attempts.id, attemptId), eq(attempts.user_id, user.id)));
     return c.json({ status: "ok" });
   });
 
@@ -1019,6 +1207,7 @@ Now produce JSON that matches EXACTLY this schema:
       overall_score: z.number()
     });
     const data = schema.parse(body);
+    const user = c.get("user");
     await db
       .update(attempts)
       .set({
@@ -1027,18 +1216,31 @@ Now produce JSON that matches EXACTLY this schema:
         overall_pass: data.overall_pass,
         overall_score: data.overall_score
       })
-      .where(eq(attempts.id, attemptId));
+      .where(and(eq(attempts.id, attemptId), eq(attempts.user_id, user.id)));
     return c.json({ status: "ok" });
   });
 
   app.post("/api/v1/attempts/:id/complete", async (c) => {
     const attemptId = c.req.param("id");
-    await db.update(attempts).set({ completed_at: Date.now() }).where(eq(attempts.id, attemptId));
+    const user = c.get("user");
+    await db
+      .update(attempts)
+      .set({ completed_at: Date.now() })
+      .where(and(eq(attempts.id, attemptId), eq(attempts.user_id, user.id)));
     return c.json({ status: "ok" });
   });
 
   app.get("/api/v1/attempts", async (c) => {
-    const results = await db.select().from(attempts);
+    const user = c.get("user");
+    const { exercise_id } = c.req.query();
+    const filters = [eq(attempts.user_id, user.id)];
+    if (exercise_id) {
+      filters.push(eq(attempts.exercise_id, exercise_id));
+    }
+    const results = await db
+      .select()
+      .from(attempts)
+      .where(filters.length > 1 ? and(...filters) : filters[0]);
     return c.json(
       results.map((attempt) => ({
         id: attempt.id,
@@ -1053,10 +1255,57 @@ Now produce JSON that matches EXACTLY this schema:
   app.post("/api/v1/practice/run", async (c) => {
     const body = await c.req.json();
     const input = practiceRunInputSchema.parse(body);
-    const mode = input.mode ?? (env.aiMode as ProviderMode);
+    const user = c.get("user");
+    if (!checkRateLimit(`practice:${user.id}`)) {
+      return c.json({ error: "Too many practice requests. Please slow down." }, 429);
+    }
+    const settings = await getUserSettingsRow(user.id);
+    if (!settings) {
+      return c.json({ error: "Settings not found" }, 404);
+    }
 
-    const sttProvider = await selectSttProvider(mode, env);
-    const llmProvider = await selectLlmProvider(mode, env);
+    const mode = (settings.ai_mode ?? env.aiMode) as ProviderMode;
+    const envWithOverrides = {
+      ...env,
+      localSttUrl: settings.local_stt_url ?? env.localSttUrl,
+      localLlmUrl: settings.local_llm_url ?? env.localLlmUrl
+    };
+
+    let openaiApiKey = env.openaiApiKey;
+    if (settings.openai_key_ciphertext && settings.openai_key_iv) {
+      if (!env.openaiKeyEncryptionSecret) {
+        return c.json({ error: "OPENAI_KEY_ENCRYPTION_SECRET is not configured" }, 500);
+      }
+      openaiApiKey = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
+        ciphertextB64: settings.openai_key_ciphertext,
+        ivB64: settings.openai_key_iv
+      });
+    }
+
+    if (mode === "openai_only" && !openaiApiKey) {
+      return c.json(
+        { error: "OpenAI mode requires an API key. Add one in Settings to continue." },
+        400
+      );
+    }
+
+    let sttProvider;
+    let llmProvider;
+    try {
+      sttProvider = await selectSttProvider(mode, envWithOverrides, openaiApiKey);
+      llmProvider = await selectLlmProvider(mode, envWithOverrides, openaiApiKey);
+    } catch (error) {
+      if (!openaiApiKey && mode !== "local_only") {
+        return c.json(
+          {
+            error:
+              "No OpenAI key available. Add one in Settings or switch to local-only mode to continue."
+          },
+          400
+        );
+      }
+      return c.json({ error: (error as Error).message }, 400);
+    }
 
     const sttStart = Date.now();
     const transcript = await sttProvider.transcribe(input.audio);
