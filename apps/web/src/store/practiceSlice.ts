@@ -17,6 +17,7 @@ type PracticeState = {
   currentAttemptId?: string;
   recordingState: RecordingState;
   audioBlobRef?: string;
+  audioMime?: string;
   transcript?: string;
   evaluation?: EvaluationResult;
   patientReaction?: EvaluationResult["patient_reaction"];
@@ -53,6 +54,7 @@ const practiceSlice = createSlice({
       state.currentAttemptId = undefined;
       state.recordingState = "idle";
       state.audioBlobRef = undefined;
+      state.audioMime = undefined;
       state.transcript = undefined;
       state.evaluation = undefined;
       state.patientReaction = undefined;
@@ -92,8 +94,12 @@ const practiceSlice = createSlice({
     setRecordingState(state, action: PayloadAction<RecordingState>) {
       state.recordingState = action.payload;
     },
-    setAudioBlobRef(state, action: PayloadAction<string | undefined>) {
-      state.audioBlobRef = action.payload;
+    setAudioBlobRef(
+      state,
+      action: PayloadAction<{ url?: string; mimeType?: string }>
+    ) {
+      state.audioBlobRef = action.payload.url;
+      state.audioMime = action.payload.mimeType;
     },
     setTranscript(state, action: PayloadAction<string | undefined>) {
       state.transcript = action.payload;

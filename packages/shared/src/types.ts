@@ -100,6 +100,7 @@ export type PracticeRunInput = {
   example_id?: string;
   attempt_id?: string;
   audio: string;
+  audio_mime?: string;
   mode?: "local_prefer" | "openai_only" | "local_only";
   practice_mode?: "standard" | "real_time";
   turn_context?: {
