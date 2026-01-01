@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, decodeJwt, jwtVerify } from "jose";
 import type { MiddlewareHandler } from "hono";
 import type { RuntimeEnv } from "../env";
+import { logServerError } from "../utils/logger";
 
 type AccessIdentity = {
   isAuthenticated: boolean;
@@ -129,6 +130,12 @@ export const createAdminAuth = (env: RuntimeEnv): MiddlewareHandler => {
   return async (c, next) => {
     const result = await resolveAdminStatus(env, c.req.raw.headers);
     if (!result.ok) {
+      if (result.status >= 500) {
+        logServerError("admin.auth.error", new Error(result.message), {
+          requestId: c.get("requestId"),
+          status: result.status
+        });
+      }
       return c.json({ error: result.message }, result.status);
     }
     if (result.devBypass) {
@@ -138,6 +145,11 @@ export const createAdminAuth = (env: RuntimeEnv): MiddlewareHandler => {
       return;
     }
     if (!env.adminEmails.length && !env.adminGroups.length) {
+      logServerError(
+        "admin.allowlist.missing",
+        new Error("Admin allowlist is not configured"),
+        { requestId: c.get("requestId") }
+      );
       return c.json({ error: "Admin allowlist is not configured" }, 500);
     }
     if (!result.identity.isAuthenticated) {
