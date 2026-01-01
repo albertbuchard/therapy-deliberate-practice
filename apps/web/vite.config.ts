@@ -12,6 +12,19 @@ export default defineConfig(({ mode, command }) => {
 
   return {
     plugins: [react()],
-    server: { port: 5173 }
+    server: {
+      port: 5173,
+      ...(command === "serve"
+          ? {
+            proxy: {
+              "/api": {
+                target: "http://localhost:8787",
+                changeOrigin: true,
+                secure: false
+              }
+            }
+          }
+          : {})
+    }
   };
 });
