@@ -57,6 +57,24 @@ export const LocalWhisperSttProvider = (
   }
 });
 
+const mimeTypeToFilename = (mimeType?: string) => {
+  if (!mimeType) return "audio.webm";
+  const normalized = mimeType.toLowerCase();
+  if (normalized.includes("audio/mp4") || normalized.includes("audio/aac")) {
+    return "audio.m4a";
+  }
+  if (normalized.includes("audio/mpeg")) {
+    return "audio.mp3";
+  }
+  if (normalized.includes("audio/wav")) {
+    return "audio.wav";
+  }
+  if (normalized.includes("audio/webm")) {
+    return "audio.webm";
+  }
+  return "audio.webm";
+};
+
 export const OpenAISttProvider = (
   { apiKey }: { apiKey: string },
   logger?: LogFn
@@ -64,7 +82,7 @@ export const OpenAISttProvider = (
   kind: "openai",
   model: OPENAI_STT_MODEL,
   healthCheck: async () => Boolean(apiKey),
-  transcribe: async (audio) => {
+  transcribe: async (audio, opts) => {
     if (!apiKey) {
       throw new Error("OpenAI key missing");
     }
@@ -80,7 +98,14 @@ export const OpenAISttProvider = (
       body: (() => {
         const form = new FormData();
         form.append("model", OPENAI_STT_MODEL);
-        form.append("file", new Blob([base64ToUint8Array(audio)]), "audio.webm");
+        const filename = mimeTypeToFilename(opts?.mimeType);
+        form.append(
+          "file",
+          new Blob([base64ToUint8Array(audio)], {
+            type: opts?.mimeType ?? "audio/webm"
+          }),
+          filename
+        );
         return form;
       })()
     });

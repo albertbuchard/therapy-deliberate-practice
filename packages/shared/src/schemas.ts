@@ -183,6 +183,7 @@ export const practiceRunInputSchema = z.object({
   example_id: z.string().optional(),
   attempt_id: z.string().optional(),
   audio: z.string(),
+  audio_mime: z.string().optional(),
   mode: z.enum(["local_prefer", "openai_only", "local_only"]).optional(),
   practice_mode: z.enum(["standard", "real_time"]).optional(),
   turn_context: z

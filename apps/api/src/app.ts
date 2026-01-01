@@ -1505,7 +1505,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     });
     let transcript: { text: string };
     try {
-      transcript = await sttProvider.transcribe(input.audio);
+      transcript = await sttProvider.transcribe(input.audio, {
+        mimeType: input.audio_mime
+      });
     } catch (error) {
       const duration = Date.now() - sttStart;
       logEvent("error", "stt.transcribe.error", {

@@ -38,6 +38,25 @@ const blobToBase64 = (blob: Blob, errorMessage: string) =>
     reader.readAsDataURL(blob);
   });
 
+const pickSupportedAudioMimeType = () => {
+  if (typeof MediaRecorder === "undefined") {
+    return null;
+  }
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/aac",
+    "audio/mpeg"
+  ];
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+};
+
 export const PracticePage = () => {
   const { t } = useTranslation();
   const { taskId } = useParams();
@@ -45,6 +64,9 @@ export const PracticePage = () => {
   const [startSession, { isLoading: isStartingSession }] = useStartSessionMutation();
   const [runPractice, { isLoading }] = useRunPracticeMutation();
   const [prefetchPatientAudio] = usePrefetchPatientAudioMutation();
+  const dispatch = useAppDispatch();
+  const practice = useAppSelector((state) => state.practice);
+  const settings = useAppSelector((state) => state.settings);
   const {
     data: sessionHistory = [],
     isLoading: isLoadingSessions,
@@ -76,13 +98,11 @@ export const PracticePage = () => {
   const [patientAudioError, setPatientAudioError] = useState<string | null>(null);
   const [patientPlay, setPatientPlay] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderMimeRef = useRef<string | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const patientAudioRef = useRef<HTMLAudioElement | null>(null);
   const previousTaskIdRef = useRef<string | null>(null);
   const hasInitializedRef = useRef(false);
-  const dispatch = useAppDispatch();
-  const practice = useAppSelector((state) => state.practice);
-  const settings = useAppSelector((state) => state.settings);
   const currentItem = practice.sessionItems[practice.currentIndex];
   const currentExampleId = currentItem?.example_id;
   const patientLine = currentItem?.patient_text ?? "";
@@ -342,8 +362,23 @@ export const PracticePage = () => {
       setError("Wait for the patient audio to finish before recording.");
       return;
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
+    if (typeof MediaRecorder === "undefined") {
+      setError("Audio recording is not supported in this browser.");
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      setError("Microphone access was blocked. Please enable it and try again.");
+      return;
+    }
+    const supportedMimeType = pickSupportedAudioMimeType();
+    const recorder = new MediaRecorder(
+      stream,
+      supportedMimeType ? { mimeType: supportedMimeType } : undefined
+    );
+    recorderMimeRef.current = supportedMimeType ?? recorder.mimeType ?? null;
     chunksRef.current = [];
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
@@ -351,9 +386,14 @@ export const PracticePage = () => {
       }
     };
     recorder.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      const blob = new Blob(chunksRef.current, {
+        type: recorderMimeRef.current ?? "audio/webm"
+      });
       const url = URL.createObjectURL(blob);
-      dispatch(setAudioBlobRef(url));
+      if (practice.audioBlobRef) {
+        URL.revokeObjectURL(practice.audioBlobRef);
+      }
+      dispatch(setAudioBlobRef({ url, mimeType: blob.type }));
     };
     recorderRef.current = recorder;
     recorder.start();
@@ -390,6 +430,7 @@ export const PracticePage = () => {
       const result = await runPractice({
         session_item_id: currentItem.session_item_id,
         audio: base64,
+        audio_mime: practice.audioMime,
         mode: settings.aiMode,
         practice_mode: practiceMode,
         turn_context: turnContext

@@ -11,7 +11,10 @@ export type SttProvider = {
   kind: "local" | "openai";
   model?: string;
   healthCheck: () => Promise<boolean>;
-  transcribe: (audio: string, opts?: { language?: string }) => Promise<Transcript>;
+  transcribe: (
+    audio: string,
+    opts?: { language?: string; mimeType?: string }
+  ) => Promise<Transcript>;
 };
 
 export type LlmProvider = {
