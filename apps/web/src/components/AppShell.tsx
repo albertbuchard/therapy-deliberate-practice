@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { useGetAdminWhoamiQuery, useGetMeSettingsQuery } from "../store/api";
@@ -21,6 +21,8 @@ export const AppShell = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const selectedLanguage = i18n.resolvedLanguage ?? i18n.language;
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const handleLanguageChange = (event: ChangeEvent<HTMLSelectElement>) => {
     void i18n.changeLanguage(event.target.value);
@@ -155,6 +157,34 @@ export const AppShell = () => {
     }
   }, [data, isError, dispatch]);
 
+  useEffect(() => {
+    if (!isUserMenuOpen) return;
+
+    const handleDocumentClick = (event: MouseEvent) => {
+      if (!userMenuRef.current) return;
+      if (userMenuRef.current.contains(event.target as Node)) return;
+      setIsUserMenuOpen(false);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isUserMenuOpen]);
+
+  useEffect(() => {
+    setIsUserMenuOpen(false);
+  }, [location.pathname]);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
@@ -174,16 +204,6 @@ export const AppShell = () => {
             <NavLink to="/history" className={linkClass}>
               {t("appShell.nav.history")}
             </NavLink>
-            {isAuthenticated && (
-              <>
-                <NavLink to="/profile" className={linkClass}>
-                  {t("appShell.nav.profile")}
-                </NavLink>
-                <NavLink to="/settings" className={linkClass}>
-                  {t("appShell.nav.settings")}
-                </NavLink>
-              </>
-            )}
             {isAdmin && (
               <NavLink to="/admin/library" className={linkClass}>
                 {t("appShell.nav.admin")}
@@ -207,12 +227,63 @@ export const AppShell = () => {
               </NavLink>
             )}
             {authChecked && isAuthenticated && (
-              <button
-                className="rounded-full border border-white/10 px-4 py-2 text-sm text-slate-200 transition hover:border-white/20"
-                onClick={handleLogout}
-              >
-                {email ? t("appShell.nav.logoutWithEmail", { email }) : t("appShell.nav.logout")}
-              </button>
+              <div className="relative" ref={userMenuRef}>
+                <button
+                  type="button"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 text-slate-200 transition hover:border-white/20 hover:text-white"
+                  aria-label={t("appShell.nav.profile")}
+                  aria-haspopup="menu"
+                  aria-expanded={isUserMenuOpen}
+                  onClick={() => setIsUserMenuOpen((open) => !open)}
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 20.118a7.5 7.5 0 0 1 15 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.5-1.632Z"
+                    />
+                  </svg>
+                </button>
+                {isUserMenuOpen && (
+                  <div
+                    className="absolute right-0 mt-3 w-56 rounded-2xl border border-white/10 bg-slate-950/95 p-2 shadow-xl shadow-black/30"
+                    role="menu"
+                  >
+                    <div className="px-3 py-2">
+                      <p className="text-xs uppercase tracking-[0.2em] text-teal-400">{t("appShell.nav.profile")}</p>
+                      <p className="text-sm text-slate-200">{email ?? " "}</p>
+                    </div>
+                    <div className="my-2 h-px bg-white/10" />
+                    <NavLink
+                      to="/profile"
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
+                      role="menuitem"
+                      onClick={() => setIsUserMenuOpen(false)}
+                    >
+                      {t("appShell.nav.profile")}
+                    </NavLink>
+                    <NavLink
+                      to="/settings"
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
+                      role="menuitem"
+                      onClick={() => setIsUserMenuOpen(false)}
+                    >
+                      {t("appShell.nav.settings")}
+                    </NavLink>
+                    <button
+                      type="button"
+                      className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-200 transition hover:bg-white/10"
+                      role="menuitem"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        void handleLogout();
+                      }}
+                    >
+                      {t("appShell.nav.logout")}
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </nav>
         </div>
