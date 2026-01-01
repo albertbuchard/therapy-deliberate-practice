@@ -23,6 +23,7 @@ export const AppShell = () => {
   const selectedLanguage = i18n.resolvedLanguage ?? i18n.language;
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const handledAuthSignatureRef = useRef<string>("");
 
   const handleLanguageChange = (event: ChangeEvent<HTMLSelectElement>) => {
     void i18n.changeLanguage(event.target.value);
@@ -45,6 +46,12 @@ export const AppShell = () => {
       const hasAuthCallback = Boolean(code || hashHasTokens || urlError || hashError);
       if (!hasAuthCallback) return;
 
+      const signature = [code ?? "", hashHasTokens ? "tokens" : "", urlError ?? "", hashError ?? ""].join(
+        "|"
+      );
+      if (handledAuthSignatureRef.current === signature) return;
+      handledAuthSignatureRef.current = signature;
+
       const errorMessage = urlError || hashError;
       if (errorMessage) {
         window.localStorage.setItem("authError", errorMessage);
@@ -66,36 +73,27 @@ export const AppShell = () => {
         const returnToFromUrl = url.searchParams.get("returnTo");
         const storedReturnTo = window.localStorage.getItem("authReturnTo");
 
-        const safeReturnTo = (value: string | null) => (value && value.startsWith("/") ? value : null);
+        const safeReturnTo = (value: string | null) => {
+          if (!value || !value.startsWith("/")) return null;
+          if (value === "/login") return "/";
+          return value;
+        };
 
         const returnTo = safeReturnTo(returnToFromUrl) ?? safeReturnTo(storedReturnTo) ?? "/";
 
         window.localStorage.removeItem("authReturnTo");
 
-        const clean = new URL(window.location.href);
-        clean.searchParams.delete("code");
-        clean.searchParams.delete("state");
-        clean.searchParams.delete("error");
-        clean.searchParams.delete("error_code");
-        clean.searchParams.delete("error_description");
-        clean.hash = "";
-        window.history.replaceState({}, document.title, clean.pathname + clean.search);
-
         if (errorMessage) {
-          if (location.pathname !== "/login") {
-            navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`, { replace: true });
-          }
+          navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`, { replace: true });
           return;
         }
 
-        if (location.pathname !== returnTo) {
-          navigate(returnTo, { replace: true });
-        }
+        navigate(returnTo, { replace: true });
       }
     };
 
     void run();
-  }, [navigate, location.pathname]);
+  }, [navigate, location.key]);
 
   useEffect(() => {
     let mounted = true;
