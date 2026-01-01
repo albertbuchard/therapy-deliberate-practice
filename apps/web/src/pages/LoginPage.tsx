@@ -40,7 +40,11 @@ export const LoginPage = () => {
 
   useEffect(() => {
     if (authChecked && isAuthenticated) {
-      navigate(returnTo, { replace: true });
+      if (returnTo.startsWith("/login")) {
+        navigate("/", { replace: true });
+      } else {
+        navigate(returnTo, { replace: true });
+      }
     }
   }, [authChecked, isAuthenticated, navigate, returnTo]);
 

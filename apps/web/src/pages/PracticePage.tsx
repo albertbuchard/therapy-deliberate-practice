@@ -103,6 +103,7 @@ export const PracticePage = () => {
   const patientAudioRef = useRef<HTMLAudioElement | null>(null);
   const previousTaskIdRef = useRef<string | null>(null);
   const hasInitializedRef = useRef(false);
+  const attemptsKeyRef = useRef<string>("");
   const currentItem = practice.sessionItems[practice.currentIndex];
   const currentExampleId = currentItem?.example_id;
   const patientLine = currentItem?.patient_text ?? "";
@@ -118,6 +119,20 @@ export const PracticePage = () => {
     const entries = practice.evaluation?.criterion_scores.map((score) => [score.criterion_id, score]) ?? [];
     return new Map(entries);
   }, [practice.evaluation?.criterion_scores]);
+  const attemptsByItem = useMemo(() => {
+    return Object.fromEntries(
+      sessionAttempts
+        .filter((attempt) => attempt.session_item_id)
+        .map((attempt) => [
+          attempt.session_item_id,
+          {
+            transcript: attempt.transcript,
+            evaluation: attempt.evaluation ?? undefined,
+            attemptId: attempt.id
+          }
+        ])
+    );
+  }, [sessionAttempts]);
   const overallScore = practice.evaluation?.overall.score;
   const scrollToScoringMatrix = useCallback(() => {
     const target = document.getElementById("practice-scoring-matrix");
@@ -266,20 +281,17 @@ export const PracticePage = () => {
 
   useEffect(() => {
     if (!practice.sessionId) return;
-    const attemptsByItem = Object.fromEntries(
-      sessionAttempts
-        .filter((attempt) => attempt.session_item_id)
-        .map((attempt) => [
-          attempt.session_item_id,
-          {
-            transcript: attempt.transcript,
-            evaluation: attempt.evaluation ?? undefined,
-            attemptId: attempt.id
-          }
-        ])
-    );
+    const key = sessionAttempts
+      .map((attempt) => `${attempt.id}:${attempt.session_item_id ?? ""}:${attempt.completed_at ?? "x"}`)
+      .join("|");
+    if (key === attemptsKeyRef.current) return;
+    attemptsKeyRef.current = key;
     dispatch(setSessionAttempts(attemptsByItem));
-  }, [dispatch, practice.sessionId, sessionAttempts]);
+  }, [attemptsByItem, dispatch, practice.sessionId, sessionAttempts]);
+
+  useEffect(() => {
+    attemptsKeyRef.current = "";
+  }, [practice.sessionId]);
 
   useEffect(() => {
     setPatientAudioStatus("idle");
