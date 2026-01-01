@@ -26,6 +26,10 @@ export const safeError = (error: unknown) => {
   };
 };
 
+export const logServerError = (event: string, error: unknown, fields: LogFields = {}) => {
+  log("error", event, { ...fields, error: safeError(error) });
+};
+
 export const log: LogFn = (level, event, fields = {}) => {
   console.log(
     JSON.stringify({

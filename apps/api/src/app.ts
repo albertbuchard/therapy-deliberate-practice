@@ -32,7 +32,14 @@ import type { ApiDatabase } from "./db/types";
 import { createAdminAuth, resolveAdminStatus } from "./middleware/adminAuth";
 import { createUserAuth } from "./middleware/userAuth";
 import { decryptOpenAiKey, encryptOpenAiKey } from "./utils/crypto";
-import { createLogger, log, makeRequestId, safeError, safeTruncate } from "./utils/logger";
+import {
+  createLogger,
+  log,
+  logServerError,
+  makeRequestId,
+  safeError,
+  safeTruncate
+} from "./utils/logger";
 import { OpenAITtsProvider } from "./providers/tts";
 import { OPENAI_TTS_FORMAT, OPENAI_TTS_MODEL } from "./providers/models";
 import { getOrCreateTtsAsset, type TtsStorage } from "./services/ttsService";
@@ -619,7 +626,14 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const log = logger.child({ requestId: c.get("requestId"), endpoint: "admin_whoami" });
     const result = await resolveAdminStatus(env, c.req.raw.headers);
     if (!result.ok) {
-      log.warn("Admin whoami failed", { status: result.status });
+      if (result.status >= 500) {
+        logServerError("admin.whoami.error", new Error(result.message), {
+          requestId: c.get("requestId"),
+          status: result.status
+        });
+      } else {
+        log.warn("Admin whoami failed", { status: result.status });
+      }
       return c.json(
         { isAuthenticated: false, isAdmin: false, email: null },
         result.status >= 500 ? 500 : 200
@@ -654,7 +668,10 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       log(level, event, { requestId, cache_key: cacheKey, ...fields });
 
     if (!ttsConfigReady) {
-      logEvent("error", "tts.config.missing");
+      logServerError("tts.config.missing", new Error("TTS storage is not configured."), {
+        requestId,
+        cache_key: cacheKey
+      });
       return c.json({ error: "TTS storage is not configured." }, 500);
     }
 
@@ -697,7 +714,10 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       log(level, event, { requestId, userId: user?.id ?? null, ...fields });
 
     if (!ttsConfigReady) {
-      logEvent("error", "tts.config.missing");
+      logServerError("tts.config.missing", new Error("TTS storage is not configured."), {
+        requestId,
+        userId: user?.id ?? null
+      });
       return c.json({ error: "TTS storage is not configured." }, 500);
     }
     const settings = await getUserSettingsRow(user.id);
@@ -709,7 +729,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     let openaiApiKey = env.openaiApiKey;
     if (settings.openai_key_ciphertext && settings.openai_key_iv) {
       if (!env.openaiKeyEncryptionSecret) {
-        logEvent("error", "tts.prefetch.encryption_secret_missing");
+        logServerError(
+          "tts.prefetch.encryption_secret_missing",
+          new Error("OPENAI_KEY_ENCRYPTION_SECRET is not configured."),
+          { requestId, userId: user?.id ?? null }
+        );
         return c.json({ error: "OPENAI_KEY_ENCRYPTION_SECRET is not configured." }, 500);
       }
       openaiApiKey = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
@@ -843,7 +867,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json({ error: "Provide free_text or source_url" }, 400);
     }
     if (!env.openaiApiKey) {
-      log.error("OpenAI key missing for parse task");
+      logServerError("admin.parse_task.openai_key_missing", new Error("OpenAI key missing"), {
+        requestId: c.get("requestId")
+      });
       return c.json({ error: "OpenAI key missing" }, 500);
     }
     let llmProvider;
@@ -1161,7 +1187,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     });
     const data = schema.parse(body);
     if (!env.openaiKeyEncryptionSecret) {
-      log.error("Missing OpenAI encryption secret", { userId: user.id });
+      logServerError(
+        "me.openai_key.update.missing_secret",
+        new Error("OPENAI_KEY_ENCRYPTION_SECRET is not configured"),
+        { requestId: c.get("requestId"), userId: user.id }
+      );
       return c.json({ error: "OPENAI_KEY_ENCRYPTION_SECRET is not configured" }, 500);
     }
     const encrypted = await encryptOpenAiKey(env.openaiKeyEncryptionSecret, data.openaiApiKey);
@@ -1220,6 +1250,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       }
 
       if (!env.openaiKeyEncryptionSecret) {
+        logServerError(
+          "me.openai_key.validate.missing_secret",
+          new Error("OPENAI_KEY_ENCRYPTION_SECRET is not set."),
+          { requestId: c.get("requestId"), userId: user.id }
+        );
         return c.json(
           {
             ok: false,
@@ -1371,6 +1406,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     let openaiApiKey = env.openaiApiKey;
     if (settings.openai_key_ciphertext && settings.openai_key_iv) {
       if (!env.openaiKeyEncryptionSecret) {
+        logServerError(
+          "practice.openai_key.encryption_secret_missing",
+          new Error("OPENAI_KEY_ENCRYPTION_SECRET is not configured."),
+          { requestId, userId: user.id }
+        );
         return c.json(
           {
             requestId,

@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import type { ApiDatabase } from "../db/types";
 import type { RuntimeEnv } from "../env";
 import { users, userSettings } from "../db/schema";
+import { logServerError } from "../utils/logger";
 
 export type UserIdentity = {
   id: string;
@@ -51,6 +52,11 @@ export const createUserAuth = (env: RuntimeEnv, db: ApiDatabase): MiddlewareHand
     }
 
     if (!env.supabaseJwtSecret) {
+      logServerError(
+        "auth.supabase_jwt_secret.missing",
+        new Error("SUPABASE_JWT_SECRET is not configured"),
+        { requestId: c.get("requestId") }
+      );
       return c.json({ error: "SUPABASE_JWT_SECRET is not configured" }, 500);
     }
 
