@@ -576,17 +576,6 @@ export const PracticePage = () => {
                         setCanRecord(true);
                       }}
                     />
-                    <button
-                      type="button"
-                      className="rounded-full border border-white/20 px-4 py-2 text-xs hover:border-white/40"
-                      onClick={() =>
-                        patientAudioRef.current
-                          ?.play()
-                          .catch(() => setPatientAudioError("Unable to play patient audio."))
-                      }
-                    >
-                      Play patient
-                    </button>
                   </div>
                 )}
               </div>
