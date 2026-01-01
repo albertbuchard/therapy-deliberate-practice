@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import type { PracticeRunResponse } from "@deliberate/shared";
 import {
   useGetTaskQuery,
   useGetPracticeSessionsQuery,
@@ -16,6 +17,7 @@ import {
   setAudioBlobRef,
   setAttemptForItem,
   setCurrentIndex,
+  setEvaluation,
   setRecordingState,
   setSessionAttempts,
   setSession,
@@ -62,7 +64,7 @@ export const PracticePage = () => {
   const { taskId } = useParams();
   const { data: task } = useGetTaskQuery(taskId ?? "");
   const [startSession, { isLoading: isStartingSession }] = useStartSessionMutation();
-  const [runPractice, { isLoading }] = useRunPracticeMutation();
+  const [runPractice] = useRunPracticeMutation();
   const [prefetchPatientAudio] = usePrefetchPatientAudioMutation();
   const dispatch = useAppDispatch();
   const practice = useAppSelector((state) => state.practice);
@@ -97,6 +99,12 @@ export const PracticePage = () => {
   const [autoPlayPatientAudio, setAutoPlayPatientAudio] = useState(true);
   const [patientAudioError, setPatientAudioError] = useState<string | null>(null);
   const [patientPlay, setPatientPlay] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [transcriptionStatus, setTranscriptionStatus] = useState<
+    "idle" | "transcribing" | "ready" | "error"
+  >("idle");
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recorderMimeRef = useRef<string | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -104,6 +112,12 @@ export const PracticePage = () => {
   const previousTaskIdRef = useRef<string | null>(null);
   const hasInitializedRef = useRef(false);
   const attemptsKeyRef = useRef<string>("");
+  const transcriptionPromiseRef = useRef<Promise<PracticeRunResponse> | null>(null);
+  const transcriptionRequestRef = useRef<string | null>(null);
+  const pendingResultRef = useRef<{
+    sessionItemId: string;
+    result: PracticeRunResponse;
+  } | null>(null);
   const currentItem = practice.sessionItems[practice.currentIndex];
   const currentExampleId = currentItem?.example_id;
   const patientLine = currentItem?.patient_text ?? "";
@@ -198,6 +212,13 @@ export const PracticePage = () => {
     setPatientSpeaking(false);
     setPatientPlay(false);
     setCanRecord(practiceMode === "standard");
+    setIsEvaluating(false);
+    setTranscriptExpanded(false);
+    setTranscriptionStatus("idle");
+    setTranscriptionError(null);
+    transcriptionPromiseRef.current = null;
+    transcriptionRequestRef.current = null;
+    pendingResultRef.current = null;
   }, [practiceMode]);
 
   const startNewSession = useCallback(async () => {
@@ -301,6 +322,12 @@ export const PracticePage = () => {
     setPatientSpeaking(false);
     setCanRecord(practiceMode === "standard");
     setPatientPlay(false);
+    setTranscriptionStatus("idle");
+    setTranscriptionError(null);
+    setTranscriptExpanded(false);
+    transcriptionPromiseRef.current = null;
+    transcriptionRequestRef.current = null;
+    pendingResultRef.current = null;
     if (practiceMode === "standard" && patientAudioRef.current) {
       patientAudioRef.current.pause();
       patientAudioRef.current.currentTime = 0;
@@ -367,9 +394,88 @@ export const PracticePage = () => {
       .catch(() => setPatientAudioError("Autoplay was blocked. Tap play to begin."));
   }, [autoPlayPatientAudio, patientAudioStatus, practiceMode, patientAudioUrl]);
 
+  const beginTranscription = useCallback(
+    async (blob: Blob, mimeType?: string | null) => {
+      if (!currentItem) return null;
+      const transcriptionId = `${currentItem.session_item_id}:${Date.now()}`;
+      transcriptionRequestRef.current = transcriptionId;
+      setTranscriptionStatus("transcribing");
+      setTranscriptionError(null);
+      setError(null);
+      setResponseErrors(null);
+      setNextDifficulty(null);
+      setRequestId(null);
+      dispatch(setEvaluation(undefined));
+      const promise = (async () => {
+        const base64 = await blobToBase64(blob, t("practice.error.readAudio"));
+        const turnContext =
+          practiceMode === "real_time"
+            ? {
+                patient_cache_key: patientCacheKey ?? undefined,
+                patient_statement_id: currentExampleId
+              }
+            : undefined;
+        const result = await runPractice({
+          session_item_id: currentItem.session_item_id,
+          audio: base64,
+          audio_mime: mimeType ?? undefined,
+          mode: settings.aiMode,
+          practice_mode: practiceMode,
+          turn_context: turnContext
+        }).unwrap();
+        if (transcriptionRequestRef.current !== transcriptionId) {
+          return result;
+        }
+        pendingResultRef.current = {
+          sessionItemId: currentItem.session_item_id,
+          result
+        };
+        dispatch(
+          setAttemptForItem({
+            sessionItemId: currentItem.session_item_id,
+            transcript: result.transcript?.text,
+            attemptId: result.attemptId
+          })
+        );
+        setRequestId(result.requestId ?? null);
+        setTranscriptionStatus("ready");
+        dispatch(setRecordingState("ready"));
+        return result;
+      })();
+      transcriptionPromiseRef.current = promise;
+      return promise.catch((err) => {
+        if (transcriptionRequestRef.current !== transcriptionId) {
+          throw err;
+        }
+        setTranscriptionStatus("error");
+        setTranscriptionError("Transcription failed. Please try again.");
+        dispatch(setRecordingState("ready"));
+        throw err;
+      });
+    },
+    [
+      currentExampleId,
+      currentItem,
+      dispatch,
+      patientCacheKey,
+      practiceMode,
+      runPractice,
+      settings.aiMode,
+      t
+    ]
+  );
+
   const startRecording = async () => {
     setError(null);
     setResponseErrors(null);
+    setNextDifficulty(null);
+    setRequestId(null);
+    setTranscriptionStatus("idle");
+    setTranscriptionError(null);
+    transcriptionPromiseRef.current = null;
+    transcriptionRequestRef.current = null;
+    pendingResultRef.current = null;
+    dispatch(setEvaluation(undefined));
     if (practiceMode === "real_time" && !canRecord) {
       setError("Wait for the patient audio to finish before recording.");
       return;
@@ -406,6 +512,7 @@ export const PracticePage = () => {
         URL.revokeObjectURL(practice.audioBlobRef);
       }
       dispatch(setAudioBlobRef({ url, mimeType: blob.type }));
+      void beginTranscription(blob, blob.type);
     };
     recorderRef.current = recorder;
     recorder.start();
@@ -421,43 +528,37 @@ export const PracticePage = () => {
   const runEvaluation = async () => {
     if (!currentItem || !practice.audioBlobRef) return;
     try {
-      dispatch(setRecordingState("processing"));
+      setIsEvaluating(true);
       setError(null);
       setResponseErrors(null);
-      const response = await fetch(practice.audioBlobRef);
-      const blob = await response.blob();
-      if (!blob.size) {
-        setError(t("practice.error.noAudio"));
-        dispatch(setRecordingState("ready"));
-        return;
+      dispatch(setRecordingState("processing"));
+      if (!transcriptionPromiseRef.current) {
+        const response = await fetch(practice.audioBlobRef);
+        const blob = await response.blob();
+        if (!blob.size) {
+          setError(t("practice.error.noAudio"));
+          dispatch(setRecordingState("ready"));
+          return;
+        }
+        await beginTranscription(blob, practice.audioMime);
+      } else {
+        await transcriptionPromiseRef.current;
       }
-      const base64 = await blobToBase64(blob, t("practice.error.readAudio"));
-      const turnContext =
-        practiceMode === "real_time"
-          ? {
-              patient_cache_key: patientCacheKey ?? undefined,
-              patient_statement_id: currentExampleId
-            }
-          : undefined;
-      const result = await runPractice({
-        session_item_id: currentItem.session_item_id,
-        audio: base64,
-        audio_mime: practice.audioMime,
-        mode: settings.aiMode,
-        practice_mode: practiceMode,
-        turn_context: turnContext
-      }).unwrap();
-      setRequestId(result.requestId ?? null);
-      setResponseErrors(result.errors ?? null);
-      setNextDifficulty(result.next_recommended_difficulty ?? null);
-      dispatch(
-        setAttemptForItem({
-          sessionItemId: currentItem.session_item_id,
-          transcript: result.transcript?.text,
-          evaluation: result.scoring?.evaluation,
-          attemptId: result.attemptId
-        })
-      );
+      const pending = pendingResultRef.current;
+      if (pending && pending.sessionItemId === currentItem.session_item_id) {
+        const { result } = pending;
+        setRequestId(result.requestId ?? null);
+        setResponseErrors(result.errors ?? null);
+        setNextDifficulty(result.next_recommended_difficulty ?? null);
+        dispatch(
+          setAttemptForItem({
+            sessionItemId: currentItem.session_item_id,
+            transcript: result.transcript?.text,
+            evaluation: result.scoring?.evaluation,
+            attemptId: result.attemptId
+          })
+        );
+      }
       dispatch(setRecordingState("ready"));
     } catch (err) {
       const message =
@@ -481,6 +582,8 @@ export const PracticePage = () => {
       }
       setError(message ?? t("practice.error.evaluateFailed"));
       dispatch(setRecordingState("ready"));
+    } finally {
+      setIsEvaluating(false);
     }
   };
 
@@ -932,14 +1035,65 @@ export const PracticePage = () => {
               <button
                 className="rounded-full border border-white/20 px-6 py-2 text-sm"
                 onClick={runEvaluation}
-                disabled={!practice.audioBlobRef || isLoading || isStartingSession || !currentItem}
+                disabled={!practice.audioBlobRef || isEvaluating || isStartingSession || !currentItem}
               >
-                {isLoading ? t("practice.evaluating") : t("practice.runEvaluation")}
+                {isEvaluating ? t("practice.evaluating") : t("practice.runEvaluation")}
               </button>
             </div>
             {practice.audioBlobRef && (
               <audio className="audio-player mt-4 w-full" controls src={practice.audioBlobRef} />
             )}
+            <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/50 p-4 shadow-[0_0_30px_rgba(15,23,42,0.2)]">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
+                    {t("practice.transcriptTitle")}
+                  </p>
+                  {transcriptionStatus === "transcribing" && (
+                    <span className="rounded-full border border-teal-300/40 bg-teal-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-teal-200">
+                      Transcribing…
+                    </span>
+                  )}
+                  {transcriptionStatus === "error" && (
+                    <span className="rounded-full border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-rose-200">
+                      Issue
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-200 transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => practice.transcript && navigator.clipboard.writeText(practice.transcript)}
+                    disabled={!practice.transcript}
+                  >
+                    {t("practice.copyTranscript")}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-200 transition hover:border-white/40"
+                    onClick={() => setTranscriptExpanded((prev) => !prev)}
+                  >
+                    {transcriptExpanded ? "Hide transcript" : "Show transcript"}
+                  </button>
+                </div>
+              </div>
+              {transcriptionError && (
+                <p className="mt-3 text-xs text-rose-300">{transcriptionError}</p>
+              )}
+              {transcriptExpanded && (
+                <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/40 p-3 text-sm text-slate-200">
+                  <p className="whitespace-pre-wrap">
+                    {practice.transcript ?? t("practice.transcriptPlaceholder")}
+                  </p>
+                </div>
+              )}
+              {requestId && (
+                <p className="mt-3 text-xs font-light text-slate-400">
+                  {t("practice.requestId", { id: requestId })}
+                </p>
+              )}
+            </div>
             {error && <p className="mt-3 text-sm font-light text-rose-300">{error}</p>}
           </div>
           {practice.evaluation && (
@@ -978,27 +1132,6 @@ export const PracticePage = () => {
               >
                 {practiceMode === "real_time" ? "Next patient turn" : t("practice.nextExample")}
               </button>
-            </div>
-          )}
-          {practice.transcript && (
-            <div className="rounded-3xl border border-white/10 bg-slate-900/40 p-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">{t("practice.transcriptTitle")}</h3>
-                <button
-                  className="rounded-full border border-white/20 px-4 py-1 text-xs"
-                  onClick={() => practice.transcript && navigator.clipboard.writeText(practice.transcript)}
-                >
-                  {t("practice.copyTranscript")}
-                </button>
-              </div>
-              <p className="mt-3 text-sm font-light text-slate-200 whitespace-pre-wrap">
-                {practice.transcript}
-              </p>
-              {requestId && (
-                <p className="mt-3 text-xs font-light text-slate-400">
-                  {t("practice.requestId", { id: requestId })}
-                </p>
-              )}
             </div>
           )}
           {(responseErrors?.length ?? 0) > 0 && (
