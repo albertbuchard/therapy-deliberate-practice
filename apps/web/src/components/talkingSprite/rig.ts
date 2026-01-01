@@ -73,8 +73,8 @@ export const patientRig: RigConfig = {
     REST: cellRect(2, 1)
   },
   mouthPlacement: {
-    x: 0.5,
+    x: 0.45,
     y: 0.57,
-    scale: 0.6
+    scale: 1
   }
 };
