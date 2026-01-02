@@ -222,9 +222,6 @@ export const AppShell = () => {
             <NavLink to="/" className={linkClass} end>
               {t("appShell.nav.library")}
             </NavLink>
-            <NavLink to="/history" className={linkClass}>
-              {t("appShell.nav.history")}
-            </NavLink>
             {isAdmin && (
               <NavLink to="/admin" className={linkClass}>
                 {t("appShell.nav.admin")}
@@ -290,6 +287,14 @@ export const AppShell = () => {
                       onClick={() => setIsUserMenuOpen(false)}
                     >
                       {t("appShell.nav.settings")}
+                    </NavLink>
+                    <NavLink
+                      to="/history"
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
+                      role="menuitem"
+                      onClick={() => setIsUserMenuOpen(false)}
+                    >
+                      {t("appShell.nav.history")}
                     </NavLink>
                     <button
                       type="button"

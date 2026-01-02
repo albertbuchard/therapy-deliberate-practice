@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { useGetAttemptsQuery } from "../store/api";
 
 export const HistoryPage = () => {
@@ -22,16 +23,34 @@ export const HistoryPage = () => {
               key={attempt.id}
               className="flex items-center justify-between rounded-2xl border border-white/10 p-4"
             >
-              <div>
-                <p className="text-sm font-semibold">
-                  {attempt.task_title}
-                </p>
-                <p className="text-xs text-slate-400">
-                  {t("history.completedLabel", { date: attempt.completed_at })}
-                </p>
-                <p className="text-xs text-slate-400">
-                  {t("history.exampleDifficulty", { difficulty: attempt.example_difficulty })}
-                </p>
+              <div className="space-y-2">
+                <div>
+                  <p className="text-sm font-semibold">
+                    {attempt.task_title}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {t("history.completedLabel", { date: attempt.completed_at })}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {t("history.exampleDifficulty", { difficulty: attempt.example_difficulty })}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    to={`/tasks/${attempt.task_id}`}
+                    className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-white/30 hover:text-white"
+                  >
+                    {t("history.viewTask")}
+                  </Link>
+                  {attempt.session_id && (
+                    <Link
+                      to={`/practice/${attempt.task_id}?session=${attempt.session_id}`}
+                      className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-white/30 hover:text-white"
+                    >
+                      {t("history.viewSession")}
+                    </Link>
+                  )}
+                </div>
               </div>
               <div className="text-right">
                 <p className="text-sm font-semibold">

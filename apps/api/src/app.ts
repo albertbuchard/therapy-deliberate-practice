@@ -1529,6 +1529,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         completed_at: attempts.completed_at,
         overall_score: attempts.overall_score,
         overall_pass: attempts.overall_pass,
+        session_id: attempts.session_id,
         task_id: attempts.task_id,
         task_title: tasks.title,
         example_id: attempts.example_id,
@@ -1546,6 +1547,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         task_title: attempt.task_title,
         example_id: attempt.example_id,
         example_difficulty: attempt.example_difficulty,
+        session_id: attempt.session_id,
         overall_score: attempt.overall_score,
         overall_pass: attempt.overall_pass,
         completed_at: new Date(attempt.completed_at ?? Date.now()).toISOString()

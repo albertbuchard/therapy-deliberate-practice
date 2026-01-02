@@ -85,7 +85,9 @@
     "scoreLabel": "Score {{score}}",
     "statusPassed": "Passed",
     "statusNeedsWork": "Needs work",
-    "exampleDifficulty": "Example difficulty {{difficulty}}"
+    "exampleDifficulty": "Example difficulty {{difficulty}}",
+    "viewTask": "View task",
+    "viewSession": "View session"
   },
   "profile": {
     "tagline": "Your profile",
