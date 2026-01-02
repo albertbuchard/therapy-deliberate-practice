@@ -1,62 +1,66 @@
 import { NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 type HelpContext = {
   openAiSetup?: () => void;
 };
 
-const helpPages = [
-  {
-    slug: "getting-started",
-    title: "Getting started",
-    description: "Start practicing in minutes with a guided setup.",
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-      </svg>
-    )
-  },
-  {
-    slug: "how-it-works",
-    title: "What the app is doing",
-    description: "Follow the end-to-end coaching loop.",
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M7 7h10M7 12h6M7 17h4M4 4h16v16H4z"
-        />
-      </svg>
-    )
-  },
-  {
-    slug: "deliberate-practice",
-    title: "What is deliberate practice",
-    description: "Sharpen micro-skills with targeted feedback.",
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M5 20l14-8-14-8v16z" />
-      </svg>
-    )
-  },
-  {
-    slug: "about",
-    title: "About",
-    description: "Product overview and privacy posture.",
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8h.01M12 12v4m8-4a8 8 0 1 1-16 0a8 8 0 0 1 16 0Z" />
-      </svg>
-    )
-  }
-];
-
 export const HelpLayout = () => {
   const location = useLocation();
+  const { t } = useTranslation();
   const parentContext = useOutletContext<HelpContext | undefined>() ?? {};
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const helpPages = useMemo(
+    () => [
+      {
+        slug: "getting-started",
+        title: t("help.nav.gettingStarted.title"),
+        description: t("help.nav.gettingStarted.description"),
+        icon: (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+        )
+      },
+      {
+        slug: "how-it-works",
+        title: t("help.nav.howItWorks.title"),
+        description: t("help.nav.howItWorks.description"),
+        icon: (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M7 7h10M7 12h6M7 17h4M4 4h16v16H4z"
+            />
+          </svg>
+        )
+      },
+      {
+        slug: "deliberate-practice",
+        title: t("help.nav.deliberatePractice.title"),
+        description: t("help.nav.deliberatePractice.description"),
+        icon: (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 20l14-8-14-8v16z" />
+          </svg>
+        )
+      },
+      {
+        slug: "about",
+        title: t("help.nav.about.title"),
+        description: t("help.nav.about.description"),
+        icon: (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8h.01M12 12v4m8-4a8 8 0 1 1-16 0a8 8 0 0 1 16 0Z" />
+          </svg>
+        )
+      }
+    ],
+    [t]
+  );
 
   const filteredPages = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -85,7 +89,7 @@ export const HelpLayout = () => {
     <div className="space-y-4">
       <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3">
         <label className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400" htmlFor={isMobile ? "help-search-mobile" : "help-search"}>
-          Find answers
+          {t("help.layout.searchLabel")}
         </label>
         <div className="mt-2 flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2">
           <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.7">
@@ -96,12 +100,12 @@ export const HelpLayout = () => {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search help topics"
+            placeholder={t("help.layout.searchPlaceholder")}
             className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
           />
         </div>
       </div>
-      <nav className="space-y-2" aria-label="Help sections">
+      <nav className="space-y-2" aria-label={t("help.layout.navAriaLabel")}>
         {filteredPages.map((page) => (
           <NavLink
             key={page.slug}
@@ -134,7 +138,7 @@ export const HelpLayout = () => {
         ))}
         {filteredPages.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-4 text-xs text-slate-400">
-            No matches. Try another keyword.
+            {t("help.layout.noMatches")}
           </div>
         ) : null}
       </nav>
@@ -145,19 +149,19 @@ export const HelpLayout = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between rounded-3xl border border-white/10 bg-slate-950/60 px-4 py-4 lg:hidden">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-teal-300">Help portal</p>
-          <p className="text-lg font-semibold text-white">Need guidance?</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-teal-300">{t("help.layout.mobile.kicker")}</p>
+          <p className="text-lg font-semibold text-white">{t("help.layout.mobile.title")}</p>
         </div>
         <button
           type="button"
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/70"
           onClick={() => setIsDrawerOpen(true)}
-          aria-label="Open help navigation"
+          aria-label={t("help.layout.mobile.openNavLabel")}
         >
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.7">
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
           </svg>
-          Menu
+          {t("help.layout.mobile.menu")}
         </button>
       </div>
 
@@ -166,11 +170,9 @@ export const HelpLayout = () => {
           <div className="sticky top-24 space-y-6">
             {renderNav()}
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-teal-500/10 via-slate-900/60 to-slate-950/80 p-5 text-sm text-slate-200">
-              <p className="text-xs uppercase tracking-[0.3em] text-teal-300">Need more?</p>
-              <p className="mt-2 font-semibold text-white">Reach out to your admin lead.</p>
-              <p className="mt-2 text-xs text-slate-400">
-                We keep the help center updated for core workflows. Team-specific policies live in your internal docs.
-              </p>
+              <p className="text-xs uppercase tracking-[0.3em] text-teal-300">{t("help.layout.sidebar.kicker")}</p>
+              <p className="mt-2 font-semibold text-white">{t("help.layout.sidebar.title")}</p>
+              <p className="mt-2 text-xs text-slate-400">{t("help.layout.sidebar.subtitle")}</p>
             </div>
           </div>
         </aside>
@@ -194,17 +196,17 @@ export const HelpLayout = () => {
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Help navigation"
+            aria-label={t("help.layout.dialog.ariaLabel")}
             className="absolute inset-x-4 top-6 rounded-3xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl shadow-black/40"
           >
             <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-white">Browse help topics</p>
+              <p className="text-sm font-semibold text-white">{t("help.layout.dialog.title")}</p>
               <button
                 type="button"
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/70"
                 onClick={() => setIsDrawerOpen(false)}
               >
-                Close
+                {t("help.layout.dialog.close")}
               </button>
             </div>
             <div className="mt-4 max-h-[70vh] overflow-y-auto pr-2">{renderNav(true)}</div>

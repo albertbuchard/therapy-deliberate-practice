@@ -181,6 +181,203 @@
       "securityNote": "Les clés sont chiffrées au repos et ne sont jamais renvoyées au navigateur après l'enregistrement."
     }
   },
+  "help": {
+    "nav": {
+      "gettingStarted": {
+        "title": "Bien démarrer",
+        "description": "Commencez la pratique en quelques minutes avec une configuration guidée."
+      },
+      "howItWorks": {
+        "title": "Ce que fait l'application",
+        "description": "Suivez la boucle de coaching de bout en bout."
+      },
+      "deliberatePractice": {
+        "title": "Qu'est-ce que la pratique délibérée",
+        "description": "Affinez les micro-compétences grâce à des retours ciblés."
+      },
+      "about": {
+        "title": "À propos",
+        "description": "Aperçu du produit et posture de confidentialité."
+      }
+    },
+    "layout": {
+      "searchLabel": "Trouver des réponses",
+      "searchPlaceholder": "Rechercher des rubriques d'aide",
+      "navAriaLabel": "Sections d'aide",
+      "noMatches": "Aucune correspondance. Essayez un autre mot-clé.",
+      "mobile": {
+        "kicker": "Portail d'aide",
+        "title": "Besoin d'accompagnement ?",
+        "menu": "Menu",
+        "openNavLabel": "Ouvrir la navigation d'aide"
+      },
+      "sidebar": {
+        "kicker": "Besoin de plus ?",
+        "title": "Contactez votre responsable administrateur.",
+        "subtitle": "Nous maintenons le centre d'aide à jour pour les flux principaux. Les politiques spécifiques à l'équipe se trouvent dans vos docs internes."
+      },
+      "dialog": {
+        "ariaLabel": "Navigation d'aide",
+        "title": "Parcourir les rubriques d'aide",
+        "close": "Fermer"
+      }
+    },
+    "gettingStarted": {
+      "header": {
+        "kicker": "Bien démarrer",
+        "title": "Lancez votre première session de pratique",
+        "subtitle": "Faites le tour en moins de cinq minutes. Ce portail vous guide dans le flux principal et vous donne un accès rapide aux outils de configuration."
+      },
+      "actions": {
+        "launchSetup": "Lancer l'assistant de configuration",
+        "openSettings": "Ouvrir les paramètres"
+      },
+      "purpose": {
+        "title": "À quoi sert cette application",
+        "subtitle": "Un studio de pratique premium conçu pour les micro-compétences thérapeutiques.",
+        "bodyOne": "Therapy Studio vous aide à répéter des conversations client à fort enjeu en simulant des scénarios réalistes et en évaluant votre réponse selon les critères qui comptent pour vous. Chaque session est pensée pour être intentionnelle, mesurable et répétable.",
+        "bodyTwo": "Chaque pratique repose sur une tâche de la bibliothèque. Vous exprimez votre réponse, examinez l'évaluation IA, puis itérez avec intention. Le résultat : une progression délibérée et fondée sur les preuves, sans organiser une supervision complète."
+      },
+      "quickStart": {
+        "title": "Démarrage rapide en 3 étapes",
+        "subtitle": "De la sélection au feedback dans une boucle courte et répétable.",
+        "steps": {
+          "chooseTask": {
+            "title": "Choisir une tâche",
+            "description": "Ouvrez la bibliothèque, filtrez par difficulté et sélectionnez une tâche qui cible la compétence à développer."
+          },
+          "configureAi": {
+            "title": "Configurer votre IA",
+            "description": "Lancez les services locaux ou connectez OpenAI. L'assistant vérifie votre pile et vous laisse la main."
+          },
+          "practiceReview": {
+            "title": "Pratiquer + revoir",
+            "description": "Lancez le scénario, donnez votre réponse et examinez le score ainsi que les points de coaching dans une seule vue."
+          }
+        }
+      },
+      "troubleshooting": {
+        "title": "Dépannage",
+        "subtitle": "Correctifs rapides lorsque la configuration ou la lecture bloque.",
+        "localEndpoints": {
+          "title": "Endpoints locaux inaccessibles",
+          "body": "Confirmez que le lanceur local fonctionne et que les URLs LLM/TTS dans Paramètres correspondent aux ports affichés dans la console. Le problème le plus courant est un décalage de port ou une restriction de pare-feu."
+        },
+        "missingOpenAiKey": {
+          "title": "Clé OpenAI manquante",
+          "body": "Si l'évaluation ne démarre pas, vérifiez que la clé est enregistrée et validée dans Paramètres. L'assistant peut vous guider dans la vérification complète."
+        },
+        "workingOffline": {
+          "title": "Travailler hors ligne",
+          "body": "Vous pouvez toujours parcourir la bibliothèque et revoir les sessions passées hors ligne. Les sessions de pratique nécessitent une inférence locale ou une clé OpenAI connectée."
+        }
+      }
+    },
+    "howItWorks": {
+      "header": {
+        "kicker": "Flux système",
+        "title": "Ce que fait l'application",
+        "subtitle": "Chaque session suit une boucle prévisible pour vous concentrer sur la compétence, pas l'outil."
+      },
+      "flow": {
+        "title": "Flux de bout en bout",
+        "subtitle": "De la sélection de tâche aux insights de performance."
+      },
+      "steps": {
+        "selectTask": {
+          "title": "Sélectionner une tâche",
+          "description": "Choisissez un scénario de la bibliothèque qui correspond à la micro-compétence que vous voulez pratiquer."
+        },
+        "generatePrompt": {
+          "title": "Générer le prompt patient",
+          "description": "Le système fournit le prompt patient simulé via texte ou TTS, avec des services locaux ou OpenAI."
+        },
+        "recordResponse": {
+          "title": "Enregistrer votre réponse",
+          "description": "Parlez ou saisissez votre réponse. La session capture l'audio et la transcription pour évaluation."
+        },
+        "evaluateCriteria": {
+          "title": "Évaluer selon les critères",
+          "description": "Votre réponse est notée selon la grille et comparée aux exemples de référence."
+        },
+        "reviewFeedback": {
+          "title": "Revoir les retours",
+          "description": "Les points de coaching, la grille de score et les notes d'amélioration sont regroupés dans une seule vue."
+        },
+        "trackProgress": {
+          "title": "Suivre les progrès",
+          "description": "Les sessions sont enregistrées dans l'historique pour suivre l'évolution et revisiter les moments clés."
+        }
+      },
+      "scoringSignals": {
+        "title": "Signaux qui influencent le score",
+        "subtitle": "L'évaluation équilibre clarté, empathie et conformité.",
+        "items": {
+          "rubric": "Critères de la grille définis par l'auteur de la tâche",
+          "tone": "Tonalité, rythme et intention clinique extraits de votre réponse",
+          "alignment": "Alignement avec les réponses d'exemple selon les niveaux de difficulté",
+          "context": "Contexte de session, y compris objectifs de tâche et domaine de compétence"
+        }
+      },
+      "callout": {
+        "title": "Besoin d'un diagnostic plus fin ?",
+        "body": "Enregistrez quelques sessions pour la même tâche. La vue Historique facilite la comparaison de votre score au fil des itérations."
+      }
+    },
+    "deliberatePractice": {
+      "header": {
+        "kicker": "Méthode",
+        "title": "Qu'est-ce que la pratique délibérée ?",
+        "subtitle": "La pratique délibérée est une répétition ciblée et riche en feedback visant à améliorer une micro-compétence précise plutôt qu'une performance générale."
+      },
+      "application": {
+        "title": "Comment nous l'appliquons",
+        "subtitle": "Une boucle structurée qui privilégie clarté et feedback.",
+        "bodyOne": "Chaque tâche de la bibliothèque est conçue autour d'une micro-compétence : reformulation, désescalade, cadrage d'agenda ou autre compétence clinique. Vous répétez cette micro-compétence dans des scénarios réalistes, recevez un feedback ciblé, puis recommencez la boucle jusqu'à automatiser le nouveau comportement.",
+        "bodyTwo": "La notation basée sur la grille et les comparaisons d'exemples gardent la pratique ancrée dans des comportements mesurables. Vous pouvez ainsi suivre les dimensions qui comptent le plus pour votre style clinique."
+      },
+      "habits": {
+        "title": "Comment en tirer le meilleur",
+        "subtitle": "De petites habitudes qui se renforcent rapidement.",
+        "items": {
+          "focus": "Concentrez-vous sur une compétence par session pour éviter de diluer votre attention.",
+          "listen": "Écoutez deux fois le prompt patient avant de répondre pour capter les nuances.",
+          "track": "Suivez la même tâche sur plusieurs sessions et revoyez l'historique chaque semaine.",
+          "useFeedback": "Utilisez les notes de feedback comme checklist pour votre prochaine tentative."
+        }
+      },
+      "callout": {
+        "title": "Pratiquez avec intention",
+        "body": "La constance compte plus que le volume. Une boucle de 10 minutes, répétée chaque jour, donne des progrès plus durables que des sessions longues et sporadiques."
+      }
+    },
+    "about": {
+      "header": {
+        "kicker": "À propos",
+        "title": "Therapy Studio",
+        "subtitle": "Un environnement de pratique délibérée pour les thérapeutes qui souhaitent des retours cohérents et actionnables entre les supervisions."
+      },
+      "product": {
+        "title": "Vision produit",
+        "subtitle": "Conçu pour la clarté, la répétabilité et l'autonomie.",
+        "bodyOne": "Therapy Studio associe des simulations guidées à une évaluation structurée afin que les praticiens puissent s'entraîner à des moments difficiles avant qu'ils ne surviennent en situation réelle. Chaque session vous laisse le contrôle de la pile IA, du contenu et du rythme de pratique.",
+        "bodyTwo": "L'expérience se veut premium et focalisée : un environnement calme pour réfléchir, avec des prochaines étapes claires et une progression mesurable."
+      },
+      "privacy": {
+        "title": "Données + confidentialité",
+        "subtitle": "Positionnement général et transparence.",
+        "items": {
+          "audio": "L'audio et les transcriptions ne sont stockés que si vous activez l'enregistrement des sessions dans Paramètres.",
+          "apiKeys": "Les clés API sont stockées de manière sécurisée et ne sont jamais renvoyées au navigateur après enregistrement.",
+          "localInference": "L'inférence locale garde le traitement sur votre machine lorsque vous choisissez la pile locale."
+        }
+      },
+      "callout": {
+        "title": "Besoin des infos de version ?",
+        "body": "Les détails de build sont disponibles via votre environnement de déploiement. Si vous avez besoin d'un hash de build, consultez votre tableau de bord d'hébergement ou les notes de version."
+      }
+    }
+  },
   "aiSetup": {
     "title": {
       "kicker": "Configuration IA",

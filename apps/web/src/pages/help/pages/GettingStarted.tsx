@@ -1,4 +1,5 @@
 import { Link, useOutletContext } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Callout } from "../components/Callout";
 import { PageHeader } from "../components/PageHeader";
 import { Section } from "../components/Section";
@@ -9,13 +10,29 @@ type HelpContext = {
 
 export const GettingStarted = () => {
   const { openAiSetup } = useOutletContext<HelpContext>();
+  const { t } = useTranslation();
+
+  const quickStartSteps = [
+    {
+      title: t("help.gettingStarted.quickStart.steps.chooseTask.title"),
+      description: t("help.gettingStarted.quickStart.steps.chooseTask.description")
+    },
+    {
+      title: t("help.gettingStarted.quickStart.steps.configureAi.title"),
+      description: t("help.gettingStarted.quickStart.steps.configureAi.description")
+    },
+    {
+      title: t("help.gettingStarted.quickStart.steps.practiceReview.title"),
+      description: t("help.gettingStarted.quickStart.steps.practiceReview.description")
+    }
+  ];
 
   return (
     <div className="space-y-6">
       <PageHeader
-        kicker="Getting started"
-        title="Launch your first practice session"
-        subtitle="Get oriented in under five minutes. This portal walks you through the core workflow and gives you quick access to setup tools."
+        kicker={t("help.gettingStarted.header.kicker")}
+        title={t("help.gettingStarted.header.title")}
+        subtitle={t("help.gettingStarted.header.subtitle")}
         actions={
           <>
             <button
@@ -23,49 +40,28 @@ export const GettingStarted = () => {
               onClick={() => openAiSetup?.()}
               className="rounded-full bg-teal-400 px-5 py-2 text-sm font-semibold text-slate-950 shadow-lg shadow-teal-500/30 transition hover:bg-teal-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
             >
-              Launch setup wizard
+              {t("help.gettingStarted.actions.launchSetup")}
             </button>
             <Link
               to="/settings"
               className="rounded-full border border-white/10 bg-white/5 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
             >
-              Open settings
+              {t("help.gettingStarted.actions.openSettings")}
             </Link>
           </>
         }
       />
 
-      <Section title="What this app is for" subtitle="A premium practice studio built for therapy micro-skills.">
+      <Section title={t("help.gettingStarted.purpose.title")} subtitle={t("help.gettingStarted.purpose.subtitle")}>
         <div className="space-y-3 text-sm text-slate-200">
-          <p>
-            Therapy Studio helps you rehearse high-stakes client conversations by simulating realistic scenarios and scoring
-            your response against the criteria you care about. Every session is designed to feel intentional, measurable, and
-            repeatable.
-          </p>
-          <p>
-            Each practice is centered on a task from the Library. You speak your response, review the AI evaluation, and then
-            iterate with purpose. The result is deliberate, evidence-informed growth without the overhead of scheduling a full
-            supervision session.
-          </p>
+          <p>{t("help.gettingStarted.purpose.bodyOne")}</p>
+          <p>{t("help.gettingStarted.purpose.bodyTwo")}</p>
         </div>
       </Section>
 
-      <Section title="3-step quick start" subtitle="From selection to feedback in a tight, repeatable loop.">
+      <Section title={t("help.gettingStarted.quickStart.title")} subtitle={t("help.gettingStarted.quickStart.subtitle")}>
         <ol className="grid gap-4 md:grid-cols-3">
-          {[
-            {
-              title: "Choose a task",
-              description: "Open the Library, filter by difficulty, and select a task that targets the skill you want to build."
-            },
-            {
-              title: "Configure your AI",
-              description: "Run local services or connect OpenAI. The setup wizard verifies your stack and keeps you in control."
-            },
-            {
-              title: "Practice + review",
-              description: "Run the scenario, speak your response, and review scoring plus coaching highlights in one view."
-            }
-          ].map((step, index) => (
+          {quickStartSteps.map((step, index) => (
             <li key={step.title} className="rounded-3xl border border-white/10 bg-slate-950/60 p-4">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-teal-400/10 text-sm font-semibold text-teal-200">
@@ -81,19 +77,16 @@ export const GettingStarted = () => {
         </ol>
       </Section>
 
-      <Section title="Troubleshooting" subtitle="Quick fixes when setup or playback stalls.">
+      <Section title={t("help.gettingStarted.troubleshooting.title")} subtitle={t("help.gettingStarted.troubleshooting.subtitle")}>
         <div className="space-y-4">
-          <Callout variant="note" title="Local endpoints not responding">
-            Confirm the local launcher is running and that the LLM/TTS URLs in Settings match the ports displayed in the
-            console. The most common issue is a port mismatch or firewall restriction.
+          <Callout variant="note" title={t("help.gettingStarted.troubleshooting.localEndpoints.title")}>
+            {t("help.gettingStarted.troubleshooting.localEndpoints.body")}
           </Callout>
-          <Callout variant="warning" title="Missing OpenAI key">
-            If scoring won’t start, verify that the key is saved and validated in Settings. The setup wizard can walk you
-            through the full verification flow.
+          <Callout variant="warning" title={t("help.gettingStarted.troubleshooting.missingOpenAiKey.title")}>
+            {t("help.gettingStarted.troubleshooting.missingOpenAiKey.body")}
           </Callout>
-          <Callout variant="tip" title="Working offline">
-            You can still browse the library and review prior sessions while offline. Practice sessions require either local
-            inference or a connected OpenAI key.
+          <Callout variant="tip" title={t("help.gettingStarted.troubleshooting.workingOffline.title")}>
+            {t("help.gettingStarted.troubleshooting.workingOffline.body")}
           </Callout>
         </div>
       </Section>

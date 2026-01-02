@@ -181,6 +181,203 @@
       "securityNote": "Keys are encrypted at rest and never shared back to the browser after saving."
     }
   },
+  "help": {
+    "nav": {
+      "gettingStarted": {
+        "title": "Getting started",
+        "description": "Start practicing in minutes with a guided setup."
+      },
+      "howItWorks": {
+        "title": "What the app is doing",
+        "description": "Follow the end-to-end coaching loop."
+      },
+      "deliberatePractice": {
+        "title": "What is deliberate practice",
+        "description": "Sharpen micro-skills with targeted feedback."
+      },
+      "about": {
+        "title": "About",
+        "description": "Product overview and privacy posture."
+      }
+    },
+    "layout": {
+      "searchLabel": "Find answers",
+      "searchPlaceholder": "Search help topics",
+      "navAriaLabel": "Help sections",
+      "noMatches": "No matches. Try another keyword.",
+      "mobile": {
+        "kicker": "Help portal",
+        "title": "Need guidance?",
+        "menu": "Menu",
+        "openNavLabel": "Open help navigation"
+      },
+      "sidebar": {
+        "kicker": "Need more?",
+        "title": "Reach out to your admin lead.",
+        "subtitle": "We keep the help center updated for core workflows. Team-specific policies live in your internal docs."
+      },
+      "dialog": {
+        "ariaLabel": "Help navigation",
+        "title": "Browse help topics",
+        "close": "Close"
+      }
+    },
+    "gettingStarted": {
+      "header": {
+        "kicker": "Getting started",
+        "title": "Launch your first practice session",
+        "subtitle": "Get oriented in under five minutes. This portal walks you through the core workflow and gives you quick access to setup tools."
+      },
+      "actions": {
+        "launchSetup": "Launch setup wizard",
+        "openSettings": "Open settings"
+      },
+      "purpose": {
+        "title": "What this app is for",
+        "subtitle": "A premium practice studio built for therapy micro-skills.",
+        "bodyOne": "Therapy Studio helps you rehearse high-stakes client conversations by simulating realistic scenarios and scoring your response against the criteria you care about. Every session is designed to feel intentional, measurable, and repeatable.",
+        "bodyTwo": "Each practice is centered on a task from the Library. You speak your response, review the AI evaluation, and then iterate with purpose. The result is deliberate, evidence-informed growth without the overhead of scheduling a full supervision session."
+      },
+      "quickStart": {
+        "title": "3-step quick start",
+        "subtitle": "From selection to feedback in a tight, repeatable loop.",
+        "steps": {
+          "chooseTask": {
+            "title": "Choose a task",
+            "description": "Open the Library, filter by difficulty, and select a task that targets the skill you want to build."
+          },
+          "configureAi": {
+            "title": "Configure your AI",
+            "description": "Run local services or connect OpenAI. The setup wizard verifies your stack and keeps you in control."
+          },
+          "practiceReview": {
+            "title": "Practice + review",
+            "description": "Run the scenario, speak your response, and review scoring plus coaching highlights in one view."
+          }
+        }
+      },
+      "troubleshooting": {
+        "title": "Troubleshooting",
+        "subtitle": "Quick fixes when setup or playback stalls.",
+        "localEndpoints": {
+          "title": "Local endpoints not responding",
+          "body": "Confirm the local launcher is running and that the LLM/TTS URLs in Settings match the ports displayed in the console. The most common issue is a port mismatch or firewall restriction."
+        },
+        "missingOpenAiKey": {
+          "title": "Missing OpenAI key",
+          "body": "If scoring won’t start, verify that the key is saved and validated in Settings. The setup wizard can walk you through the full verification flow."
+        },
+        "workingOffline": {
+          "title": "Working offline",
+          "body": "You can still browse the library and review prior sessions while offline. Practice sessions require either local inference or a connected OpenAI key."
+        }
+      }
+    },
+    "howItWorks": {
+      "header": {
+        "kicker": "System flow",
+        "title": "What the app is doing",
+        "subtitle": "Every practice session follows a predictable loop so you can focus on the skill, not the tooling."
+      },
+      "flow": {
+        "title": "End-to-end flow",
+        "subtitle": "From task selection to performance insights."
+      },
+      "steps": {
+        "selectTask": {
+          "title": "Select a task",
+          "description": "Pick a scenario from the Library that aligns with the micro-skill you want to practice."
+        },
+        "generatePrompt": {
+          "title": "Generate the patient prompt",
+          "description": "The system delivers the simulated patient prompt via text or TTS, using local or OpenAI services."
+        },
+        "recordResponse": {
+          "title": "Record your response",
+          "description": "Speak or type your reply. The session captures audio and transcript data for evaluation."
+        },
+        "evaluateCriteria": {
+          "title": "Evaluate against criteria",
+          "description": "Your response is scored against the rubric and compared to example benchmarks for the task."
+        },
+        "reviewFeedback": {
+          "title": "Review feedback",
+          "description": "Coaching highlights, rubric scoring, and improvement notes are surfaced in a single view."
+        },
+        "trackProgress": {
+          "title": "Track progress",
+          "description": "Sessions are saved in History so you can monitor growth and revisit coaching moments."
+        }
+      },
+      "scoringSignals": {
+        "title": "Signals that influence scoring",
+        "subtitle": "The evaluation balances clarity, empathy, and adherence.",
+        "items": {
+          "rubric": "Rubric criteria defined by the task author",
+          "tone": "Tone, pacing, and clinical intent extracted from your response",
+          "alignment": "Alignment with example answers across difficulty levels",
+          "context": "Session context, including task objectives and skill domain"
+        }
+      },
+      "callout": {
+        "title": "Want deeper diagnostics?",
+        "body": "Save a few sessions for the same task. The History view makes it easy to compare how your scoring shifts as you iterate on the same micro-skill."
+      }
+    },
+    "deliberatePractice": {
+      "header": {
+        "kicker": "Method",
+        "title": "What is deliberate practice?",
+        "subtitle": "Deliberate practice is focused, feedback-rich rehearsal designed to improve a specific micro-skill instead of generalized performance."
+      },
+      "application": {
+        "title": "How we apply it",
+        "subtitle": "A structured loop that prioritizes clarity and feedback.",
+        "bodyOne": "Each task in the Library is designed around a micro-skill: reflection, de-escalation, agenda setting, or another clinical competency. You repeat that micro-skill in realistic scenarios, receive targeted feedback, and then repeat the loop until the new behavior becomes automatic.",
+        "bodyTwo": "The rubric-driven scoring and example comparisons keep practice grounded in measurable behaviors. That means you can track the specific dimensions that matter most to your clinical style."
+      },
+      "habits": {
+        "title": "How to get the most out of it",
+        "subtitle": "Small habits that compound quickly.",
+        "items": {
+          "focus": "Focus on one skill per session to avoid diluting your attention.",
+          "listen": "Listen to the patient prompt twice before responding to pick up nuance.",
+          "track": "Track the same task across multiple sessions and review history weekly.",
+          "useFeedback": "Use the feedback notes as a checklist for your next attempt."
+        }
+      },
+      "callout": {
+        "title": "Practice with intention",
+        "body": "Consistency matters more than volume. A focused 10-minute loop, repeated daily, yields more sustainable progress than sporadic long sessions."
+      }
+    },
+    "about": {
+      "header": {
+        "kicker": "About",
+        "title": "Therapy Studio",
+        "subtitle": "A deliberate practice environment for therapists who want consistent, actionable feedback between supervision sessions."
+      },
+      "product": {
+        "title": "Product statement",
+        "subtitle": "Built for clarity, repeatability, and autonomy.",
+        "bodyOne": "Therapy Studio blends guided simulations with structured evaluation so practitioners can rehearse difficult moments before they happen in real client care. Every session keeps you in control of the AI stack, the content, and the pace of practice.",
+        "bodyTwo": "The experience is designed to feel premium and focused: a calm environment for reflection, with clear next steps and measurable progress."
+      },
+      "privacy": {
+        "title": "Data + privacy",
+        "subtitle": "High-level posture and transparency.",
+        "items": {
+          "audio": "Audio and transcripts are only stored if you enable session storage in Settings.",
+          "apiKeys": "API keys are stored securely and are never returned to the browser after saving.",
+          "localInference": "Local inference keeps processing on your machine when you choose the local stack."
+        }
+      },
+      "callout": {
+        "title": "Looking for version info?",
+        "body": "Build details are available from your deployment environment. If you need a specific build hash, check your hosting dashboard or release notes."
+      }
+    }
+  },
   "aiSetup": {
     "title": {
       "kicker": "AI setup",

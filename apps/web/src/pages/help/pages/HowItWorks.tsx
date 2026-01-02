@@ -1,44 +1,52 @@
+import { useTranslation } from "react-i18next";
 import { Callout } from "../components/Callout";
 import { PageHeader } from "../components/PageHeader";
 import { Section } from "../components/Section";
 
-const steps = [
-  {
-    title: "Select a task",
-    description: "Pick a scenario from the Library that aligns with the micro-skill you want to practice."
-  },
-  {
-    title: "Generate the patient prompt",
-    description: "The system delivers the simulated patient prompt via text or TTS, using local or OpenAI services."
-  },
-  {
-    title: "Record your response",
-    description: "Speak or type your reply. The session captures audio and transcript data for evaluation."
-  },
-  {
-    title: "Evaluate against criteria",
-    description: "Your response is scored against the rubric and compared to example benchmarks for the task."
-  },
-  {
-    title: "Review feedback",
-    description: "Coaching highlights, rubric scoring, and improvement notes are surfaced in a single view."
-  },
-  {
-    title: "Track progress",
-    description: "Sessions are saved in History so you can monitor growth and revisit coaching moments."
-  }
-];
-
 export const HowItWorks = () => {
+  const { t } = useTranslation();
+  const steps = [
+    {
+      title: t("help.howItWorks.steps.selectTask.title"),
+      description: t("help.howItWorks.steps.selectTask.description")
+    },
+    {
+      title: t("help.howItWorks.steps.generatePrompt.title"),
+      description: t("help.howItWorks.steps.generatePrompt.description")
+    },
+    {
+      title: t("help.howItWorks.steps.recordResponse.title"),
+      description: t("help.howItWorks.steps.recordResponse.description")
+    },
+    {
+      title: t("help.howItWorks.steps.evaluateCriteria.title"),
+      description: t("help.howItWorks.steps.evaluateCriteria.description")
+    },
+    {
+      title: t("help.howItWorks.steps.reviewFeedback.title"),
+      description: t("help.howItWorks.steps.reviewFeedback.description")
+    },
+    {
+      title: t("help.howItWorks.steps.trackProgress.title"),
+      description: t("help.howItWorks.steps.trackProgress.description")
+    }
+  ];
+  const scoringSignals = [
+    t("help.howItWorks.scoringSignals.items.rubric"),
+    t("help.howItWorks.scoringSignals.items.tone"),
+    t("help.howItWorks.scoringSignals.items.alignment"),
+    t("help.howItWorks.scoringSignals.items.context")
+  ];
+
   return (
     <div className="space-y-6">
       <PageHeader
-        kicker="System flow"
-        title="What the app is doing"
-        subtitle="Every practice session follows a predictable loop so you can focus on the skill, not the tooling."
+        kicker={t("help.howItWorks.header.kicker")}
+        title={t("help.howItWorks.header.title")}
+        subtitle={t("help.howItWorks.header.subtitle")}
       />
 
-      <Section title="End-to-end flow" subtitle="From task selection to performance insights.">
+      <Section title={t("help.howItWorks.flow.title")} subtitle={t("help.howItWorks.flow.subtitle")}>
         <div className="space-y-5">
           {steps.map((step, index) => (
             <div key={step.title} className="flex gap-4">
@@ -57,14 +65,9 @@ export const HowItWorks = () => {
         </div>
       </Section>
 
-      <Section title="Signals that influence scoring" subtitle="The evaluation balances clarity, empathy, and adherence.">
+      <Section title={t("help.howItWorks.scoringSignals.title")} subtitle={t("help.howItWorks.scoringSignals.subtitle")}>
         <ul className="grid gap-3 sm:grid-cols-2">
-          {[
-            "Rubric criteria defined by the task author",
-            "Tone, pacing, and clinical intent extracted from your response",
-            "Alignment with example answers across difficulty levels",
-            "Session context, including task objectives and skill domain"
-          ].map((item) => (
+          {scoringSignals.map((item) => (
             <li key={item} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200">
               {item}
             </li>
@@ -72,9 +75,8 @@ export const HowItWorks = () => {
         </ul>
       </Section>
 
-      <Callout variant="tip" title="Want deeper diagnostics?">
-        Save a few sessions for the same task. The History view makes it easy to compare how your scoring shifts as you
-        iterate on the same micro-skill.
+      <Callout variant="tip" title={t("help.howItWorks.callout.title")}>
+        {t("help.howItWorks.callout.body")}
       </Callout>
     </div>
   );
