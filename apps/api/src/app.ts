@@ -41,7 +41,7 @@ import {
   safeTruncate
 } from "./utils/logger";
 import { OpenAITtsProvider } from "./providers/tts";
-import { OPENAI_TTS_FORMAT, OPENAI_TTS_MODEL } from "./providers/models";
+import { OPENAI_TTS_FORMAT, OPENAI_TTS_INSTRUCTIONS, OPENAI_TTS_MODEL } from "./providers/models";
 import { getOrCreateTtsAsset, type TtsStorage } from "./services/ttsService";
 
 export type ApiDependencies = {
@@ -870,8 +870,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       {
         apiKey: openaiApiKey,
         model: OPENAI_TTS_MODEL,
-        voice: "marin",
-        format: OPENAI_TTS_FORMAT
+        voice: "sage",
+        format: OPENAI_TTS_FORMAT,
+        instructions: OPENAI_TTS_INSTRUCTIONS
       },
       logEvent
     );
