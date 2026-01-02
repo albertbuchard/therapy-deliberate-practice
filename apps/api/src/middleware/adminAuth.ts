@@ -7,6 +7,7 @@ type AccessIdentity = {
   isAuthenticated: boolean;
   email: string | null;
   groups: string[];
+  verifiedAccessJwt: boolean;
 };
 
 type AccessResolution =
@@ -45,21 +46,29 @@ const extractGroups = (payload: Record<string, unknown>) => {
 
 const resolveAccessIdentity = async (
   env: RuntimeEnv,
-  headers: { get: (name: string) => string | null }
+  headers: { get: (name: string) => string | null },
+  options: { requireAccessJwt?: boolean } = {}
 ): Promise<AccessResolution> => {
   const token = headers.get("cf-access-jwt-assertion");
   const emailHeader = headers.get("cf-access-authenticated-user-email");
 
   if (!token) {
+    if (options.requireAccessJwt) {
+      return { ok: true, identity: { isAuthenticated: false, email: null, groups: [], verifiedAccessJwt: false } };
+    }
     if (!emailHeader) {
-      return { ok: true, identity: { isAuthenticated: false, email: null, groups: [] } };
+      return {
+        ok: true,
+        identity: { isAuthenticated: false, email: null, groups: [], verifiedAccessJwt: false }
+      };
     }
     return {
       ok: true,
       identity: {
         isAuthenticated: true,
         email: normalizeEmail(emailHeader),
-        groups: []
+        groups: [],
+        verifiedAccessJwt: false
       }
     };
   }
@@ -83,7 +92,7 @@ const resolveAccessIdentity = async (
     const record = payload as Record<string, unknown>;
     const email = normalizeEmail((record.email as string | undefined) ?? emailHeader);
     const groups = extractGroups(record);
-    return { ok: true, identity: { isAuthenticated: true, email, groups } };
+    return { ok: true, identity: { isAuthenticated: true, email, groups, verifiedAccessJwt: true } };
   } catch (error) {
     console.error("Access JWT verification failed", error);
     return { ok: false, status: 401, message: "Invalid Access token" };
@@ -107,22 +116,30 @@ export const resolveAdminStatus = async (
 ): Promise<AdminResolution> => {
   if (isDevBypassEnabled(env)) {
     const devToken = headers.get("x-dev-admin-token");
-    if (devToken && devToken === env.devAdminToken && env.devAdminToken) {
+    const devTokenRequired = Boolean(env.devAdminToken);
+    const devTokenValid = devTokenRequired ? devToken === env.devAdminToken : true;
+    if (devTokenValid) {
       return {
         ok: true,
-        identity: { isAuthenticated: true, email: "dev-admin", groups: [] },
+        identity: { isAuthenticated: true, email: "dev-admin", groups: [], verifiedAccessJwt: true },
         isAdmin: true,
         devBypass: true
       };
     }
   }
 
-  const result = await resolveAccessIdentity(env, headers);
+  const result = await resolveAccessIdentity(env, headers, { requireAccessJwt: true });
   if (!result.ok) {
     return result;
   }
   const identity = result.identity;
-  const isAdmin = isAdminAllowed(env, identity.email, identity.groups);
+  const allowlistConfigured = env.adminEmails.length > 0 || env.adminGroups.length > 0;
+  const isAdmin =
+    identity.isAuthenticated && identity.verifiedAccessJwt
+      ? allowlistConfigured
+        ? isAdminAllowed(env, identity.email, identity.groups)
+        : true
+      : false;
   return { ok: true as const, identity, isAdmin };
 };
 
@@ -143,14 +160,6 @@ export const createAdminAuth = (env: RuntimeEnv): MiddlewareHandler => {
       c.set("isAdmin", true);
       await next();
       return;
-    }
-    if (!env.adminEmails.length && !env.adminGroups.length) {
-      logServerError(
-        "admin.allowlist.missing",
-        new Error("Admin allowlist is not configured"),
-        { requestId: c.get("requestId") }
-      );
-      return c.json({ error: "Admin allowlist is not configured" }, 500);
     }
     if (!result.identity.isAuthenticated) {
       return c.json({ error: "Unauthorized" }, 401);
