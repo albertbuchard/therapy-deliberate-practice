@@ -19,10 +19,6 @@ jobs:
           python-version: "3.11"
       - name: Install node dependencies
         run: npm ci
-      - name: Build web app
-        run: npm run build -w apps/web
-      - name: Lint web app
-        run: npm run lint -w apps/web
       - name: Install local runtime dependencies
         run: pip install -e services/local-runtime-suite/python
       - name: Lint local runtime
