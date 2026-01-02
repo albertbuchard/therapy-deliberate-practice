@@ -193,7 +193,17 @@ export const api = createApi({
       query: (body) => ({ url: "/practice/patient-audio/prefetch", method: "POST", body })
     }),
     getAttempts: builder.query<
-      Array<{ id: string; task_id: string; task_title: string; example_id: string; example_difficulty: number; overall_score: number; overall_pass: boolean; completed_at: string }>,
+      Array<{
+        id: string;
+        task_id: string;
+        task_title: string;
+        example_id: string;
+        example_difficulty: number;
+        overall_score: number;
+        overall_pass: boolean;
+        completed_at: string;
+        session_id: string | null;
+      }>,
       { task_id?: string }
     >({
       query: (params) => ({ url: "/attempts", params }),

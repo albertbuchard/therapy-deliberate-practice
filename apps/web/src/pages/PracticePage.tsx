@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { PracticeRunResponse } from "@deliberate/shared";
 import {
@@ -62,6 +62,8 @@ const pickSupportedAudioMimeType = () => {
 export const PracticePage = () => {
   const { t } = useTranslation();
   const { taskId } = useParams();
+  const [searchParams] = useSearchParams();
+  const requestedSessionId = searchParams.get("session");
   const { data: task } = useGetTaskQuery(taskId ?? "");
   const [startSession, { isLoading: isStartingSession }] = useStartSessionMutation();
   const [runPractice] = useRunPracticeMutation();
@@ -272,8 +274,33 @@ export const PracticePage = () => {
 
   useEffect(() => {
     if (!taskId) return;
+    if (!requestedSessionId) return;
+    if (isLoadingSessions) return;
+    const requestedSession = sessionHistory.find((session) => session.id === requestedSessionId);
+    if (!requestedSession) return;
+    if (practice.sessionId === requestedSession.id) return;
+    const fallbackIndex = Math.min(
+      requestedSession.completed_count,
+      Math.max(requestedSession.items.length - 1, 0)
+    );
+    loadSession(requestedSession.id, requestedSession.items, fallbackIndex);
+  }, [
+    isLoadingSessions,
+    loadSession,
+    practice.sessionId,
+    requestedSessionId,
+    sessionHistory,
+    taskId
+  ]);
+
+  useEffect(() => {
+    if (!taskId) return;
     if (practice.sessionId) return;
     if (isLoadingSessions) return;
+    if (requestedSessionId) {
+      const requestedSession = sessionHistory.find((session) => session.id === requestedSessionId);
+      if (requestedSession) return;
+    }
     if (latestSession) {
       const fallbackIndex = Math.min(
         latestSession.completed_count,
@@ -288,6 +315,8 @@ export const PracticePage = () => {
     latestSession,
     loadSession,
     practice.sessionId,
+    requestedSessionId,
+    sessionHistory,
     startNewSession,
     taskId
   ]);
