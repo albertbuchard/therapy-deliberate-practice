@@ -210,7 +210,15 @@ export const practiceRunInputSchema = z.object({
   turn_context: z
     .object({
       patient_cache_key: z.string().optional(),
-      patient_statement_id: z.string().optional()
+      patient_statement_id: z.string().optional(),
+      timing: z
+        .object({
+          response_delay_ms: z.number().nullable().optional(),
+          response_duration_ms: z.number().nullable().optional(),
+          response_timer_seconds: z.number().optional(),
+          max_response_duration_seconds: z.number().optional()
+        })
+        .optional()
     })
     .optional()
 });
@@ -229,6 +237,8 @@ export const practiceRunResponseSchema = z.object({
       duration_ms: z.number()
     })
     .optional(),
+  timing_penalty: z.number().optional(),
+  adjusted_score: z.number().optional(),
   scoring: z
     .object({
       evaluation: evaluationResultSchema,

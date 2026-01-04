@@ -14,6 +14,10 @@ type MinigameSetupModalProps = {
     players: PlayerDraft[];
     teams: TeamDraft[];
     roundsPerPlayer: number;
+    responseTimerEnabled: boolean;
+    responseTimerSeconds?: number;
+    maxResponseEnabled: boolean;
+    maxResponseSeconds?: number;
   }) => void;
 };
 
@@ -31,11 +35,16 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
   const [players, setPlayers] = useState<PlayerDraft[]>([]);
   const [teams, setTeams] = useState<TeamDraft[]>([]);
   const [roundsPerPlayer, setRoundsPerPlayer] = useState(2);
+  const [responseTimerEnabled, setResponseTimerEnabled] = useState(false);
+  const [responseTimerSeconds, setResponseTimerSeconds] = useState<number | undefined>(2);
+  const [maxResponseEnabled, setMaxResponseEnabled] = useState(false);
+  const [maxResponseSeconds, setMaxResponseSeconds] = useState<number | undefined>(15);
 
   const steps = useMemo(
     () => [
       { title: "Task selection" },
       { title: "Visibility mode" },
+      { title: "Timing" },
       { title: "Players & teams" },
       { title: "Review & start" }
     ],
@@ -50,9 +59,21 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
     setPlayers([]);
     setTeams([]);
     setRoundsPerPlayer(2);
+    setResponseTimerEnabled(false);
+    setResponseTimerSeconds(2);
+    setMaxResponseEnabled(false);
+    setMaxResponseSeconds(15);
   }, [open]);
 
   if (!open) return null;
+
+  const responseTimerValid =
+    !responseTimerEnabled ||
+    (responseTimerSeconds != null && responseTimerSeconds >= 0.1 && responseTimerSeconds <= 60);
+  const maxResponseValid =
+    !maxResponseEnabled ||
+    (maxResponseSeconds != null && maxResponseSeconds >= 0.1 && maxResponseSeconds <= 60);
+  const timingValid = responseTimerValid && maxResponseValid;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
@@ -100,6 +121,78 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
             <VisibilityModeStep value={visibilityMode} onChange={setVisibilityMode} />
           )}
           {stepIndex === 2 && (
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Response timer</p>
+                    <p className="text-xs text-slate-300">
+                      Require a minimum delay after the patient finishes.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={responseTimerEnabled}
+                    onChange={(event) => setResponseTimerEnabled(event.target.checked)}
+                    className="h-5 w-5 rounded border-white/30 bg-slate-900 text-teal-300"
+                  />
+                </div>
+                {responseTimerEnabled && (
+                  <div className="mt-4 flex items-center gap-3 text-xs text-slate-300">
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={60}
+                      step={0.1}
+                      value={responseTimerSeconds ?? ""}
+                      onChange={(event) =>
+                        setResponseTimerSeconds(event.target.value ? Number(event.target.value) : undefined)
+                      }
+                      className="w-24 rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-white"
+                    />
+                    <span>seconds</span>
+                    {!responseTimerValid && (
+                      <span className="text-xs text-rose-200">Enter 0.1–60 seconds</span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Max response duration</p>
+                    <p className="text-xs text-slate-300">Cap how long recording can last.</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={maxResponseEnabled}
+                    onChange={(event) => setMaxResponseEnabled(event.target.checked)}
+                    className="h-5 w-5 rounded border-white/30 bg-slate-900 text-teal-300"
+                  />
+                </div>
+                {maxResponseEnabled && (
+                  <div className="mt-4 flex items-center gap-3 text-xs text-slate-300">
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={60}
+                      step={0.1}
+                      value={maxResponseSeconds ?? ""}
+                      onChange={(event) =>
+                        setMaxResponseSeconds(event.target.value ? Number(event.target.value) : undefined)
+                      }
+                      className="w-24 rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-white"
+                    />
+                    <span>seconds</span>
+                    {!maxResponseValid && (
+                      <span className="text-xs text-rose-200">Enter 0.1–60 seconds</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {stepIndex === 3 && (
             <PlayersTeamsStep
               mode={mode}
               players={players}
@@ -110,7 +203,7 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
               onRoundsPerPlayerChange={setRoundsPerPlayer}
             />
           )}
-          {stepIndex === 3 && (
+          {stepIndex === 4 && (
             <ReviewStartStep
               mode={mode}
               taskSelection={taskSelection}
@@ -133,6 +226,7 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
           {stepIndex < steps.length - 1 ? (
             <button
               onClick={() => setStepIndex((prev) => Math.min(steps.length - 1, prev + 1))}
+              disabled={stepIndex === 2 && !timingValid}
               className="rounded-full border border-teal-300/60 bg-teal-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-teal-100 hover:border-teal-200"
             >
               Next
@@ -145,9 +239,14 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
                   visibilityMode,
                   players,
                   teams,
-                  roundsPerPlayer
+                  roundsPerPlayer,
+                  responseTimerEnabled,
+                  responseTimerSeconds,
+                  maxResponseEnabled,
+                  maxResponseSeconds
                 })
               }
+              disabled={!timingValid}
               className="rounded-full border border-teal-300/60 bg-teal-500/30 px-6 py-2 text-xs font-semibold uppercase tracking-wide text-teal-100 hover:border-teal-200"
             >
               Start game

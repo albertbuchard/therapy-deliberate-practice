@@ -19,7 +19,7 @@ import {
   userTaskProgress,
   users
 } from "./db/schema";
-import { and, desc, eq, inArray, like, or } from "drizzle-orm";
+import { and, count, desc, eq, inArray, like, or } from "drizzle-orm";
 import {
   deliberatePracticeTaskV2Schema,
   evaluationResultSchema,
@@ -2594,6 +2594,34 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     });
   };
 
+  const calculateTimingPenalty = (timing?: {
+    response_delay_ms?: number | null;
+    response_duration_ms?: number | null;
+    response_timer_seconds?: number;
+    max_response_duration_seconds?: number;
+  }) => {
+    if (!timing) return 0;
+    let delaySeverity = 0;
+    let durationSeverity = 0;
+    if (timing.response_timer_seconds && timing.response_delay_ms != null) {
+      const minDelayMs = timing.response_timer_seconds * 1000;
+      if (timing.response_delay_ms < minDelayMs) {
+        delaySeverity = Math.min(1, Math.max(0, 1 - timing.response_delay_ms / minDelayMs));
+      }
+    }
+    if (timing.max_response_duration_seconds && timing.response_duration_ms != null) {
+      const maxDurationMs = timing.max_response_duration_seconds * 1000;
+      if (timing.response_duration_ms > maxDurationMs) {
+        durationSeverity = Math.min(
+          1,
+          Math.max(0, (timing.response_duration_ms - maxDurationMs) / maxDurationMs)
+        );
+      }
+    }
+    const severity = Math.max(delaySeverity, durationSeverity);
+    return severity > 0 ? 0.5 + 0.5 * severity : 0;
+  };
+
   const generateTdmSchedule = (
     players: Array<{ id: string; team_id: string | null }>,
     roundsPerPlayer: number,
@@ -2676,7 +2704,15 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       game_type: z.enum(["ffa", "tdm"]),
       visibility_mode: z.enum(["normal", "hard", "extreme"]),
       task_selection: z.record(z.unknown()),
-      settings: z.record(z.unknown())
+      settings: z
+        .object({
+          rounds_per_player: z.number().optional(),
+          response_timer_enabled: z.boolean().optional(),
+          response_timer_seconds: z.number().optional(),
+          max_response_duration_enabled: z.boolean().optional(),
+          max_response_duration_seconds: z.number().optional()
+        })
+        .passthrough()
     });
     const body = await c.req.json().catch(() => null);
     const parsed = schema.safeParse(body);
@@ -2911,6 +2947,114 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     return c.json({ round_count: roundsToInsert.length });
   });
 
+  app.post("/api/v1/minigames/sessions/:id/redraw", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const [session] = await db
+      .select()
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    if (session.game_type !== "tdm") {
+      return c.json({ error: "Redraw is only available in TDM." }, 400);
+    }
+
+    const [pendingRound] = await db
+      .select()
+      .from(minigameRounds)
+      .where(
+        and(
+          eq(minigameRounds.session_id, sessionId),
+          or(eq(minigameRounds.status, "pending"), eq(minigameRounds.status, "active"))
+        )
+      )
+      .orderBy(minigameRounds.position)
+      .limit(1);
+    if (pendingRound) {
+      await db
+        .update(minigameRounds)
+        .set({ status: "completed", completed_at: Date.now() })
+        .where(eq(minigameRounds.id, pendingRound.id));
+    }
+
+    const selection = session.task_selection as {
+      strategy: "manual" | "random" | "filtered_random";
+      task_ids?: string[];
+      tags?: string[];
+      skill_domains?: string[];
+      shuffle?: boolean;
+      seed?: string;
+    };
+    const tasksForSelection = await resolveMinigameTasks(selection);
+    if (!tasksForSelection.length) {
+      return c.json({ error: "No tasks available for selection." }, 400);
+    }
+    const examples = await db
+      .select()
+      .from(taskExamples)
+      .where(inArray(taskExamples.task_id, tasksForSelection.map((task) => task.id)));
+    const examplesByTask = new Map<string, typeof examples>();
+    for (const example of examples) {
+      const existing = examplesByTask.get(example.task_id) ?? [];
+      existing.push(example);
+      examplesByTask.set(example.task_id, existing);
+    }
+    const seed = selection.seed ?? session.id;
+    const rng = createSeededRandom(seed);
+
+    const players = await db
+      .select()
+      .from(minigamePlayers)
+      .where(eq(minigamePlayers.session_id, sessionId));
+    if (players.length < 2) {
+      return c.json({ error: "Not enough players to redraw." }, 400);
+    }
+    const teamByPlayer = new Map(players.map((player) => [player.id, player.team_id ?? null]));
+    const roundsPerPlayer = 1;
+    const matches = generateTdmSchedule(
+      players.map((player) => ({ id: player.id, team_id: player.team_id ?? null })),
+      roundsPerPlayer,
+      seed
+    );
+    const match = matches[0];
+    if (!match) {
+      return c.json({ round_count: 0 });
+    }
+
+    const [lastRound] = await db
+      .select({ position: minigameRounds.position })
+      .from(minigameRounds)
+      .where(eq(minigameRounds.session_id, sessionId))
+      .orderBy(desc(minigameRounds.position))
+      .limit(1);
+    const startPosition = lastRound?.position != null ? lastRound.position + 1 : 0;
+    const task = tasksForSelection[Math.floor(rng() * tasksForSelection.length)];
+    const examplesForTask = examplesByTask.get(task.id) ?? [];
+    if (!examplesForTask.length) {
+      return c.json({ round_count: 0 });
+    }
+    const example = examplesForTask[Math.floor(rng() * examplesForTask.length)];
+    const newRound = {
+      id: generateUuid(),
+      session_id: sessionId,
+      position: startPosition,
+      task_id: task.id,
+      example_id: example.id,
+      player_a_id: match.playerA,
+      player_b_id: match.playerB,
+      team_a_id: teamByPlayer.get(match.playerA),
+      team_b_id: teamByPlayer.get(match.playerB),
+      status: "pending",
+      started_at: null,
+      completed_at: null
+    };
+    await db.insert(minigameRounds).values(newRound);
+    return c.json({ round_count: 1 });
+  });
+
   app.get("/api/v1/minigames/sessions/:id/state", async (c) => {
     const user = c.get("user");
     const sessionId = c.req.param("id");
@@ -3011,7 +3155,15 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       turn_context: z
         .object({
           patient_cache_key: z.string().optional(),
-          patient_statement_id: z.string().optional()
+          patient_statement_id: z.string().optional(),
+          timing: z
+            .object({
+              response_delay_ms: z.number().nullable().optional(),
+              response_duration_ms: z.number().nullable().optional(),
+              response_timer_seconds: z.number().optional(),
+              max_response_duration_seconds: z.number().optional()
+            })
+            .optional()
         })
         .optional()
     });
@@ -3057,21 +3209,41 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json(runResult.payload, runResult.status);
     }
 
+    const timingPenalty = calculateTimingPenalty(parsed.data.turn_context?.timing);
+    const adjustedScore = Math.max(0, (runResult.overallScore ?? 0) - timingPenalty);
+
     await db.insert(minigameRoundResults).values({
       id: generateUuid(),
       round_id: roundId,
       player_id: parsed.data.player_id,
       attempt_id: runResult.attemptId,
-      overall_score: runResult.overallScore ?? 0,
+      overall_score: adjustedScore,
       overall_pass: runResult.overallPass ?? false,
       created_at: Date.now()
     });
-    await db
-      .update(minigameRounds)
-      .set({ status: "completed", completed_at: Date.now() })
-      .where(eq(minigameRounds.id, roundId));
+    if (!round.player_b_id) {
+      await db
+        .update(minigameRounds)
+        .set({ status: "completed", completed_at: Date.now() })
+        .where(eq(minigameRounds.id, roundId));
+    } else {
+      const [resultCount] = await db
+        .select({ count: count(minigameRoundResults.id) })
+        .from(minigameRoundResults)
+        .where(eq(minigameRoundResults.round_id, roundId));
+      if ((resultCount?.count ?? 0) >= 2) {
+        await db
+          .update(minigameRounds)
+          .set({ status: "completed", completed_at: Date.now() })
+          .where(eq(minigameRounds.id, roundId));
+      }
+    }
 
-    return c.json(runResult.payload);
+    return c.json({
+      ...runResult.payload,
+      timing_penalty: timingPenalty,
+      adjusted_score: adjustedScore
+    });
   });
 
   app.post("/api/v1/practice/run", async (c) => {

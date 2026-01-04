@@ -123,6 +123,7 @@ export type MinigameRoundResult = {
   created_at: number;
   transcript?: string | null;
   evaluation?: EvaluationResult | null;
+  client_penalty?: number | null;
 };
 
 export const api = createApi({
@@ -302,6 +303,12 @@ export const api = createApi({
         body: count ? { count } : {}
       })
     }),
+    redrawMinigameRound: builder.mutation<{ round_count: number }, { sessionId: string }>({
+      query: ({ sessionId }) => ({
+        url: `/minigames/sessions/${sessionId}/redraw`,
+        method: "POST"
+      })
+    }),
     getMinigameState: builder.query<
       {
         session: MinigameSession;
@@ -330,7 +337,16 @@ export const api = createApi({
         audio_mime?: string;
         mode?: "local_prefer" | "openai_only" | "local_only";
         practice_mode?: "standard" | "real_time";
-        turn_context?: { patient_cache_key?: string; patient_statement_id?: string };
+        turn_context?: {
+          patient_cache_key?: string;
+          patient_statement_id?: string;
+          timing?: {
+            response_delay_ms?: number | null;
+            response_duration_ms?: number | null;
+            response_timer_seconds?: number;
+            max_response_duration_seconds?: number;
+          };
+        };
       }
     >({
       query: ({ sessionId, roundId, ...body }) => ({
@@ -415,6 +431,7 @@ export const {
   useAddMinigameTeamsMutation,
   useAddMinigamePlayersMutation,
   useGenerateMinigameRoundsMutation,
+  useRedrawMinigameRoundMutation,
   useGetMinigameStateQuery,
   useLazyGetMinigameStateQuery,
   useStartMinigameRoundMutation,
