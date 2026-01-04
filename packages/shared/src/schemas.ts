@@ -33,7 +33,12 @@ export const taskExampleSchema = z.object({
   severity_label: z.string().nullable().optional(),
   patient_text: z.string(),
   language: z.string().optional(),
-  meta: z.record(z.unknown()).nullable().optional(),
+  meta: z
+    .record(
+      z.union([z.string(), z.number(), z.boolean(), z.null()])
+    )
+    .nullable()
+    .optional(),
   created_at: z.number().optional(),
   updated_at: z.number().optional()
 });
