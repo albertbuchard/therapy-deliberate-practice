@@ -405,6 +405,7 @@ export const {
   useAddMinigamePlayersMutation,
   useGenerateMinigameRoundsMutation,
   useGetMinigameStateQuery,
+  useLazyGetMinigameStateQuery,
   useStartMinigameRoundMutation,
   useSubmitMinigameRoundMutation,
   usePrefetchPatientAudioMutation,
