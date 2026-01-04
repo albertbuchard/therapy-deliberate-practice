@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
-import { useGetAdminWhoamiQuery, useGetMeSettingsQuery } from "../store/api";
+import { useGetAdminWhoamiQuery, useGetMeQuery, useGetMeSettingsQuery } from "../store/api";
 import { setAdminStatus, setUser } from "../store/authSlice";
 import { supabase } from "../supabase/client";
 import { hydrateSettings } from "../store/settingsSlice";
@@ -21,10 +21,12 @@ export const AppShell = () => {
   const { isAdmin, isAuthenticated, authChecked, email } = useAppSelector((state) => state.auth);
   const isAppShellHidden = useAppSelector((state) => state.minigames.ui.appShellHidden);
   const { data, isError } = useGetAdminWhoamiQuery();
+  const { data: profileData } = useGetMeQuery(undefined, { skip: !isAuthenticated });
   const { data: settingsData } = useGetMeSettingsQuery(undefined, { skip: !isAuthenticated });
   const navigate = useNavigate();
   const location = useLocation();
   const selectedLanguage = i18n.resolvedLanguage ?? i18n.language;
+  const displayName = profileData?.display_name ?? email ?? "";
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [showAiSetup, setShowAiSetup] = useState(false);
   const [isGameSelectOpen, setIsGameSelectOpen] = useState(false);
@@ -251,6 +253,9 @@ export const AppShell = () => {
               >
                 {t("appShell.nav.minigames")}
               </button>
+              <NavLink to="/players" className={linkClass}>
+                {t("appShell.nav.players")}
+              </NavLink>
               <Tooltip label={t("leaderboard.tooltip")}>
                 <NavLink
                   to="/leaderboard"
@@ -321,7 +326,8 @@ export const AppShell = () => {
                     >
                       <div className="px-3 py-2">
                         <p className="text-xs uppercase tracking-[0.2em] text-teal-400">{t("appShell.nav.profile")}</p>
-                        <p className="text-sm text-slate-200">{email ?? " "}</p>
+                        <p className="text-sm font-semibold text-white">{displayName || " "}</p>
+                        <p className="text-xs text-slate-400">{email ?? " "}</p>
                       </div>
                       <div className="my-2 h-px bg-white/10" />
                       <NavLink

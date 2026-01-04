@@ -3,6 +3,8 @@ import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-or
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
+  display_name: text("display_name").notNull(),
+  bio: text("bio"),
   created_at: integer("created_at").notNull()
 });
 

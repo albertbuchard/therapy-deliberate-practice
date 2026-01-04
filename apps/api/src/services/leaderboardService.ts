@@ -32,7 +32,10 @@ const buildTaskFilters = (query: LeaderboardQuery) => {
   return filters;
 };
 
-export const buildDisplayName = (email: string | null) => {
+export const buildDisplayName = (displayName: string | null, email: string | null) => {
+  if (displayName && displayName.trim()) {
+    return displayName.trim();
+  }
   if (!email) {
     return "Anonymous";
   }
@@ -106,19 +109,20 @@ export const fetchLeaderboardEntries = async (
     .select({
       user_id: latestAttempts.user_id,
       email: users.email,
+      display_name: users.display_name,
       score: averageScore.as("score"),
       played: playedCount.as("played"),
       last_active_at: lastActive.as("last_active_at")
     })
     .from(latestAttempts)
     .innerJoin(users, eq(users.id, latestAttempts.user_id))
-    .groupBy(latestAttempts.user_id, users.email)
+    .groupBy(latestAttempts.user_id, users.email, users.display_name)
     .orderBy(desc(averageScore), desc(playedCount), desc(lastActive))
     .limit(query.limit);
 
   return rows.map((row) => ({
     user_id: row.user_id,
-    display_name: buildDisplayName(row.email),
+    display_name: buildDisplayName(row.display_name, row.email),
     score: Number(row.score ?? 0),
     played: Number(row.played ?? 0),
     last_active_at: row.last_active_at ?? null
