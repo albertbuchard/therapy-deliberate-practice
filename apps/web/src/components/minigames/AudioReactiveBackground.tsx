@@ -124,5 +124,5 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
     };
   }, [isPlaying]);
 
-  return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />;
+  return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />;
 };

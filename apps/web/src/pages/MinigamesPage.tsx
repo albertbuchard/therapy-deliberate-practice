@@ -51,6 +51,7 @@ export const MinigamesPage = () => {
   const location = useLocation();
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
   const minigames = useAppSelector((state) => state.minigames);
+  const settings = useAppSelector((state) => state.settings);
   const [selectOpen, setSelectOpen] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
   const [mode, setMode] = useState<"ffa" | "tdm" | null>(null);
@@ -206,6 +207,7 @@ export const MinigamesPage = () => {
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
     playerId: currentPlayerId,
+    aiMode: settings.aiMode,
     audioElement,
     patientAudio,
     responseTimerEnabled: timingSettings.responseTimerEnabled,
@@ -214,21 +216,20 @@ export const MinigamesPage = () => {
     maxResponseSeconds: timingSettings.maxResponseSeconds,
     onResult: (payload) => {
       setLastTranscript(payload.transcript);
-      setRoundResultScore(payload.score ?? null);
+      const scoreFromEval =
+        typeof (payload.evaluation as EvaluationResult | undefined)?.overall?.score === "number"
+          ? (payload.evaluation as EvaluationResult).overall.score
+          : null;
+      const score = payload.score ?? scoreFromEval;
+      setRoundResultScore(score ?? null);
       setRoundResultPenalty(payload.timingPenalty ?? null);
-      if (
-        payload.score != null &&
-        payload.attemptId &&
-        currentRound &&
-        currentPlayerId &&
-        minigames.session
-      ) {
+      if (payload.attemptId && currentRound && currentPlayerId && minigames.session) {
         dispatch(
           addRoundResult({
             roundId: currentRound.id,
             playerId: currentPlayerId,
             attemptId: payload.attemptId,
-            overallScore: payload.score,
+            overallScore: score ?? 0,
             overallPass: true,
             transcript: payload.transcript,
             evaluation: payload.evaluation as EvaluationResult | undefined,
@@ -243,6 +244,7 @@ export const MinigamesPage = () => {
     enabled: mode === "tdm",
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
+    aiMode: settings.aiMode,
     audioElement,
     patientAudio,
     responseTimerEnabled: timingSettings.responseTimerEnabled,
@@ -251,15 +253,20 @@ export const MinigamesPage = () => {
     maxResponseSeconds: timingSettings.maxResponseSeconds,
     onResult: (payload) => {
       setLastTranscript(payload.transcript);
-      setRoundResultScore(payload.score ?? null);
+      const scoreFromEval =
+        typeof (payload.evaluation as EvaluationResult | undefined)?.overall?.score === "number"
+          ? (payload.evaluation as EvaluationResult).overall.score
+          : null;
+      const score = payload.score ?? scoreFromEval;
+      setRoundResultScore(score ?? null);
       setRoundResultPenalty(payload.timingPenalty ?? null);
-      if (payload.score != null && payload.attemptId && currentRound && minigames.session) {
+      if (payload.attemptId && currentRound && minigames.session) {
         dispatch(
           addRoundResult({
             roundId: currentRound.id,
             playerId: payload.playerId,
             attemptId: payload.attemptId,
-            overallScore: payload.score,
+            overallScore: score ?? 0,
             overallPass: true,
             transcript: payload.transcript,
             evaluation: payload.evaluation as EvaluationResult | undefined,
