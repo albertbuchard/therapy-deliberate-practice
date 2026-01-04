@@ -68,6 +68,62 @@ export type PracticeSessionAttempt = {
   overall_pass: boolean;
 };
 
+export type MinigameSession = {
+  id: string;
+  user_id: string;
+  game_type: "ffa" | "tdm";
+  visibility_mode: "normal" | "hard" | "extreme";
+  task_selection: Record<string, unknown>;
+  settings: Record<string, unknown>;
+  created_at: number;
+  ended_at: number | null;
+};
+
+export type MinigameTeam = {
+  id: string;
+  session_id: string;
+  name: string;
+  color: string;
+  created_at: number;
+};
+
+export type MinigamePlayer = {
+  id: string;
+  session_id: string;
+  name: string;
+  avatar: string;
+  team_id: string | null;
+  created_at: number;
+};
+
+export type MinigameRound = {
+  id: string;
+  session_id: string;
+  position: number;
+  task_id: string;
+  example_id: string;
+  player_a_id: string;
+  player_b_id: string | null;
+  team_a_id: string | null;
+  team_b_id: string | null;
+  status: "pending" | "active" | "completed";
+  started_at: number | null;
+  completed_at: number | null;
+  patient_text?: string | null;
+};
+
+export type MinigameRoundResult = {
+  id: string;
+  round_id: string;
+  player_id: string;
+  attempt_id: string;
+  overall_score: number;
+  overall_pass: boolean;
+  created_at: number;
+  transcript?: string | null;
+  evaluation?: EvaluationResult | null;
+};
+
 export const api = createApi({
   reducerPath: "api",
   baseQuery: fetchBaseQuery({
@@ -194,6 +250,85 @@ export const api = createApi({
       query: (body) => ({ url: "/practice/run", method: "POST", body }),
       invalidatesTags: ["Attempt"]
     }),
+    createMinigameSession: builder.mutation<
+      { session_id: string },
+      {
+        game_type: "ffa" | "tdm";
+        visibility_mode: "normal" | "hard" | "extreme";
+        task_selection: Record<string, unknown>;
+        settings: Record<string, unknown>;
+      }
+    >({
+      query: (body) => ({ url: "/minigames/sessions", method: "POST", body })
+    }),
+    endMinigameSession: builder.mutation<{ ok: boolean }, { sessionId: string }>({
+      query: ({ sessionId }) => ({ url: `/minigames/sessions/${sessionId}/end`, method: "POST" })
+    }),
+    addMinigameTeams: builder.mutation<{ teams: MinigameTeam[] }, { sessionId: string; teams: Array<{ name: string; color: string }> }>({
+      query: ({ sessionId, teams }) => ({
+        url: `/minigames/sessions/${sessionId}/teams`,
+        method: "POST",
+        body: { teams }
+      })
+    }),
+    addMinigamePlayers: builder.mutation<
+      { players: MinigamePlayer[] },
+      { sessionId: string; players: Array<{ name: string; avatar: string; team_id?: string | null }> }
+    >({
+      query: ({ sessionId, players }) => ({
+        url: `/minigames/sessions/${sessionId}/players`,
+        method: "POST",
+        body: { players }
+      })
+    }),
+    generateMinigameRounds: builder.mutation<
+      { round_count: number },
+      { sessionId: string; count?: number }
+    >({
+      query: ({ sessionId, count }) => ({
+        url: `/minigames/sessions/${sessionId}/rounds/generate`,
+        method: "POST",
+        body: count ? { count } : {}
+      })
+    }),
+    getMinigameState: builder.query<
+      {
+        session: MinigameSession;
+        teams: MinigameTeam[];
+        players: MinigamePlayer[];
+        rounds: MinigameRound[];
+        results: MinigameRoundResult[];
+      },
+      string
+    >({
+      query: (sessionId) => `/minigames/sessions/${sessionId}/state`
+    }),
+    startMinigameRound: builder.mutation<{ ok: boolean }, { sessionId: string; roundId: string }>({
+      query: ({ sessionId, roundId }) => ({
+        url: `/minigames/sessions/${sessionId}/rounds/${roundId}/start`,
+        method: "POST"
+      })
+    }),
+    submitMinigameRound: builder.mutation<
+      PracticeRunResponse,
+      {
+        sessionId: string;
+        roundId: string;
+        player_id: string;
+        audio_base64: string;
+        audio_mime?: string;
+        mode?: "local_prefer" | "openai_only" | "local_only";
+        practice_mode?: "standard" | "real_time";
+        turn_context?: { patient_cache_key?: string; patient_statement_id?: string };
+      }
+    >({
+      query: ({ sessionId, roundId, ...body }) => ({
+        url: `/minigames/sessions/${sessionId}/rounds/${roundId}/submit`,
+        method: "POST",
+        body
+      }),
+      invalidatesTags: ["Attempt"]
+    }),
     prefetchPatientAudio: builder.mutation<
       { cache_key: string; status: "ready" | "generating"; audio_url?: string; retry_after_ms?: number },
       { exercise_id: string; practice_mode: "real_time"; statement_id?: string }
@@ -264,6 +399,14 @@ export const {
   useParseTaskMutation,
   useImportTaskMutation,
   useRunPracticeMutation,
+  useCreateMinigameSessionMutation,
+  useEndMinigameSessionMutation,
+  useAddMinigameTeamsMutation,
+  useAddMinigamePlayersMutation,
+  useGenerateMinigameRoundsMutation,
+  useGetMinigameStateQuery,
+  useStartMinigameRoundMutation,
+  useSubmitMinigameRoundMutation,
   usePrefetchPatientAudioMutation,
   usePrefetchPatientAudioBatchMutation,
   useGetAttemptsQuery

@@ -180,6 +180,95 @@ export const userSettings = sqliteTable("user_settings", {
   created_at: integer("created_at").notNull()
 });
 
+export const minigameSessions = sqliteTable(
+  "minigame_sessions",
+  {
+    id: text("id").primaryKey(),
+    user_id: text("user_id").notNull(),
+    game_type: text("game_type").notNull(),
+    visibility_mode: text("visibility_mode").notNull(),
+    task_selection: text("task_selection", { mode: "json" }).notNull(),
+    settings: text("settings", { mode: "json" }).notNull(),
+    created_at: integer("created_at").notNull(),
+    ended_at: integer("ended_at")
+  },
+  (table) => ({
+    userCreatedIdx: index("minigame_sessions_user_id_created_at_idx").on(
+      table.user_id,
+      table.created_at
+    )
+  })
+);
+
+export const minigameTeams = sqliteTable(
+  "minigame_teams",
+  {
+    id: text("id").primaryKey(),
+    session_id: text("session_id").notNull(),
+    name: text("name").notNull(),
+    color: text("color").notNull(),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    sessionIdx: index("minigame_teams_session_id_idx").on(table.session_id)
+  })
+);
+
+export const minigamePlayers = sqliteTable(
+  "minigame_players",
+  {
+    id: text("id").primaryKey(),
+    session_id: text("session_id").notNull(),
+    name: text("name").notNull(),
+    avatar: text("avatar").notNull(),
+    team_id: text("team_id"),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    sessionIdx: index("minigame_players_session_id_idx").on(table.session_id)
+  })
+);
+
+export const minigameRounds = sqliteTable(
+  "minigame_rounds",
+  {
+    id: text("id").primaryKey(),
+    session_id: text("session_id").notNull(),
+    position: integer("position").notNull(),
+    task_id: text("task_id").notNull(),
+    example_id: text("example_id").notNull(),
+    player_a_id: text("player_a_id").notNull(),
+    player_b_id: text("player_b_id"),
+    team_a_id: text("team_a_id"),
+    team_b_id: text("team_b_id"),
+    status: text("status").notNull(),
+    started_at: integer("started_at"),
+    completed_at: integer("completed_at")
+  },
+  (table) => ({
+    sessionPositionIdx: index("minigame_rounds_session_id_position_idx").on(
+      table.session_id,
+      table.position
+    )
+  })
+);
+
+export const minigameRoundResults = sqliteTable(
+  "minigame_round_results",
+  {
+    id: text("id").primaryKey(),
+    round_id: text("round_id").notNull(),
+    player_id: text("player_id").notNull(),
+    attempt_id: text("attempt_id").notNull(),
+    overall_score: real("overall_score").notNull(),
+    overall_pass: integer("overall_pass", { mode: "boolean" }).notNull(),
+    created_at: integer("created_at").notNull()
+  },
+  (table) => ({
+    roundIdx: index("minigame_round_results_round_id_idx").on(table.round_id)
+  })
+);
+
 export const ttsAssets = sqliteTable(
   "tts_assets",
   {
