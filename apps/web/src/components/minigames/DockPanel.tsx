@@ -38,8 +38,12 @@ export const DockPanel = ({
 
   const contentTranslate =
     side === "left" ? (isCollapsed ? "-translate-x-4" : "translate-x-0") : isCollapsed ? "translate-x-4" : "translate-x-0";
-  const contentOpacity = isCollapsed ? "opacity-0 pointer-events-none" : "opacity-100";
+  const contentVisibility = isCollapsed
+    ? "flex-none max-h-0 overflow-hidden opacity-0 pointer-events-none"
+    : "flex-1 opacity-100";
   const contentHeight = isCollapsed ? "max-h-0" : "max-h-[80vh]";
+  const contentOverflow = !isCollapsed ? "overflow-y-auto" : "";
+  const contentPadding = isCollapsed ? "p-0" : "p-4";
 
   const widthStyle =
     behavior === "dock"
@@ -88,11 +92,12 @@ export const DockPanel = ({
       </button>
 
       <div
-        className={`flex-1 transition-[opacity,transform,max-height] duration-300 ease-out ${
-          behavior === "stack" ? `${contentHeight} ${isCollapsed ? "" : "overflow-y-auto"}` : ""
-        } ${contentOpacity} ${behavior === "dock" ? contentTranslate : ""}`}
+        aria-hidden={isCollapsed}
+        className={`transition-[opacity,transform,max-height] duration-300 ease-out ${contentVisibility} ${
+          behavior === "stack" ? contentHeight : ""
+        } ${behavior === "dock" ? contentTranslate : ""} ${contentOverflow}`}
       >
-        <div className="p-4">{children}</div>
+        <div className={contentPadding}>{children}</div>
       </div>
     </section>
   );
