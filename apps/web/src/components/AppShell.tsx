@@ -375,7 +375,7 @@ export const AppShell = () => {
           </div>
         </header>
       )}
-      <main className={isAppShellHidden ? "w-full p-0" : "mx-auto max-w-6xl px-6 py-10"}>
+      <main className={isAppShellHidden ? "w-full p-0" : "mx-auto max-w-6xl px-6 pb-10 pt-24"}>
         <Outlet context={{ openAiSetup }} />
       </main>
     </div>

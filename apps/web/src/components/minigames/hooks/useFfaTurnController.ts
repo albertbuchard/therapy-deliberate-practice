@@ -4,6 +4,7 @@ import { useStartMinigameRoundMutation, useSubmitMinigameRoundMutation } from ".
 import { useAudioRecorder } from "./useAudioRecorder";
 import { useResponseTiming } from "./useResponseTiming";
 import type { PatientAudioBankHandle } from "../../../patientAudio/usePatientAudioBank";
+import { applyTimingPenalty, normalizeSubmitResponse } from "./turnSubmit";
 
 export type TurnState =
   | "idle"
@@ -21,6 +22,7 @@ type FfaTurnControllerOptions = {
   playerId?: string;
   audioElement?: HTMLAudioElement | null;
   enabled?: boolean;
+  aiMode?: string;
   responseTimerEnabled: boolean;
   responseTimerSeconds?: number;
   maxResponseEnabled: boolean;
@@ -41,6 +43,7 @@ export const useFfaTurnController = ({
   playerId,
   audioElement,
   enabled = true,
+  aiMode,
   responseTimerEnabled,
   responseTimerSeconds,
   maxResponseEnabled,
@@ -57,6 +60,8 @@ export const useFfaTurnController = ({
   const entry = round
     ? getEntry(round.task_id, round.example_id)
     : undefined;
+  const patientCacheKey =
+    (entry as unknown as { cacheKey?: string | null })?.cacheKey ?? undefined;
   const audioStatus = entry?.status ?? "idle";
   const audioError = entry?.error ?? null;
   const timing = useResponseTiming({
@@ -206,8 +211,10 @@ export const useFfaTurnController = ({
         player_id: playerId,
         audio_base64: recorded.base64,
         audio_mime: recorded.mimeType,
+        mode: aiMode,
         practice_mode: "real_time",
         turn_context: {
+          patient_cache_key: patientCacheKey,
           patient_statement_id: round.example_id,
           timing: {
             response_delay_ms: timingSnapshot.responseDelayMs,
@@ -217,18 +224,14 @@ export const useFfaTurnController = ({
           }
         }
       }).unwrap();
-      const rawScore =
-        response.scoring && "evaluation" in response.scoring
-          ? response.scoring.evaluation?.overall?.score
-          : undefined;
-      const timingPenalty = response.timing_penalty ?? timingSnapshot.penalty;
-      const adjustedScore =
-        rawScore != null ? Math.max(0, rawScore - (timingPenalty ?? 0)) : undefined;
+      const parsed = normalizeSubmitResponse(response);
+      const timingPenalty = parsed.timingPenalty ?? timingSnapshot.penalty;
+      const adjustedScore = applyTimingPenalty({ score: parsed.score, timingPenalty });
       onResult({
-        transcript: response.transcript?.text,
-        evaluation: response.scoring?.evaluation,
-        score: response.adjusted_score ?? adjustedScore ?? rawScore,
-        attemptId: response.attemptId,
+        transcript: parsed.transcript,
+        evaluation: parsed.evaluation,
+        score: response.adjusted_score ?? adjustedScore ?? parsed.score,
+        attemptId: parsed.attemptId,
         timingPenalty
       });
       setState("complete");
@@ -237,10 +240,12 @@ export const useFfaTurnController = ({
       setState("patient_ready");
     }
   }, [
+    aiMode,
     enabled,
     maxResponseEnabled,
     maxResponseSeconds,
     onResult,
+    patientCacheKey,
     playerId,
     responseTimerEnabled,
     responseTimerSeconds,
