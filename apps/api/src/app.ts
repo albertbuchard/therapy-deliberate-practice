@@ -3,6 +3,11 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import {
   attempts,
+  minigamePlayers,
+  minigameRoundResults,
+  minigameRounds,
+  minigameSessions,
+  minigameTeams,
   practiceSessionItems,
   practiceSessions,
   taskCriteria,
@@ -818,6 +823,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
   app.use("/api/v1/me/*", userAuth);
   app.use("/api/v1/attempts", userAuth);
   app.use("/api/v1/attempts/*", userAuth);
+  app.use("/api/v1/minigames/*", userAuth);
   app.use("/api/v1/practice/*", userAuth);
   app.use("/api/v1/sessions/*", userAuth);
 
@@ -1888,49 +1894,52 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     );
   });
 
-  app.post("/api/v1/practice/run", async (c) => {
-    const requestId = c.get("requestId");
-    const user = c.get("user");
-    const logEvent = (level: "debug" | "info" | "warn" | "error", event: string, fields = {}) =>
-      log(level, event, { requestId, userId: user?.id ?? null, ...fields });
-    const debugEnabled = env.environment === "development" || c.req.query("debug") === "true";
+  const runPracticeAttempt = async ({
+    body,
+    debugEnabled,
+    logEvent,
+    requestId,
+    user
+  }: {
+    body: unknown;
+    debugEnabled: boolean;
+    logEvent: (level: "debug" | "info" | "warn" | "error", event: string, fields?: Record<string, unknown>) => void;
+    requestId: string;
+    user: { id: string };
+  }): Promise<{
+    status: number;
+    payload: Record<string, unknown>;
+    attemptId?: string;
+    overallScore?: number;
+    overallPass?: boolean;
+  }> => {
     const timings: Record<string, number> = {};
     const errors: Array<{ stage: "input" | "stt" | "scoring" | "db"; message: string }> = [];
 
     logEvent("info", "practice.run.start");
 
     const inputParseStart = Date.now();
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch (error) {
-      logEvent("error", "input.parse.error", { error: safeError(error) });
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Invalid JSON body." }] },
-        400
-      );
-    }
     const parsedInput = practiceRunInputSchema.safeParse(body);
     if (!parsedInput.success) {
       logEvent("warn", "input.parse.error", {
         issues: parsedInput.error.flatten().fieldErrors
       });
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Invalid practice payload." }] },
-        400
-      );
+      return {
+        status: 400,
+        payload: { requestId, errors: [{ stage: "input", message: "Invalid practice payload." }] }
+      };
     }
     const input = parsedInput.data;
     if (!input.session_item_id && !(input.task_id && input.example_id)) {
-      return c.json(
-        {
+      return {
+        status: 400,
+        payload: {
           requestId,
           errors: [
             { stage: "input", message: "Provide session_item_id or task_id + example_id." }
           ]
-        },
-        400
-      );
+        }
+      };
     }
     const audioLength = input.audio?.length ?? 0;
     const minAudioLength = 128;
@@ -1939,32 +1948,32 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         reason: "audio_too_small",
         audio_length: audioLength
       });
-      return c.json(
-        {
+      return {
+        status: 400,
+        payload: {
           requestId,
           errors: [{ stage: "input", message: "Audio is missing or too short to evaluate." }]
-        },
-        400
-      );
+        }
+      };
     }
     timings.input_parse = Date.now() - inputParseStart;
 
     if (!checkRateLimit(`practice:${user.id}`)) {
       logEvent("warn", "practice.run.rate_limited");
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Too many practice requests." }] },
-        429
-      );
+      return {
+        status: 429,
+        payload: { requestId, errors: [{ stage: "input", message: "Too many practice requests." }] }
+      };
     }
 
     logEvent("info", "auth.context.start");
     const settings = await getUserSettingsRow(user.id);
     if (!settings) {
       logEvent("warn", "auth.context.error");
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Settings not found." }] },
-        404
-      );
+      return {
+        status: 404,
+        payload: { requestId, errors: [{ stage: "input", message: "Settings not found." }] }
+      };
     }
 
     const mode = (settings.ai_mode ?? env.aiMode) as ProviderMode;
@@ -1982,15 +1991,15 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
           new Error("OPENAI_KEY_ENCRYPTION_SECRET is not configured."),
           { requestId, userId: user.id }
         );
-        return c.json(
-          {
+        return {
+          status: 500,
+          payload: {
             requestId,
             errors: [
               { stage: "input", message: "OPENAI_KEY_ENCRYPTION_SECRET is not configured." }
             ]
-          },
-          500
-        );
+          }
+        };
       }
       openaiApiKey = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
         ciphertextB64: settings.openai_key_ciphertext,
@@ -2008,8 +2017,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
     if (mode === "openai_only" && !openaiApiKey) {
       logEvent("warn", "auth.context.error", { reason: "openai_key_missing", mode });
-      return c.json(
-        {
+      return {
+        status: 400,
+        payload: {
           requestId,
           errors: [
             {
@@ -2017,9 +2027,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
               message: "OpenAI mode requires an API key. Add one in Settings to continue."
             }
           ]
-        },
-        400
-      );
+        }
+      };
     }
 
     let taskId = input.task_id ?? null;
@@ -2034,7 +2043,10 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         .where(eq(practiceSessionItems.id, input.session_item_id))
         .limit(1);
       if (!itemRow) {
-        return c.json({ requestId, errors: [{ stage: "input", message: "Session item not found." }] }, 404);
+        return {
+          status: 404,
+          payload: { requestId, errors: [{ stage: "input", message: "Session item not found." }] }
+        };
       }
       sessionItemId = itemRow.id;
       sessionId = itemRow.session_id;
@@ -2043,18 +2055,18 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     }
 
     if (!taskId || !exampleId) {
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Task or example missing." }] },
-        400
-      );
+      return {
+        status: 400,
+        payload: { requestId, errors: [{ stage: "input", message: "Task or example missing." }] }
+      };
     }
 
     const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
     if (!taskRow) {
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Task not found." }] },
-        404
-      );
+      return {
+        status: 404,
+        payload: { requestId, errors: [{ stage: "input", message: "Task not found." }] }
+      };
     }
     const criteriaRows = await db
       .select()
@@ -2067,10 +2079,10 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       .where(eq(taskExamples.id, exampleId))
       .limit(1);
     if (!exampleRow) {
-      return c.json(
-        { requestId, errors: [{ stage: "input", message: "Example not found." }] },
-        404
-      );
+      return {
+        status: 404,
+        payload: { requestId, errors: [{ stage: "input", message: "Example not found." }] }
+      };
     }
 
     const task = normalizeTask(taskRow);
@@ -2100,13 +2112,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       });
     } catch (error) {
       logEvent("error", "stt.select.error", { error: safeError(error) });
-      return c.json(
-        {
+      return {
+        status: 502,
+        payload: {
           requestId,
           errors: [{ stage: "stt", message: (error as Error).message || "STT unavailable." }]
-        },
-        502
-      );
+        }
+      };
     }
 
     const sttStart = Date.now();
@@ -2125,13 +2137,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         duration_ms: duration,
         error: safeError(error)
       });
-      return c.json(
-        {
+      return {
+        status: 502,
+        payload: {
           requestId,
           errors: [{ stage: "stt", message: "Transcription failed. Please try again." }]
-        },
-        502
-      );
+        }
+      };
     }
     const sttDuration = Date.now() - sttStart;
     timings.stt = sttDuration;
@@ -2216,6 +2228,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     }
 
     let nextDifficulty: number | undefined;
+    let overallScore = 0;
+    let overallPass = false;
     if (transcript) {
       logEvent("info", "db.attempt.insert.start", { attemptId });
       try {
@@ -2237,8 +2251,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
             : undefined
         };
         const evaluationPayload = scoringResult ?? {};
-        const overallScore = scoringResult?.overall.score ?? 0;
-        const overallPass = scoringResult?.overall.pass ?? false;
+        overallScore = scoringResult?.overall.score ?? 0;
+        overallPass = scoringResult?.overall.pass ?? false;
         const transcriptText = transcript.text ?? "";
 
         await db.insert(attempts).values({
@@ -2341,7 +2355,565 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       });
     }
 
-    return c.json(response);
+    return {
+      status: 200,
+      payload: response,
+      attemptId,
+      overallScore,
+      overallPass
+    };
+  };
+
+  const createSeededRandom = (seed: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < seed.length; i += 1) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    let state = h >>> 0;
+    return () => {
+      state += 0x6d2b79f5;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  const resolveMinigameTasks = async (selection: {
+    strategy: "manual" | "random" | "filtered_random";
+    task_ids?: string[];
+    tags?: string[];
+    skill_domains?: string[];
+  }) => {
+    if (selection.strategy === "manual") {
+      if (!selection.task_ids?.length) {
+        return [];
+      }
+      return db.select().from(tasks).where(inArray(tasks.id, selection.task_ids));
+    }
+
+    const filters = [eq(tasks.is_published, true)];
+    if (selection.skill_domains?.length) {
+      filters.push(inArray(tasks.skill_domain, selection.skill_domains));
+    }
+    const taskRows = await db.select().from(tasks).where(and(...filters));
+    if (!selection.tags?.length) {
+      return taskRows;
+    }
+    return taskRows.filter((task) => {
+      const tags = (task.tags ?? []) as string[];
+      return selection.tags?.some((tag) => tags.includes(tag));
+    });
+  };
+
+  const generateTdmSchedule = (
+    players: Array<{ id: string; team_id: string | null }>,
+    roundsPerPlayer: number,
+    seed: string
+  ) => {
+    const rng = createSeededRandom(seed);
+    const remaining = new Map(players.map((player) => [player.id, roundsPerPlayer]));
+    const opponentsPlayed = new Map<string, Map<string, number>>();
+    const teamsFaced = new Map<string, Map<string, number>>();
+    for (const player of players) {
+      opponentsPlayed.set(player.id, new Map());
+      teamsFaced.set(player.id, new Map());
+    }
+
+    const matches: Array<{ playerA: string; playerB: string }> = [];
+    const getRemaining = (id: string) => remaining.get(id) ?? 0;
+
+    const pickPlayerA = () => {
+      const candidates = players.filter((player) => getRemaining(player.id) > 0);
+      if (!candidates.length) return null;
+      candidates.sort((a, b) => getRemaining(b.id) - getRemaining(a.id));
+      const topRemaining = getRemaining(candidates[0].id);
+      const topCandidates = candidates.filter((player) => getRemaining(player.id) === topRemaining);
+      return topCandidates[Math.floor(rng() * topCandidates.length)];
+    };
+
+    const pickPlayerB = (playerA: { id: string; team_id: string | null }) => {
+      const candidates = players.filter(
+        (player) => player.id !== playerA.id && player.team_id !== playerA.team_id && getRemaining(player.id) > 0
+      );
+      if (!candidates.length) return null;
+      const opponentsMap = opponentsPlayed.get(playerA.id) ?? new Map();
+      const teamsMapA = teamsFaced.get(playerA.id) ?? new Map();
+      candidates.sort((a, b) => {
+        const aOpp = opponentsMap.get(a.id) ?? 0;
+        const bOpp = opponentsMap.get(b.id) ?? 0;
+        if (aOpp !== bOpp) return aOpp - bOpp;
+        const aTeamCount = teamsMapA.get(a.team_id ?? "") ?? 0;
+        const bTeamCount = teamsMapA.get(b.team_id ?? "") ?? 0;
+        if (aTeamCount !== bTeamCount) return aTeamCount - bTeamCount;
+        const aRemaining = getRemaining(a.id);
+        const bRemaining = getRemaining(b.id);
+        if (aRemaining !== bRemaining) return bRemaining - aRemaining;
+        return rng() - 0.5;
+      });
+      return candidates[0];
+    };
+
+    while (true) {
+      const playerA = pickPlayerA();
+      if (!playerA) break;
+      const playerB = pickPlayerB(playerA);
+      if (!playerB) {
+        remaining.set(playerA.id, 0);
+        continue;
+      }
+      matches.push({ playerA: playerA.id, playerB: playerB.id });
+      remaining.set(playerA.id, getRemaining(playerA.id) - 1);
+      remaining.set(playerB.id, getRemaining(playerB.id) - 1);
+      const opponentsA = opponentsPlayed.get(playerA.id) ?? new Map();
+      const opponentsB = opponentsPlayed.get(playerB.id) ?? new Map();
+      opponentsA.set(playerB.id, (opponentsA.get(playerB.id) ?? 0) + 1);
+      opponentsB.set(playerA.id, (opponentsB.get(playerA.id) ?? 0) + 1);
+      const teamsA = teamsFaced.get(playerA.id) ?? new Map();
+      const teamsB = teamsFaced.get(playerB.id) ?? new Map();
+      if (playerB.team_id) {
+        teamsA.set(playerB.team_id, (teamsA.get(playerB.team_id) ?? 0) + 1);
+      }
+      if (playerA.team_id) {
+        teamsB.set(playerA.team_id, (teamsB.get(playerA.team_id) ?? 0) + 1);
+      }
+    }
+
+    return matches;
+  };
+
+  app.post("/api/v1/minigames/sessions", async (c) => {
+    const user = c.get("user");
+    const schema = z.object({
+      game_type: z.enum(["ffa", "tdm"]),
+      visibility_mode: z.enum(["normal", "hard", "extreme"]),
+      task_selection: z.record(z.unknown()),
+      settings: z.record(z.unknown())
+    });
+    const body = await c.req.json().catch(() => null);
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid session payload." }, 400);
+    }
+    const sessionId = generateUuid();
+    await db.insert(minigameSessions).values({
+      id: sessionId,
+      user_id: user.id,
+      game_type: parsed.data.game_type,
+      visibility_mode: parsed.data.visibility_mode,
+      task_selection: parsed.data.task_selection,
+      settings: parsed.data.settings,
+      created_at: Date.now(),
+      ended_at: null
+    });
+    return c.json({ session_id: sessionId });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/end", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    await db
+      .update(minigameSessions)
+      .set({ ended_at: Date.now() })
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)));
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/teams", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const [session] = await db
+      .select({ id: minigameSessions.id })
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    const schema = z.object({
+      teams: z
+        .array(
+          z.object({
+            name: z.string(),
+            color: z.string()
+          })
+        )
+        .min(1)
+    });
+    const body = await c.req.json().catch(() => null);
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid teams payload." }, 400);
+    }
+    const rows = parsed.data.teams.map((team) => ({
+      id: generateUuid(),
+      session_id: sessionId,
+      name: team.name,
+      color: team.color,
+      created_at: Date.now()
+    }));
+    await db.insert(minigameTeams).values(rows);
+    return c.json({ teams: rows });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/players", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const [session] = await db
+      .select({ id: minigameSessions.id })
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    const schema = z.object({
+      players: z
+        .array(
+          z.object({
+            name: z.string(),
+            avatar: z.string(),
+            team_id: z.string().nullable().optional()
+          })
+        )
+        .min(1)
+    });
+    const body = await c.req.json().catch(() => null);
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid players payload." }, 400);
+    }
+    const rows = parsed.data.players.map((player) => ({
+      id: generateUuid(),
+      session_id: sessionId,
+      name: player.name,
+      avatar: player.avatar,
+      team_id: player.team_id ?? null,
+      created_at: Date.now()
+    }));
+    await db.insert(minigamePlayers).values(rows);
+    return c.json({ players: rows });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/rounds/generate", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const body = await c.req.json().catch(() => ({}));
+    const schema = z.object({
+      count: z.number().int().positive().optional()
+    });
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid generate payload." }, 400);
+    }
+
+    const [session] = await db
+      .select()
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+
+    const selection = session.task_selection as {
+      strategy: "manual" | "random" | "filtered_random";
+      task_ids?: string[];
+      tags?: string[];
+      skill_domains?: string[];
+      shuffle?: boolean;
+      seed?: string;
+    };
+    const tasksForSelection = await resolveMinigameTasks(selection);
+    if (!tasksForSelection.length) {
+      return c.json({ error: "No tasks available for selection." }, 400);
+    }
+    const examples = await db
+      .select()
+      .from(taskExamples)
+      .where(inArray(taskExamples.task_id, tasksForSelection.map((task) => task.id)));
+    const examplesByTask = new Map<string, typeof examples>();
+    for (const example of examples) {
+      const existing = examplesByTask.get(example.task_id) ?? [];
+      existing.push(example);
+      examplesByTask.set(example.task_id, existing);
+    }
+    const seed = selection.seed ?? session.id;
+    const rng = createSeededRandom(seed);
+
+    const players = await db
+      .select()
+      .from(minigamePlayers)
+      .where(eq(minigamePlayers.session_id, sessionId));
+    const teams = await db
+      .select()
+      .from(minigameTeams)
+      .where(eq(minigameTeams.session_id, sessionId));
+    const teamByPlayer = new Map(players.map((player) => [player.id, player.team_id ?? null]));
+
+    const [lastRound] = await db
+      .select({ position: minigameRounds.position })
+      .from(minigameRounds)
+      .where(eq(minigameRounds.session_id, sessionId))
+      .orderBy(desc(minigameRounds.position))
+      .limit(1);
+    let startPosition = lastRound?.position != null ? lastRound.position + 1 : 0;
+
+    const roundsToInsert: Array<typeof minigameRounds.$inferInsert> = [];
+    if (session.game_type === "tdm") {
+      const roundsPerPlayer = Number((session.settings as { rounds_per_player?: number }).rounds_per_player ?? 1);
+      const matches = generateTdmSchedule(
+        players.map((player) => ({ id: player.id, team_id: player.team_id ?? null })),
+        roundsPerPlayer,
+        seed
+      );
+      for (const match of matches) {
+        const task = tasksForSelection[Math.floor(rng() * tasksForSelection.length)];
+        const examplesForTask = examplesByTask.get(task.id) ?? [];
+        if (!examplesForTask.length) continue;
+        const example = examplesForTask[Math.floor(rng() * examplesForTask.length)];
+        roundsToInsert.push({
+          id: generateUuid(),
+          session_id: sessionId,
+          position: startPosition,
+          task_id: task.id,
+          example_id: example.id,
+          player_a_id: match.playerA,
+          player_b_id: match.playerB,
+          team_a_id: teamByPlayer.get(match.playerA),
+          team_b_id: teamByPlayer.get(match.playerB),
+          status: "pending",
+          started_at: null,
+          completed_at: null
+        });
+        startPosition += 1;
+      }
+    } else {
+      const count = parsed.data.count ?? 1;
+      if (!players.length) {
+        return c.json({ error: "Add at least one player before generating rounds." }, 400);
+      }
+      for (let i = 0; i < count; i += 1) {
+        const player = players[i % players.length];
+        const task = tasksForSelection[Math.floor(rng() * tasksForSelection.length)];
+        const examplesForTask = examplesByTask.get(task.id) ?? [];
+        if (!examplesForTask.length) continue;
+        const example = examplesForTask[Math.floor(rng() * examplesForTask.length)];
+        roundsToInsert.push({
+          id: generateUuid(),
+          session_id: sessionId,
+          position: startPosition,
+          task_id: task.id,
+          example_id: example.id,
+          player_a_id: player.id,
+          player_b_id: null,
+          team_a_id: player.team_id ?? null,
+          team_b_id: null,
+          status: "pending",
+          started_at: null,
+          completed_at: null
+        });
+        startPosition += 1;
+      }
+    }
+
+    if (roundsToInsert.length) {
+      await db.insert(minigameRounds).values(roundsToInsert);
+    }
+    return c.json({ round_count: roundsToInsert.length });
+  });
+
+  app.get("/api/v1/minigames/sessions/:id/state", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const [session] = await db
+      .select()
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    const teams = await db
+      .select()
+      .from(minigameTeams)
+      .where(eq(minigameTeams.session_id, sessionId));
+    const players = await db
+      .select()
+      .from(minigamePlayers)
+      .where(eq(minigamePlayers.session_id, sessionId));
+    const rounds = await db
+      .select({
+        id: minigameRounds.id,
+        session_id: minigameRounds.session_id,
+        position: minigameRounds.position,
+        task_id: minigameRounds.task_id,
+        example_id: minigameRounds.example_id,
+        player_a_id: minigameRounds.player_a_id,
+        player_b_id: minigameRounds.player_b_id,
+        team_a_id: minigameRounds.team_a_id,
+        team_b_id: minigameRounds.team_b_id,
+        status: minigameRounds.status,
+        started_at: minigameRounds.started_at,
+        completed_at: minigameRounds.completed_at,
+        patient_text: taskExamples.patient_text
+      })
+      .from(minigameRounds)
+      .leftJoin(taskExamples, eq(minigameRounds.example_id, taskExamples.id))
+      .where(eq(minigameRounds.session_id, sessionId))
+      .orderBy(minigameRounds.position);
+    const results = await db
+      .select({
+        id: minigameRoundResults.id,
+        round_id: minigameRoundResults.round_id,
+        player_id: minigameRoundResults.player_id,
+        attempt_id: minigameRoundResults.attempt_id,
+        overall_score: minigameRoundResults.overall_score,
+        overall_pass: minigameRoundResults.overall_pass,
+        created_at: minigameRoundResults.created_at,
+        transcript: attempts.transcript,
+        evaluation: attempts.evaluation
+      })
+      .from(minigameRoundResults)
+      .leftJoin(attempts, eq(minigameRoundResults.attempt_id, attempts.id))
+      .leftJoin(minigameRounds, eq(minigameRoundResults.round_id, minigameRounds.id))
+      .where(eq(minigameRounds.session_id, sessionId));
+
+    return c.json({
+      session,
+      teams,
+      players,
+      rounds,
+      results
+    });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/rounds/:roundId/start", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const roundId = c.req.param("roundId");
+    const [session] = await db
+      .select({ id: minigameSessions.id })
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    await db
+      .update(minigameRounds)
+      .set({ status: "active", started_at: Date.now() })
+      .where(and(eq(minigameRounds.id, roundId), eq(minigameRounds.session_id, sessionId)));
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/rounds/:roundId/submit", async (c) => {
+    const user = c.get("user");
+    const requestId = c.get("requestId");
+    const sessionId = c.req.param("id");
+    const roundId = c.req.param("roundId");
+    const logEvent = (level: "debug" | "info" | "warn" | "error", event: string, fields = {}) =>
+      log(level, event, { requestId, userId: user?.id ?? null, ...fields });
+    const schema = z.object({
+      player_id: z.string(),
+      audio_base64: z.string(),
+      audio_mime: z.string().optional(),
+      mode: z.enum(["local_prefer", "openai_only", "local_only"]).optional(),
+      practice_mode: z.enum(["standard", "real_time"]).optional(),
+      turn_context: z
+        .object({
+          patient_cache_key: z.string().optional(),
+          patient_statement_id: z.string().optional()
+        })
+        .optional()
+    });
+    const body = await c.req.json().catch(() => null);
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid submit payload." }, 400);
+    }
+    const [session] = await db
+      .select({ id: minigameSessions.id })
+      .from(minigameSessions)
+      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .limit(1);
+    if (!session) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    const [round] = await db
+      .select()
+      .from(minigameRounds)
+      .where(and(eq(minigameRounds.id, roundId), eq(minigameRounds.session_id, sessionId)))
+      .limit(1);
+    if (!round) {
+      return c.json({ error: "Round not found." }, 404);
+    }
+
+    const runResult = await runPracticeAttempt({
+      body: {
+        task_id: round.task_id,
+        example_id: round.example_id,
+        audio: parsed.data.audio_base64,
+        audio_mime: parsed.data.audio_mime,
+        mode: parsed.data.mode,
+        practice_mode: parsed.data.practice_mode,
+        turn_context: parsed.data.turn_context
+      },
+      debugEnabled: env.environment === "development",
+      logEvent,
+      requestId,
+      user
+    });
+
+    if (runResult.status !== 200 || !runResult.attemptId) {
+      return c.json(runResult.payload, runResult.status);
+    }
+
+    await db.insert(minigameRoundResults).values({
+      id: generateUuid(),
+      round_id: roundId,
+      player_id: parsed.data.player_id,
+      attempt_id: runResult.attemptId,
+      overall_score: runResult.overallScore ?? 0,
+      overall_pass: runResult.overallPass ?? false,
+      created_at: Date.now()
+    });
+    await db
+      .update(minigameRounds)
+      .set({ status: "completed", completed_at: Date.now() })
+      .where(eq(minigameRounds.id, roundId));
+
+    return c.json(runResult.payload);
+  });
+
+  app.post("/api/v1/practice/run", async (c) => {
+    const requestId = c.get("requestId");
+    const user = c.get("user");
+    const logEvent = (level: "debug" | "info" | "warn" | "error", event: string, fields = {}) =>
+      log(level, event, { requestId, userId: user?.id ?? null, ...fields });
+    const debugEnabled = env.environment === "development" || c.req.query("debug") === "true";
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      logEvent("error", "input.parse.error", { error: safeError(error) });
+      return c.json(
+        { requestId, errors: [{ stage: "input", message: "Invalid JSON body." }] },
+        400
+      );
+    }
+
+    const result = await runPracticeAttempt({
+      body,
+      debugEnabled,
+      logEvent,
+      requestId,
+      user
+    });
+
+    return c.json(result.payload, result.status);
   });
 
   return app;

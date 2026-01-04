@@ -4,6 +4,7 @@ import { authReducer } from "./authSlice";
 import { taskReducer } from "./taskSlice";
 import { practiceReducer } from "./practiceSlice";
 import { settingsReducer } from "./settingsSlice";
+import { minigamesReducer } from "./minigamesSlice";
 import { requestIdMiddleware, errorNormalizationMiddleware } from "./middleware";
 
 export const store = configureStore({
@@ -12,6 +13,7 @@ export const store = configureStore({
     auth: authReducer,
     task: taskReducer,
     practice: practiceReducer,
+    minigames: minigamesReducer,
     settings: settingsReducer
   },
   middleware: (getDefaultMiddleware) =>

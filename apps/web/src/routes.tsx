@@ -5,6 +5,7 @@ import { UserRouteGuard } from "./components/UserRouteGuard";
 import { LibraryPage } from "./pages/LibraryPage";
 import { ExerciseDetailPage } from "./pages/ExerciseDetailPage";
 import { PracticePage } from "./pages/PracticePage";
+import { MinigamesPage } from "./pages/MinigamesPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { AdminPortalPage } from "./pages/AdminPortalPage";
 import { AdminLibraryPage } from "./pages/AdminLibraryPage";
@@ -33,6 +34,14 @@ export const router = createBrowserRouter([
         element: (
           <UserRouteGuard>
             <PracticePage />
+          </UserRouteGuard>
+        )
+      },
+      {
+        path: "minigames",
+        element: (
+          <UserRouteGuard>
+            <MinigamesPage />
           </UserRouteGuard>
         )
       },
