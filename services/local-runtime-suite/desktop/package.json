@@ -7,8 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint src --ext ts,tsx",
+    "sidecar:build": "node scripts/build-sidecar.mjs",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev"
+    "tauri:dev": "tauri dev",
+    "tauri:build": "npm run sidecar:build && tauri build --config src-tauri/tauri.conf.json --config src-tauri/tauri.sidecar.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
