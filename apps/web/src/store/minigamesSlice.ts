@@ -79,6 +79,7 @@ const minigamesSlice = createSlice({
         overallPass: boolean;
         transcript?: string;
         evaluation?: EvaluationResult;
+        clientPenalty?: number;
       }>
     ) {
       state.results.push({
@@ -90,12 +91,26 @@ const minigamesSlice = createSlice({
         overall_pass: action.payload.overallPass,
         created_at: Date.now(),
         transcript: action.payload.transcript,
-        evaluation: action.payload.evaluation
+        evaluation: action.payload.evaluation,
+        client_penalty: action.payload.clientPenalty
       });
       const round = state.rounds.find((entry) => entry.id === action.payload.roundId);
       if (round) {
-        round.status = "completed";
-        round.completed_at = Date.now();
+        if (!round.player_b_id) {
+          round.status = "completed";
+          round.completed_at = Date.now();
+        } else {
+          const hasPlayerA = state.results.some(
+            (result) => result.round_id === round.id && result.player_id === round.player_a_id
+          );
+          const hasPlayerB = state.results.some(
+            (result) => result.round_id === round.id && result.player_id === round.player_b_id
+          );
+          if (hasPlayerA && hasPlayerB) {
+            round.status = "completed";
+            round.completed_at = Date.now();
+          }
+        }
       }
       state.currentRoundId = state.rounds.find((entry) => entry.status !== "completed")?.id;
     },

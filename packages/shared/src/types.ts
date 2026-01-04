@@ -121,6 +121,12 @@ export type PracticeRunInput = {
   turn_context?: {
     patient_cache_key?: string;
     patient_statement_id?: string;
+    timing?: {
+      response_delay_ms?: number | null;
+      response_duration_ms?: number | null;
+      response_timer_seconds?: number;
+      max_response_duration_seconds?: number;
+    };
   };
 };
 
@@ -147,6 +153,8 @@ export type PracticeRunResponse = {
   next_recommended_difficulty?: number;
   transcript?: PracticeRunTranscript;
   scoring?: PracticeRunScoring;
+  timing_penalty?: number;
+  adjusted_score?: number;
   errors?: PracticeRunError[];
   debug?: {
     timings: Record<string, number>;

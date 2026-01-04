@@ -27,7 +27,7 @@ export const useMinigameRoundRunner = ({
   const [startRound] = useStartMinigameRoundMutation();
   const [submitRound] = useSubmitMinigameRoundMutation();
   const { recordingState, startRecording, stopRecording } = useAudioRecorder();
-  const { isPlaying, prefetchAndPlay, error: audioError } = usePatientAudio(audioElement);
+  const { status, prefetch, play, error: audioError } = usePatientAudio(audioElement);
   const [status, setStatus] = useState<"idle" | "playing" | "ready" | "submitting" | "complete">(
     "idle"
   );
@@ -38,9 +38,10 @@ export const useMinigameRoundRunner = ({
     setSubmitError(null);
     await startRound({ sessionId, roundId: round.id });
     setStatus("playing");
-    await prefetchAndPlay(round.task_id, round.example_id);
+    await prefetch(round.task_id, round.example_id);
+    await play();
     setStatus("ready");
-  }, [playerId, prefetchAndPlay, round, sessionId, startRound]);
+  }, [playerId, play, prefetch, round, sessionId, startRound]);
 
   const stopAndSubmit = useCallback(async () => {
     if (!round || !playerId) return;
@@ -73,7 +74,7 @@ export const useMinigameRoundRunner = ({
   return {
     status,
     recordingState,
-    isPlaying,
+    isPlaying: status === "playing",
     audioError,
     submitError,
     startTurn,
