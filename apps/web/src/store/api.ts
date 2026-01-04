@@ -21,6 +21,8 @@ export type AdminWhoami = {
 export type UserProfile = {
   id: string;
   email: string | null;
+  display_name: string;
+  bio: string | null;
   created_at: string | null;
   hasOpenAiKey: boolean;
 };
@@ -38,6 +40,22 @@ export type UserSettingsInput = {
   localSttUrl: string | null;
   localLlmUrl: string | null;
   storeAudio: boolean;
+};
+
+export type UserProfileInput = {
+  displayName: string;
+  bio?: string | null;
+};
+
+export type PlayerProfile = {
+  id: string;
+  display_name: string;
+  bio: string | null;
+  created_at: string;
+};
+
+export type PlayerProfilesResponse = {
+  profiles: PlayerProfile[];
 };
 
 export type PracticeSessionItem = {
@@ -166,6 +184,12 @@ export const api = createApi({
     }),
     getMe: builder.query<UserProfile, void>({
       query: () => "/me"
+    }),
+    updateMeProfile: builder.mutation<{ ok: boolean; display_name: string; bio: string | null }, UserProfileInput>({
+      query: (body) => ({ url: "/me/profile", method: "PUT", body })
+    }),
+    getProfiles: builder.query<PlayerProfilesResponse, void>({
+      query: () => "/profiles"
     }),
     getMeSettings: builder.query<UserSettings, void>({
       query: () => "/me/settings"
@@ -441,7 +465,9 @@ export const {
   useGetAdminWhoamiQuery,
   useGetMeQuery,
   useGetMeSettingsQuery,
+  useUpdateMeProfileMutation,
   useUpdateMeSettingsMutation,
+  useGetProfilesQuery,
   useUpdateOpenAiKeyMutation,
   useDeleteOpenAiKeyMutation,
   useValidateOpenAiKeyMutation,

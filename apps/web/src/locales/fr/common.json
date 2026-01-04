@@ -9,6 +9,7 @@
       "settings": "Paramètres",
       "admin": "Admin",
       "minigames": "Mini-jeux",
+      "players": "Joueurs",
       "help": "Aide",
       "login": "Se connecter",
       "logout": "Se déconnecter",
@@ -139,7 +140,28 @@
     "openAiKeyNotConnected": "Non connectée",
     "actionsTitle": "Actions du compte",
     "actionsSubtitle": "Déconnectez-vous sur les appareils partagés ou lorsque vous avez terminé la pratique.",
-    "logout": "Se déconnecter"
+    "logout": "Se déconnecter",
+    "profileTitle": "Détails du profil",
+    "profileSubtitle": "Choisissez le nom et la courte bio visibles par les autres joueurs.",
+    "displayNameLabel": "Nom affiché",
+    "displayNamePlaceholder": "Saisissez votre nom affiché",
+    "bioLabel": "Bio courte",
+    "bioPlaceholder": "Partagez une courte présentation ou votre focus (160 caractères max)",
+    "profileSave": "Enregistrer le profil",
+    "profileSaving": "Enregistrement...",
+    "profileSaved": "Profil enregistré",
+    "profileError": "Impossible d'enregistrer votre profil. Réessayez."
+  },
+  "players": {
+    "tagline": "Communauté",
+    "title": "Profils des joueurs",
+    "subtitle": "Découvrez d'autres praticiens, leurs bios et leurs objectifs de pratique.",
+    "loading": "Chargement des profils...",
+    "error": "Impossible de charger les profils. Réessayez.",
+    "empty": "Aucun profil pour l'instant",
+    "emptyHint": "Revenez quand plus de joueurs auront rejoint.",
+    "cardLabel": "Profil",
+    "defaultBio": "Ce joueur n'a pas encore ajouté de bio."
   },
   "settings": {
     "tagline": "Préférences",

@@ -15,7 +15,12 @@ const ensureUserRecords = async (db: ApiDatabase, identity: UserIdentity) => {
   if (identity.email) {
     await db
       .insert(users)
-      .values({ id: identity.id, email: identity.email, created_at: now })
+      .values({
+        id: identity.id,
+        email: identity.email,
+        display_name: identity.email.split("@")[0] || "Player",
+        created_at: now
+      })
       .onConflictDoUpdate({
         target: users.id,
         set: { email: identity.email }
@@ -23,7 +28,12 @@ const ensureUserRecords = async (db: ApiDatabase, identity: UserIdentity) => {
   } else {
     await db
       .insert(users)
-      .values({ id: identity.id, email: `user-${identity.id}@example.invalid`, created_at: now })
+      .values({
+        id: identity.id,
+        email: `user-${identity.id}@example.invalid`,
+        display_name: "Player",
+        created_at: now
+      })
       .onConflictDoNothing();
   }
 

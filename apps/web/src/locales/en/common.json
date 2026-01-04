@@ -9,6 +9,7 @@
       "settings": "Settings",
       "admin": "Admin",
       "minigames": "Minigames",
+      "players": "Players",
       "help": "Help",
       "login": "Log in",
       "logout": "Log out",
@@ -139,7 +140,28 @@
     "openAiKeyNotConnected": "Not connected",
     "actionsTitle": "Account actions",
     "actionsSubtitle": "Sign out on shared devices or when you're done practicing.",
-    "logout": "Log out"
+    "logout": "Log out",
+    "profileTitle": "Profile details",
+    "profileSubtitle": "Choose the name and short bio other players see.",
+    "displayNameLabel": "Display name",
+    "displayNamePlaceholder": "Enter your display name",
+    "bioLabel": "Short bio",
+    "bioPlaceholder": "Share a quick intro or focus area (max 160 chars)",
+    "profileSave": "Save profile",
+    "profileSaving": "Saving...",
+    "profileSaved": "Profile saved",
+    "profileError": "We couldn't save your profile. Try again."
+  },
+  "players": {
+    "tagline": "Community",
+    "title": "Player profiles",
+    "subtitle": "Meet other practitioners, see their bios, and connect through shared practice goals.",
+    "loading": "Loading player profiles...",
+    "error": "We couldn't load player profiles. Try again.",
+    "empty": "No profiles yet",
+    "emptyHint": "Check back once more players have joined.",
+    "cardLabel": "Profile",
+    "defaultBio": "This player hasn't added a bio yet."
   },
   "settings": {
     "tagline": "Preferences",

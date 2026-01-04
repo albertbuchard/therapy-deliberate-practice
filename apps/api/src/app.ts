@@ -493,6 +493,28 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     });
   });
 
+  app.get("/api/v1/profiles", userAuth, async (c) => {
+    const log = logger.child({ requestId: c.get("requestId"), endpoint: "profiles" });
+    const rows = await db
+      .select({
+        id: users.id,
+        display_name: users.display_name,
+        bio: users.bio,
+        created_at: users.created_at
+      })
+      .from(users)
+      .orderBy(desc(users.created_at));
+    log.info("Profiles fetched", { count: rows.length });
+    return c.json({
+      profiles: rows.map((row) => ({
+        id: row.id,
+        display_name: row.display_name,
+        bio: row.bio ?? null,
+        created_at: new Date(row.created_at).toISOString()
+      }))
+    });
+  });
+
   app.get("/api/v1/tasks/:id", async (c) => {
     const id = c.req.param("id");
     const includeInteractions = c.req.query("include_interactions") === "1";
@@ -1904,9 +1926,52 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     return c.json({
       id: user.id,
       email: user.email,
+      display_name: record?.display_name ?? "Player",
+      bio: record?.bio ?? null,
       created_at: record?.created_at ? new Date(record.created_at).toISOString() : null,
       hasOpenAiKey: Boolean(settings?.openai_key_ciphertext && settings?.openai_key_iv)
     });
+  });
+
+  app.put("/api/v1/me/profile", async (c) => {
+    const user = c.get("user");
+    const log = logger.child({ requestId: c.get("requestId"), endpoint: "me_profile_update" });
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      log.warn("Invalid JSON body for profile", { error: safeError(error) });
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const schema = z.object({
+      displayName: z
+        .string()
+        .trim()
+        .min(2, "Display name is too short.")
+        .max(40, "Display name is too long."),
+      bio: z
+        .string()
+        .trim()
+        .max(160, "Bio is too long.")
+        .optional()
+        .nullable()
+    });
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      log.warn("Profile payload failed validation", { userId: user.id });
+      return c.json({ error: "Invalid profile payload", details: parsed.error.flatten() }, 400);
+    }
+    const data = parsed.data;
+    const normalizedBio = data.bio?.trim() || null;
+    await db
+      .update(users)
+      .set({
+        display_name: data.displayName,
+        bio: normalizedBio
+      })
+      .where(eq(users.id, user.id));
+    log.info("Profile updated", { userId: user.id });
+    return c.json({ ok: true, display_name: data.displayName, bio: normalizedBio });
   });
 
   app.get("/api/v1/me/settings", async (c) => {
