@@ -64,10 +64,24 @@ button {
   border: 1px solid rgba(94, 234, 212, 0.4);
 }
 
+.badge-success {
+  background: rgba(34, 197, 94, 0.2);
+  color: #bbf7d0;
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.inline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -85,6 +99,11 @@ button {
   border-color: transparent;
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -98,6 +117,11 @@ button {
   letter-spacing: 0.2em;
 }
 
+.text-sm {
+  font-size: 14px;
+  color: #e2e8f0;
+}
+
 .select {
   width: 100%;
   margin-top: 6px;
@@ -106,6 +130,101 @@ button {
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(15, 23, 42, 0.9);
   color: inherit;
+}
+
+.select:disabled {
+  opacity: 0.6;
+}
+
+.wizard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.stepper {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.step {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.step.active {
+  border-color: rgba(94, 234, 212, 0.5);
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.2);
+}
+
+.step.complete .step-index {
+  background: rgba(34, 197, 94, 0.25);
+  color: #bbf7d0;
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.step-index {
+  min-width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+
+.step-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.step-description {
+  font-size: 14px;
+  color: #94a3b8;
+  margin-top: 6px;
+}
+
+.step-card {
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step-card.is-disabled {
+  opacity: 0.55;
+}
+
+.step-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.success-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(34, 197, 94, 0.1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.error-text {
+  color: #fca5a5;
+  font-size: 13px;
 }
 
 .log-box {
