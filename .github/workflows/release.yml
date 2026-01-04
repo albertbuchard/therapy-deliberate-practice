@@ -25,6 +25,9 @@ jobs:
         with:
           # If manually dispatched with a tag, checkout that tag
           ref: ${{ inputs.tag || github.ref }}
+      - name: Verify Tauri build script exists
+        run: |
+          test -f services/local-runtime-suite/desktop/src-tauri/build.rs || (echo "Missing src-tauri/build.rs for Tauri build script." && exit 1)
       - name: Install Linux system dependencies
         if: startsWith(matrix.os, 'ubuntu')
         run: |
