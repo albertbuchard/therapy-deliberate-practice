@@ -54,8 +54,9 @@ export const useTdmMatchController = ({
   const { recordingState, startRecording, stopRecording } = useAudioRecorder();
   const [patientEndedAt, setPatientEndedAt] = useState<number | null>(null);
   const playTokenRef = useRef(0);
+  const { getEntry, ensureReady, play, stop, bank } = patientAudio;
   const entry = round
-    ? patientAudio.getEntry(round.task_id, round.example_id)
+    ? getEntry(round.task_id, round.example_id)
     : undefined;
   const audioStatus = entry?.status ?? "idle";
   const audioError = entry?.error ?? null;
@@ -66,6 +67,14 @@ export const useTdmMatchController = ({
     maxResponseSeconds,
     patientEndedAt
   });
+  const {
+    responseCountdown,
+    maxDurationRemaining,
+    recordResponseStart,
+    recordResponseStop,
+    reset: resetTiming,
+    getTimingSnapshot
+  } = timing;
   const [state, setState] = useState<MatchState>("idle");
   const [introOpen, setIntroOpen] = useState(false);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
@@ -84,22 +93,22 @@ export const useTdmMatchController = ({
       setState("idle");
       setIntroOpen(false);
       setSubmitError(null);
-      timing.reset();
+      resetTiming();
       autoStopRef.current = false;
       setPatientEndedAt(null);
       playTokenRef.current += 1;
       if (audioElement) {
-        patientAudio.stop(audioElement);
+        stop(audioElement);
       }
     }
-  }, [audioElement, patientAudio, round?.id, round?.player_a_id, timing]);
+  }, [audioElement, resetTiming, round?.id, round?.player_a_id, stop]);
 
   useEffect(() => {
     if (!enabled || !round) return;
     const controller = new AbortController();
-    void patientAudio.ensureReady(round.task_id, round.example_id, { signal: controller.signal });
+    void ensureReady(round.task_id, round.example_id, { signal: controller.signal });
     return () => controller.abort();
-  }, [enabled, patientAudio, round]);
+  }, [enabled, ensureReady, round?.example_id, round?.task_id]);
 
   useEffect(() => {
     if (audioStatus === "playing") {
@@ -112,7 +121,7 @@ export const useTdmMatchController = ({
       if (!patientEndedAt) {
         setPatientEndedAt(Date.now());
       }
-      if (responseTimerEnabled && timing.responseCountdown != null && timing.responseCountdown > 0) {
+      if (responseTimerEnabled && responseCountdown != null && responseCountdown > 0) {
         setState("awaiting_response_window");
       } else {
         setState("patient_ready");
@@ -123,26 +132,26 @@ export const useTdmMatchController = ({
     audioStatus,
     patientEndedAt,
     responseTimerEnabled,
-    timing.responseCountdown
+    responseCountdown
   ]);
 
   useEffect(() => {
-    if (state === "awaiting_response_window" && timing.responseCountdown === 0) {
+    if (state === "awaiting_response_window" && responseCountdown === 0) {
       setState("patient_ready");
     }
-  }, [state, timing.responseCountdown]);
+  }, [responseCountdown, state]);
 
   const preparePatientAudio = useCallback(async () => {
     if (!enabled || !round) return;
-    await patientAudio.ensureReady(round.task_id, round.example_id);
+    await ensureReady(round.task_id, round.example_id);
     setState("patient_ready");
-  }, [enabled, patientAudio, round]);
+  }, [enabled, ensureReady, round]);
 
   const startRoundOrMatch = useCallback(async () => {
     if (!enabled || !round || !audioElement) return;
     if (startedRoundRef.current === round.id) {
       if (state === "between_players") {
-        timing.reset();
+        resetTiming();
         setState("patient_ready");
       }
       return;
@@ -159,7 +168,7 @@ export const useTdmMatchController = ({
     } else {
       setState("patient_ready");
       const token = (playTokenRef.current += 1);
-      await patientAudio.play(round.task_id, round.example_id, audioElement, {
+      await play(round.task_id, round.example_id, audioElement, {
         shouldPlay: () => playTokenRef.current === token,
         onEnded: () => setPatientEndedAt(Date.now())
       });
@@ -167,13 +176,13 @@ export const useTdmMatchController = ({
   }, [
     audioElement,
     enabled,
-    patientAudio,
     preparePatientAudio,
     round,
     sessionId,
     startRound,
     state,
-    timing
+    play,
+    resetTiming
   ]);
 
   useEffect(() => {
@@ -188,11 +197,11 @@ export const useTdmMatchController = ({
     setIntroOpen(false);
     setState("patient_ready");
     const token = (playTokenRef.current += 1);
-    await patientAudio.play(round.task_id, round.example_id, audioElement, {
+    await play(round.task_id, round.example_id, audioElement, {
       shouldPlay: () => playTokenRef.current === token,
       onEnded: () => setPatientEndedAt(Date.now())
     });
-  }, [audioElement, enabled, patientAudio, round]);
+  }, [audioElement, enabled, play, round]);
 
   const playPatient = useCallback(async () => {
     if (!enabled || !round || !audioElement) return;
@@ -202,21 +211,21 @@ export const useTdmMatchController = ({
     }
     setState("patient_ready");
     const token = (playTokenRef.current += 1);
-    await patientAudio.play(round.task_id, round.example_id, audioElement, {
+    await play(round.task_id, round.example_id, audioElement, {
       shouldPlay: () => playTokenRef.current === token,
       onEnded: () => setPatientEndedAt(Date.now())
     });
-  }, [audioElement, enabled, patientAudio, round, startRoundOrMatch]);
+  }, [audioElement, enabled, play, round, startRoundOrMatch]);
 
   const stopPatient = useCallback(() => {
     if (!enabled) return;
     playTokenRef.current += 1;
-    patientAudio.stop(audioElement);
+    stop(audioElement);
     setPatientEndedAt(Date.now());
     if (round) {
-      patientAudio.bank.updateEntry(round.task_id, round.example_id, { status: "ready" });
+      bank.updateEntry(round.task_id, round.example_id, { status: "ready" });
     }
-  }, [audioElement, enabled, patientAudio, round]);
+  }, [audioElement, bank, enabled, round, stop]);
 
   const startRecordingSafe = useCallback(async () => {
     if (!enabled || !round || !activePlayerId) return;
@@ -224,19 +233,19 @@ export const useTdmMatchController = ({
       await startRoundOrMatch();
     }
     stopPatient();
-    timing.recordResponseStart();
+    recordResponseStart();
     autoStopRef.current = false;
     await startRecording();
     setState("recording");
-  }, [activePlayerId, enabled, round, startRecording, stopPatient, timing]);
+  }, [activePlayerId, enabled, recordResponseStart, round, startRecording, stopPatient]);
 
   const stopAndSubmit = useCallback(async () => {
     if (!enabled || !round || !activePlayerId) return;
     const recorded = await stopRecording();
     if (!recorded) return;
     setState("submitting");
-    timing.recordResponseStop();
-    const timingSnapshot = timing.getTimingSnapshot();
+    recordResponseStop();
+    const timingSnapshot = getTimingSnapshot();
     try {
       const response = await submitRound({
         sessionId,
@@ -270,12 +279,12 @@ export const useTdmMatchController = ({
         timingPenalty,
         playerId: activePlayerId
       });
-      timing.reset();
+      resetTiming();
       if (round.player_b_id && activePlayerId === round.player_a_id) {
         setActivePlayerId(round.player_b_id);
         setState("between_players");
         playTokenRef.current += 1;
-        patientAudio.stop(audioElement);
+        stop(audioElement);
       } else {
         setState("complete");
       }
@@ -296,17 +305,19 @@ export const useTdmMatchController = ({
     sessionId,
     stopRecording,
     submitRound,
-    timing,
-    patientAudio
+    getTimingSnapshot,
+    recordResponseStop,
+    resetTiming,
+    stop
   ]);
 
   useEffect(() => {
-    if (state !== "recording" || timing.maxDurationRemaining == null) return;
-    if (timing.maxDurationRemaining <= 0 && !autoStopRef.current) {
+    if (state !== "recording" || maxDurationRemaining == null) return;
+    if (maxDurationRemaining <= 0 && !autoStopRef.current) {
       autoStopRef.current = true;
       void stopAndSubmit();
     }
-  }, [state, stopAndSubmit, timing.maxDurationRemaining]);
+  }, [maxDurationRemaining, state, stopAndSubmit]);
 
   const micMode = useMemo(() => {
     if (!round || !activePlayerId) return "disabled";
@@ -316,14 +327,14 @@ export const useTdmMatchController = ({
   }, [activePlayerId, round, state]);
 
   const responseCountdownLabel = useMemo(() => {
-    if (state !== "awaiting_response_window" || timing.responseCountdown == null) return undefined;
-    return `${timing.responseCountdown.toFixed(1)}s`;
-  }, [state, timing.responseCountdown]);
+    if (state !== "awaiting_response_window" || responseCountdown == null) return undefined;
+    return `${responseCountdown.toFixed(1)}s`;
+  }, [responseCountdown, state]);
 
   const maxDurationProgress = useMemo(() => {
-    if (!maxResponseEnabled || !maxResponseSeconds || timing.maxDurationRemaining == null) return 0;
-    return timing.maxDurationRemaining / maxResponseSeconds;
-  }, [maxResponseEnabled, maxResponseSeconds, timing.maxDurationRemaining]);
+    if (!maxResponseEnabled || !maxResponseSeconds || maxDurationRemaining == null) return 0;
+    return maxDurationRemaining / maxResponseSeconds;
+  }, [maxDurationRemaining, maxResponseEnabled, maxResponseSeconds]);
 
   return {
     state,
@@ -335,7 +346,7 @@ export const useTdmMatchController = ({
     audioError,
     submitError,
     responseCountdownLabel,
-    maxDurationRemaining: timing.maxDurationRemaining,
+    maxDurationRemaining,
     maxDurationProgress,
     patientEndedAt,
     startRoundOrMatch,
