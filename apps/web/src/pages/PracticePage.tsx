@@ -72,6 +72,7 @@ export const PracticePage = () => {
     ensureReady: ensurePatientAudioReady,
     warmup: warmupPatientAudio,
     play: playPatientAudio,
+    stop: stopPatientAudio,
     getEntry: getPatientAudioEntry,
     progress: patientAudioProgress
   } = usePatientAudioBank({ loggerScope: "practice" });
@@ -413,7 +414,7 @@ export const PracticePage = () => {
     playAbortRef.current?.abort();
     playAbortRef.current = null;
     if (patientAudioRef.current) {
-      patientAudioBank.stop(patientAudioRef.current);
+      stopPatientAudio(patientAudioRef.current);
     }
   }, [currentExampleId, patientAudioBank, practiceMode]);
 
