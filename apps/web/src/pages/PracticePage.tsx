@@ -791,13 +791,15 @@ export const PracticePage = () => {
                         {scoreMap.get(criterion.id)?.score ?? "--"}/4
                       </button>
                     )}
-                    <div className="flex items-center gap-3">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-full border border-teal-300/40 bg-teal-400/10 text-xs font-semibold text-teal-200 shadow-[0_0_12px_rgba(45,212,191,0.35)]">
-                        {index + 1}
-                      </span>
-                      <p className="text-sm font-semibold text-white">{criterion.label}</p>
+                    <div className={practice.evaluation ? "pr-16" : ""}>
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full border border-teal-300/40 bg-teal-400/10 text-xs font-semibold text-teal-200 shadow-[0_0_12px_rgba(45,212,191,0.35)]">
+                          {index + 1}
+                        </span>
+                        <p className="text-sm font-semibold text-white">{criterion.label}</p>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-300">{criterion.description}</p>
                     </div>
-                    <p className="mt-2 text-xs text-slate-300">{criterion.description}</p>
                   </div>
                 ))}
                 {!task?.criteria?.length && (
@@ -1106,7 +1108,7 @@ export const PracticePage = () => {
                 {/*  onDone={() => setPatientPlay(false)}*/}
                 {/*/>*/}
                 {showWarmupRing && (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-slate-950/70 backdrop-blur-sm transition-opacity">
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm transition-opacity">
                     <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 shadow-[0_0_30px_rgba(45,212,191,0.35)]">
                       <svg
                         className="h-12 w-12 -rotate-90"
