@@ -35,10 +35,7 @@
       "icons/icon.ico",
       "icons/icon.icns",
       "icons/icon.png"
-    ],
-    "resources": {
-      "../../python/": "resources/local_runtime/"
-    },
+    ], 
     "macOS": {
       "signingIdentity": "Apple Distribution: YOUR TEAM (TEAMID)"
     }

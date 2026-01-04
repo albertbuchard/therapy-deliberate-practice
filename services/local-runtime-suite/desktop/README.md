@@ -12,8 +12,6 @@ npm run dev
 For desktop development with the embedded gateway sidecar:
 
 ```bash
-pip install pyinstaller
-npm run sidecar:build
 npm run tauri:dev
 ```
 
