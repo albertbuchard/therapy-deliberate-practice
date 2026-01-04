@@ -32,9 +32,6 @@
       "icons/icon.icns",
       "icons/icon.png"
     ],
-    "resources": {
-      "resources/local_runtime/": "../../python/"
-    },
     "macOS": {
       "signingIdentity": "Apple Distribution: YOUR TEAM (TEAMID)"
     }

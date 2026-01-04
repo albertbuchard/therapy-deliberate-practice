@@ -546,10 +546,15 @@ fn build_launch_config(app: &tauri::AppHandle) -> Result<GatewayLaunchConfig, Ga
     let sidecar_available =
         resolve_sidecar_path(app).is_some() && resolve_sidecar_command(app).is_ok();
     let mode = if cfg!(debug_assertions) {
-        if prefer_sidecar || (!prefer_python && sidecar_available) {
+        if prefer_python {
+            GatewayLaunchMode::Python
+        } else if prefer_sidecar || sidecar_available {
             GatewayLaunchMode::Sidecar
         } else {
-            GatewayLaunchMode::Python
+            return Err(GatewayError::Config(
+                "Sidecar missing. Run `npm run sidecar:build` (or `npm run tauri:dev`) or set LOCAL_RUNTIME_LAUNCH=python."
+                    .into(),
+            ));
         }
     } else {
         GatewayLaunchMode::Sidecar
@@ -557,7 +562,7 @@ fn build_launch_config(app: &tauri::AppHandle) -> Result<GatewayLaunchConfig, Ga
 
     if matches!(mode, GatewayLaunchMode::Sidecar) && !sidecar_available {
         return Err(GatewayError::Config(
-            "Gateway sidecar is missing; run the sidecar build before packaging.".into(),
+            "Gateway sidecar is missing; run `npm run sidecar:build` before packaging.".into(),
         ));
     }
 

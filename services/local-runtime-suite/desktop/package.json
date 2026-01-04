@@ -9,7 +9,7 @@
     "lint": "eslint src --ext ts,tsx",
     "sidecar:build": "node scripts/build-sidecar.mjs",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "npm run sidecar:build && tauri dev",
     "tauri:build": "npm run sidecar:build && tauri build --config src-tauri/tauri.conf.json --config src-tauri/tauri.sidecar.conf.json"
   },
   "dependencies": {
