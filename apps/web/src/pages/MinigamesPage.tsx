@@ -7,7 +7,9 @@ import { TranscriptOverlay } from "../components/minigames/TranscriptOverlay";
 import { BigMicButton } from "../components/minigames/BigMicButton";
 import { LeaderboardPanel } from "../components/minigames/LeaderboardPanel";
 import { RoundHUD } from "../components/minigames/RoundHUD";
+import { RoundTaskCard } from "../components/minigames/RoundTaskCard";
 import { EvaluationDrawer } from "../components/minigames/EvaluationDrawer";
+import { EvaluationModal } from "../components/minigames/EvaluationModal";
 import { PatientAudioControls } from "../components/minigames/PatientAudioControls";
 import { NewPlayerDialog } from "../components/minigames/NewPlayerDialog";
 import { VersusIntroOverlay } from "../components/minigames/VersusIntroOverlay";
@@ -21,6 +23,7 @@ import {
   useCreateMinigameSessionMutation,
   useEndMinigameSessionMutation,
   useGenerateMinigameRoundsMutation,
+  useGetTaskQuery,
   useLazyGetMinigameStateQuery,
   useRedrawMinigameRoundMutation
 } from "../store/api";
@@ -60,6 +63,8 @@ export const MinigamesPage = () => {
   const [roundResultPenalty, setRoundResultPenalty] = useState<number | null>(null);
   const [lastTranscript, setLastTranscript] = useState<string | undefined>(undefined);
   const [newPlayerOpen, setNewPlayerOpen] = useState(false);
+  const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
+  const [evaluationModalData, setEvaluationModalData] = useState<EvaluationResult | null>(null);
   const handledPreselectRef = useRef(false);
 
   const [createSession] = useCreateMinigameSessionMutation();
@@ -87,6 +92,15 @@ export const MinigamesPage = () => {
       dispatch(setAppShellHidden(false));
     };
   }, [dispatch]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const previousFontSize = root.style.fontSize;
+    root.style.fontSize = "80%";
+    return () => {
+      root.style.fontSize = previousFontSize;
+    };
+  }, []);
 
   useEffect(() => {
     if (minigameState.data) {
@@ -131,6 +145,15 @@ export const MinigamesPage = () => {
       minigames.rounds.find((round) => round.id === minigames.currentRoundId) ??
       minigames.rounds.find((round) => round.status !== "completed"),
     [minigames.currentRoundId, minigames.rounds]
+  );
+  const currentTaskId = currentRound?.task_id;
+  const { data: currentTask } = useGetTaskQuery(
+    { id: currentTaskId ?? "" },
+    { skip: !currentTaskId }
+  );
+  const { data: evaluationTask } = useGetTaskQuery(
+    { id: evaluationModalData?.task_id ?? "" },
+    { skip: !evaluationModalData?.task_id }
   );
 
   const warmupRounds = useMemo(() => {
@@ -237,6 +260,10 @@ export const MinigamesPage = () => {
           })
         );
       }
+      if (payload.evaluation) {
+        setEvaluationModalData(payload.evaluation as EvaluationResult);
+        setEvaluationModalOpen(true);
+      }
     }
   });
 
@@ -273,6 +300,10 @@ export const MinigamesPage = () => {
             clientPenalty: payload.timingPenalty
           })
         );
+      }
+      if (payload.evaluation) {
+        setEvaluationModalData(payload.evaluation as EvaluationResult);
+        setEvaluationModalOpen(true);
       }
     }
   });
@@ -434,7 +465,7 @@ export const MinigamesPage = () => {
         onToggle={() => dispatch(toggleTranscriptHidden())}
       />
 
-      <div className="pointer-events-none fixed inset-0 z-10">
+      <div className="pointer-events-none fixed inset-0 z-30">
         <div className="pointer-events-auto fixed left-6 top-6 flex flex-col gap-3">
           <div className="rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 shadow-[0_0_25px_rgba(15,23,42,0.5)] backdrop-blur">
             <p className="text-xs uppercase tracking-[0.3em] text-teal-200/70">Minigames</p>
@@ -517,6 +548,13 @@ export const MinigamesPage = () => {
           teams={minigames.teams}
           onNextTurn={roundResultScore != null && controller.state === "complete" ? nextTurn : undefined}
         />
+        {minigames.session && (
+          <RoundTaskCard
+            title={currentTask?.title}
+            criteria={currentTask?.criteria ?? []}
+            visibilityMode={minigames.session.visibility_mode}
+          />
+        )}
 
         {mode === "ffa" && minigames.players.length > 0 && (
           <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-xs text-slate-200">
@@ -535,8 +573,9 @@ export const MinigamesPage = () => {
           </div>
         )}
 
-        <div className="flex flex-1 flex-wrap items-center justify-center gap-6">
-          <div className="flex min-w-[280px] flex-1 flex-col items-center justify-center gap-6">
+        <div className="grid flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)_minmax(0,1fr)]">
+          <div className="hidden lg:block" />
+          <div className="flex min-w-[280px] flex-col items-center justify-center gap-6">
             <div className="rounded-2xl border border-white/10 bg-slate-900/60 px-5 py-4 text-center text-sm text-slate-200 shadow-[0_0_30px_rgba(15,23,42,0.4)] backdrop-blur">
               {controller.audioError ?? "Patient audio is ready when you are."}
             </div>
@@ -578,12 +617,14 @@ export const MinigamesPage = () => {
               </div>
             )}
           </div>
-          <LeaderboardPanel
-            mode={mode ?? "ffa"}
-            players={minigames.players}
-            teams={minigames.teams}
-            results={minigames.results}
-          />
+          <div className="flex justify-center lg:justify-end">
+            <LeaderboardPanel
+              mode={mode ?? "ffa"}
+              players={minigames.players}
+              teams={minigames.teams}
+              results={minigames.results}
+            />
+          </div>
         </div>
       </div>
 
@@ -606,6 +647,12 @@ export const MinigamesPage = () => {
         results={minigames.results}
         players={minigames.players}
         onClose={() => dispatch(setEvaluationDrawerOpen(false))}
+      />
+      <EvaluationModal
+        open={evaluationModalOpen}
+        evaluation={evaluationModalData}
+        criteria={evaluationTask?.criteria ?? []}
+        onClose={() => setEvaluationModalOpen(false)}
       />
       <NewPlayerDialog
         open={newPlayerOpen}
