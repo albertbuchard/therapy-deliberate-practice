@@ -18,7 +18,7 @@ jobs:
   build-tauri:
     strategy:
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [macos-latest, windows-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -26,18 +26,17 @@ jobs:
           # If manually dispatched with a tag, checkout that tag
           ref: ${{ inputs.tag || github.ref }}
       - name: Install Linux system dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libglib2.0-dev \
-            libgtk-3-dev \
-            libsoup2.4-dev \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.0-dev \
-            libappindicator3-dev \
-            libssl-dev \
+            build-essential \
             pkg-config \
+            libssl-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libjavascriptcoregtk-4.0-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
       - uses: actions/setup-node@v4
@@ -47,6 +46,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Fix pkg-config search path (setup-python may overwrite PKG_CONFIG_PATH)
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          DEFAULT_PC_PATH="$(pkg-config --variable pc_path pkg-config)"
+          if [[ -n "${PKG_CONFIG_PATH:-}" ]]; then
+            echo "PKG_CONFIG_PATH=$DEFAULT_PC_PATH:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          else
+            echo "PKG_CONFIG_PATH=$DEFAULT_PC_PATH" >> "$GITHUB_ENV"
+          fi
       - name: Install dependencies
         run: npm ci --workspace services/local-runtime-suite/desktop
       - name: Install local runtime dependencies
