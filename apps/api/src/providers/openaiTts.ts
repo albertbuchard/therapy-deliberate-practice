@@ -30,7 +30,7 @@ export const synthesizeWithOpenAI = async (
   },
   client?: OpenAI
 ): Promise<OpenAiTtsResult> => {
-  const openai = client ?? getOpenAIClient(input.apiKey);
+  const openai = client ?? getOpenAIClient({ apiKey: input.apiKey });
   try {
     const response = await openai.audio.speech.create({
       model: input.model,

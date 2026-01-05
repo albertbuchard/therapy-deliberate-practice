@@ -1,9 +1,8 @@
-import type { RuntimeEnv } from "../env";
 import type { LogFn } from "../utils/logger";
-import { safeTruncate } from "../utils/logger";
-import {OPENAI_TTS_FORMAT, OPENAI_TTS_INSTRUCTIONS, OPENAI_TTS_MODEL} from "./models";
+import { OPENAI_TTS_FORMAT, OPENAI_TTS_INSTRUCTIONS, OPENAI_TTS_MODEL } from "./models";
 import { BaseTtsProvider } from "./base";
 import { synthesizeWithOpenAI } from "./openaiTts";
+import { localSuiteHealthCheck, localSuiteSynthesize } from "./localSuite";
 
 export type TtsFormat = "mp3" | "opus" | "aac" | "flac" | "wav" | "pcm";
 
@@ -14,15 +13,6 @@ export type TtsProvider = {
   format: TtsFormat;
   healthCheck: () => Promise<boolean>;
   synthesize: (input: { text: string }) => Promise<{ bytes: Uint8Array; contentType: string }>;
-};
-
-const healthCheck = async (url: string) => {
-  try {
-    const response = await fetch(`${url}/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
 };
 
 const formatContentType: Record<TtsFormat, string> = {
@@ -38,36 +28,29 @@ class LocalTtsProviderImpl extends BaseTtsProvider {
   readonly voice: string;
   readonly format: TtsFormat;
 
-  constructor(private env: RuntimeEnv, logger?: LogFn) {
-    super("local", env.localTtsModel, logger);
-    this.voice = env.localTtsVoice;
-    this.format = env.localTtsFormat;
+  constructor(
+    private baseUrl: string,
+    config: { voice: string; format: TtsFormat },
+    logger?: LogFn
+  ) {
+    super("local", "local-suite", logger);
+    this.voice = config.voice;
+    this.format = config.format;
   }
 
   healthCheck() {
-    return healthCheck(this.env.localTtsUrl);
+    return localSuiteHealthCheck(this.baseUrl);
   }
 
   protected async doSynthesize(input: { text: string }) {
-    const response = await fetch(`${this.env.localTtsUrl}/synthesize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: input.text,
-        model: this.env.localTtsModel,
-        voice: this.env.localTtsVoice,
-        format: this.env.localTtsFormat
-      })
+    const result = await localSuiteSynthesize({
+      baseUrl: this.baseUrl,
+      text: input.text,
+      voice: this.voice,
+      format: this.format
     });
-
-    if (!response.ok) {
-      const body = safeTruncate(await response.text(), 200);
-      throw new Error(`Local TTS failed (${response.status}): ${body}`);
-    }
-
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const contentType = response.headers.get("content-type") ?? formatContentType[this.format];
-    return { value: { bytes, contentType }, log: { bytes: bytes.length } };
+    const contentType = result.contentType ?? formatContentType[this.format];
+    return { value: { bytes: result.bytes, contentType }, log: { bytes: result.bytes.length } };
   }
 }
 
@@ -117,8 +100,10 @@ class OpenAITtsProviderImpl extends BaseTtsProvider {
   }
 }
 
-export const LocalTtsProvider = (env: RuntimeEnv, logger?: LogFn): TtsProvider =>
-  new LocalTtsProviderImpl(env, logger);
+export const LocalTtsProvider = (
+  { baseUrl, voice, format }: { baseUrl: string; voice: string; format: TtsFormat },
+  logger?: LogFn
+): TtsProvider => new LocalTtsProviderImpl(baseUrl, { voice, format }, logger);
 
 export const OpenAITtsProvider = (
   {
