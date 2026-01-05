@@ -80,7 +80,7 @@ def _extract_prompt(payload: dict | None) -> str:
 
 
 async def run(req: RunRequest, ctx: RunContext):
-    prompt = _extract_prompt(req.json)
+    prompt = _extract_prompt(req.payload)
     reply = f"(local hf) You said: {prompt}"
     if req.stream:
         async def generator() -> AsyncIterator[dict]:
