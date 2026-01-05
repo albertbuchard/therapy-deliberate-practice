@@ -193,6 +193,17 @@ export const LocalSuite = () => {
             </p>
             <h3 className="mt-3 text-lg font-semibold text-white">{t("help.localSuite.paths.recommended.title")}</h3>
             <p className="mt-2 text-sm text-slate-300">{t("help.localSuite.paths.recommended.body")}</p>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
+              {t("help.localSuite.paths.recommended.stepsTitle")}
+            </p>
+            <ul className="mt-3 space-y-2 text-xs text-slate-300">
+              {Array.from({ length: 3 }).map((_, stepIndex) => (
+                <li key={`recommended-step-${stepIndex}`} className="flex items-start gap-2">
+                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400" />
+                  <span>{t(`help.localSuite.paths.recommended.steps.${stepIndex}`)}</span>
+                </li>
+              ))}
+            </ul>
             <a
               href="#local-suite-downloads"
               className="mt-4 inline-flex items-center gap-2 rounded-full border border-teal-300/40 bg-teal-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-teal-200 transition hover:-translate-y-0.5 hover:border-teal-200/70 hover:bg-teal-400/20"
@@ -207,6 +218,23 @@ export const LocalSuite = () => {
             </p>
             <h3 className="mt-3 text-lg font-semibold text-white">{t("help.localSuite.paths.advanced.title")}</h3>
             <p className="mt-2 text-sm text-slate-300">{t("help.localSuite.paths.advanced.body")}</p>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/70 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-400">
+                {t("help.localSuite.paths.advanced.callout.kicker")}
+              </p>
+              <p className="mt-2 text-xs text-slate-300">{t("help.localSuite.paths.advanced.callout.body")}</p>
+            </div>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
+              {t("help.localSuite.paths.advanced.stepsTitle")}
+            </p>
+            <ul className="mt-3 space-y-2 text-xs text-slate-300">
+              {Array.from({ length: 3 }).map((_, stepIndex) => (
+                <li key={`advanced-step-${stepIndex}`} className="flex items-start gap-2">
+                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-teal-400" />
+                  <span>{t(`help.localSuite.paths.advanced.steps.${stepIndex}`)}</span>
+                </li>
+              ))}
+            </ul>
             <p className="mt-4 text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
               {t("help.localSuite.paths.advanced.codeTitle")}
             </p>

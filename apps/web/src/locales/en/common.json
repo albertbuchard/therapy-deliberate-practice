@@ -485,12 +485,28 @@
           "kicker": "Recommended",
           "title": "Use Local Suite (recommended)",
           "body": "Download the desktop app, select a model set, and paste the Base URL into Settings.",
+          "stepsTitle": "Local Suite steps",
+          "steps": [
+            "Install the Local Suite app and sign in if prompted.",
+            "Pick a model bundle that matches your hardware, then start the gateway.",
+            "Copy the Base URL from the app into Settings → AI Providers."
+          ],
           "cta": "Go to downloads"
         },
         "advanced": {
           "kicker": "Advanced",
           "title": "Advanced: use your own models",
-          "body": "Already running your own stack? As long as you expose the same endpoints, Therapy Studio can connect.",
+          "body": "Already running your own stack? As long as you expose the same endpoints, Therapy Studio can connect. If you want a lighter setup, run scripts/start_local_ai.py instead of the full Local Suite.",
+          "stepsTitle": "Custom server steps",
+          "steps": [
+            "Run scripts/start_local_ai.py (or your own server) to expose the OpenAI-style endpoints below.",
+            "Verify your server implements /v1/responses, /v1/audio/speech, and /v1/audio/transcriptions.",
+            "Paste your Base URL into Settings → AI Providers and select the model IDs it advertises."
+          ],
+          "callout": {
+            "kicker": "Script alternative",
+            "body": "The bundled script starts a lightweight FastAPI gateway that mirrors the Local Suite API surface."
+          },
           "codeTitle": "Example gateway skeleton",
           "code": "from fastapi import FastAPI, UploadFile, File\nfrom fastapi.responses import JSONResponse, Response\n\napp = FastAPI()\n\n@app.post(\"/v1/responses\")\nasync def responses(payload: dict):\n    return {\"id\": \"resp_001\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"...\"}]}]}\n\n@app.post(\"/v1/audio/speech\")\nasync def audio_speech(payload: dict):\n    return Response(content=b\"\", media_type=\"audio/mpeg\")\n\n@app.post(\"/v1/audio/transcriptions\")\nasync def audio_transcriptions(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}\n\n@app.post(\"/v1/audio/translations\")\nasync def audio_translations(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}",
           "cta": "See endpoint details"
