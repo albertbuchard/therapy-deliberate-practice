@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 type GameSelectModalProps = {
   open: boolean;
   onClose: () => void;
@@ -20,6 +22,48 @@ const modes = [
 ];
 
 export const GameSelectModal = ({ open, onClose, onSelect }: GameSelectModalProps) => {
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      previousFocusRef.current?.focus();
+      return;
+    }
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const firstFocusable = modalRef.current?.querySelector<HTMLElement>(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+    );
+    firstFocusable?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+      if (event.key === "Tab") {
+        const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        );
+        if (!focusable || focusable.length === 0) return;
+        const items = Array.from(focusable);
+        const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+        let nextIndex = currentIndex;
+        if (event.shiftKey) {
+          nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
+        } else {
+          nextIndex = currentIndex === items.length - 1 ? 0 : currentIndex + 1;
+        }
+        items[nextIndex]?.focus();
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose, open]);
+
   if (!open) return null;
 
   return (
@@ -27,47 +71,52 @@ export const GameSelectModal = ({ open, onClose, onSelect }: GameSelectModalProp
       className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-6"
       style={{ WebkitOverflowScrolling: "touch" }}
     >
-      <div className="flex min-h-[100dvh] items-center justify-center">
-        <div className="mx-auto w-full max-w-4xl max-h-[90dvh] overflow-y-auto rounded-3xl border border-white/10 bg-slate-950/80 p-8 shadow-2xl backdrop-blur">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-teal-200/70">Minigames</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Choose your mode</h2>
-            <p className="mt-2 text-sm text-slate-300">
-              Launch a premium round-based experience powered by the practice pipeline.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white/70 hover:border-white/30 hover:text-white"
-          >
-            Close
-          </button>
-        </div>
-        <div className="mt-8 grid gap-6 md:grid-cols-2">
-          {modes.map((mode) => (
-            <div
-              key={mode.key}
-              className={`group relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br ${mode.accent} p-6 shadow-[0_0_40px_rgba(15,23,42,0.4)]`}
-            >
-              <div className="absolute inset-0 opacity-0 transition duration-500 group-hover:opacity-100">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.08),_transparent_60%)]" />
-              </div>
-              <div className="relative z-10 flex h-full flex-col gap-4">
-                <div>
-                  <h3 className="text-xl font-semibold text-white">{mode.title}</h3>
-                  <p className="mt-2 text-sm text-slate-200/80">{mode.description}</p>
-                </div>
-                <button
-                  onClick={() => onSelect(mode.key)}
-                  className="mt-auto inline-flex items-center justify-center rounded-full border border-teal-300/50 bg-teal-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-teal-100 transition hover:-translate-y-0.5 hover:border-teal-200 hover:bg-teal-400/30"
-                >
-                  Start setup
-                </button>
-              </div>
+      <div className="flex min-h-[100dvh] items-end justify-center md:items-center">
+        <div
+          ref={modalRef}
+          role="dialog"
+          aria-modal="true"
+          className="mx-auto w-full max-w-4xl max-h-[90dvh] overflow-y-auto rounded-t-3xl border border-white/10 bg-slate-950/80 p-8 shadow-2xl backdrop-blur md:rounded-3xl"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-teal-200/70">Minigames</p>
+              <h2 className="mt-2 text-3xl font-semibold text-white">Choose your mode</h2>
+              <p className="mt-2 text-sm text-slate-300">
+                Launch a premium round-based experience powered by the practice pipeline.
+              </p>
             </div>
-          ))}
-        </div>
+            <button
+              onClick={onClose}
+              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white/70 hover:border-white/30 hover:text-white"
+            >
+              Close
+            </button>
+          </div>
+          <div className="mt-8 grid gap-6 md:grid-cols-2">
+            {modes.map((mode) => (
+              <div
+                key={mode.key}
+                className={`group relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br ${mode.accent} p-6 shadow-[0_0_40px_rgba(15,23,42,0.4)]`}
+              >
+                <div className="absolute inset-0 opacity-0 transition duration-500 group-hover:opacity-100">
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.08),_transparent_60%)]" />
+                </div>
+                <div className="relative z-10 flex h-full flex-col gap-4">
+                  <div>
+                    <h3 className="text-xl font-semibold text-white">{mode.title}</h3>
+                    <p className="mt-2 text-sm text-slate-200/80">{mode.description}</p>
+                  </div>
+                  <button
+                    onClick={() => onSelect(mode.key)}
+                    className="mt-auto inline-flex items-center justify-center rounded-full border border-teal-300/50 bg-teal-500/20 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-teal-100 transition hover:-translate-y-0.5 hover:border-teal-200 hover:bg-teal-400/30"
+                  >
+                    Start setup
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

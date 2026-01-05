@@ -3,7 +3,10 @@ import { expect, test } from "@playwright/test";
 test.describe("minigames dock panel collapse", () => {
   test("collapsed dock panel does not reserve layout space on desktop", async ({ page, baseURL }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto(`${baseURL ?? "http://localhost:5173"}/minigames`);
+    await page.goto(`${baseURL ?? "http://localhost:5173"}/minigames/play`);
+
+    const closeButton = page.getByRole("button", { name: "Close" }).first();
+    await closeButton.click();
 
     const panelButton = page.getByRole("button", { name: /players/i });
     await expect(panelButton).toBeVisible();
@@ -23,7 +26,10 @@ test.describe("minigames dock panel collapse", () => {
 
   test("collapsed stack panel does not reserve layout space on mobile", async ({ page, baseURL }) => {
     await page.setViewportSize({ width: 375, height: 720 });
-    await page.goto(`${baseURL ?? "http://localhost:5173"}/minigames`);
+    await page.goto(`${baseURL ?? "http://localhost:5173"}/minigames/play`);
+
+    const closeButton = page.getByRole("button", { name: "Close" }).first();
+    await closeButton.click();
 
     const panelButton = page.getByRole("button", { name: /task/i });
     await expect(panelButton).toBeVisible();

@@ -215,12 +215,22 @@ export const minigameSessions = sqliteTable(
     task_selection: text("task_selection", { mode: "json" }).notNull(),
     settings: text("settings", { mode: "json" }).notNull(),
     created_at: integer("created_at").notNull(),
-    ended_at: integer("ended_at")
+    ended_at: integer("ended_at"),
+    last_active_at: integer("last_active_at"),
+    current_round_id: text("current_round_id"),
+    current_player_id: text("current_player_id"),
+    deleted_at: integer("deleted_at")
   },
   (table) => ({
     userCreatedIdx: index("minigame_sessions_user_id_created_at_idx").on(
       table.user_id,
       table.created_at
+    ),
+    userStatusIdx: index("minigame_sessions_user_id_deleted_at_ended_at_last_active_at_idx").on(
+      table.user_id,
+      table.deleted_at,
+      table.ended_at,
+      table.last_active_at
     )
   })
 );

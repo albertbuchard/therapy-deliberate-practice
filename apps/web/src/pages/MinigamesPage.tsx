@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { GameSelectModal } from "../components/minigames/GameSelectModal";
 import { MinigameSetupModal } from "../components/minigames/MinigameSetupModal";
 import { AudioReactiveBackground } from "../components/minigames/AudioReactiveBackground";
@@ -19,6 +19,7 @@ import {
   useAddMinigamePlayersMutation,
   useAddMinigameTeamsMutation,
   useCreateMinigameSessionMutation,
+  usePatchMinigameResumeMutation,
   useEndMinigameSessionMutation,
   useGenerateMinigameRoundsMutation,
   useGetTaskQuery,
@@ -29,6 +30,7 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   addRoundResult,
   resetMinigame,
+  setCurrentPlayerId,
   setCurrentRoundId,
   setEvaluationDrawerOpen,
   setAppShellHidden,
@@ -47,7 +49,7 @@ const modeCopy = {
 
 const WARMUP_AHEAD = 2;
 
-export const MinigamesPage = () => {
+export const MinigamePlayPage = () => {
   const dispatch = useAppDispatch();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const location = useLocation();
@@ -55,10 +57,10 @@ export const MinigamesPage = () => {
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
   const minigames = useAppSelector((state) => state.minigames);
   const settings = useAppSelector((state) => state.settings);
+  const currentPlayerId = minigames.currentPlayerId;
   const [selectOpen, setSelectOpen] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
   const [mode, setMode] = useState<"ffa" | "tdm" | null>(null);
-  const [currentPlayerId, setCurrentPlayerId] = useState<string | undefined>(undefined);
   const [roundResultScore, setRoundResultScore] = useState<number | null>(null);
   const [roundResultPenalty, setRoundResultPenalty] = useState<number | null>(null);
   const [lastTranscript, setLastTranscript] = useState<string | undefined>(undefined);
@@ -76,10 +78,13 @@ export const MinigamesPage = () => {
   const [addPlayers] = useAddMinigamePlayersMutation();
   const [generateRounds] = useGenerateMinigameRoundsMutation();
   const [endSession] = useEndMinigameSessionMutation();
+  const [patchResume] = usePatchMinigameResumeMutation();
   const [fetchMinigameState, minigameState] = useLazyGetMinigameStateQuery();
   const [redrawRound] = useRedrawMinigameRoundMutation();
   const fullscreen = useFullscreen();
   const patientAudio = usePatientAudioBank({ loggerScope: "minigames" });
+  const params = useParams();
+  const sessionIdParam = params.sessionId;
   const patientAudioRef = useRef(patientAudio);
   const handleAudioRef = useCallback((node: HTMLAudioElement | null) => {
     audioRef.current = node;
@@ -113,6 +118,13 @@ export const MinigamesPage = () => {
   }, [dispatch, minigameState.data]);
 
   useEffect(() => {
+    if (!sessionIdParam) return;
+    setSelectOpen(false);
+    setSetupOpen(false);
+    void fetchMinigameState(sessionIdParam);
+  }, [fetchMinigameState, sessionIdParam]);
+
+  useEffect(() => {
     if (minigames.session?.game_type) {
       setMode(minigames.session.game_type);
     }
@@ -120,6 +132,7 @@ export const MinigamesPage = () => {
 
   useEffect(() => {
     if (handledPreselectRef.current) return;
+    if (sessionIdParam) return;
     const state = location.state as { preselectedMode?: "ffa" | "tdm" } | null;
     if (!state?.preselectedMode) return;
     handledPreselectRef.current = true;
@@ -129,9 +142,9 @@ export const MinigamesPage = () => {
   }, [location.state]);
 
   useEffect(() => {
-    if (minigames.players.length && !currentPlayerId && mode === "ffa") {
+    if (minigames.players.length && !minigames.currentPlayerId && mode === "ffa") {
       const playerId = minigames.players[0].id;
-      setCurrentPlayerId(playerId);
+      dispatch(setCurrentPlayerId(playerId));
       const nextForPlayer = minigames.rounds.find(
         (round) => round.status !== "completed" && round.player_a_id === playerId
       );
@@ -139,7 +152,26 @@ export const MinigamesPage = () => {
         dispatch(setCurrentRoundId(nextForPlayer.id));
       }
     }
-  }, [currentPlayerId, dispatch, minigames.currentRoundId, minigames.players, minigames.rounds, mode]);
+  }, [dispatch, minigames.currentPlayerId, minigames.currentRoundId, minigames.players, minigames.rounds, mode]);
+
+  useEffect(() => {
+    if (!minigames.session?.id) return;
+    if (minigames.session.ended_at) return;
+    const handle = window.setTimeout(() => {
+      void patchResume({
+        sessionId: minigames.session?.id ?? "",
+        current_round_id: minigames.currentRoundId ?? null,
+        current_player_id: minigames.currentPlayerId ?? null
+      });
+    }, 900);
+    return () => window.clearTimeout(handle);
+  }, [
+    minigames.currentPlayerId,
+    minigames.currentRoundId,
+    minigames.session?.ended_at,
+    minigames.session?.id,
+    patchResume
+  ]);
 
   const currentRound = useMemo(
     () =>
@@ -343,7 +375,7 @@ export const MinigamesPage = () => {
   const currentPlayer = minigames.players.find((player) => player.id === activePlayerId);
 
   const handlePlayerChange = (playerId: string) => {
-    setCurrentPlayerId(playerId);
+    dispatch(setCurrentPlayerId(playerId));
     if (mode !== "ffa" || evaluationModalOpen) return;
     const nextForPlayer = minigames.rounds.find(
       (round) => round.status !== "completed" && round.player_a_id === playerId
@@ -424,6 +456,7 @@ export const MinigamesPage = () => {
     await fetchMinigameState(session.session_id);
     dispatch(setCurrentRoundId(undefined));
     setSetupOpen(false);
+    navigate(`/minigames/play/${session.session_id}`, { replace: true });
   };
 
   const endGame = async () => {
@@ -470,7 +503,7 @@ export const MinigamesPage = () => {
     setMode(null);
     setSelectOpen(true);
     setSetupOpen(false);
-    setCurrentPlayerId(undefined);
+    dispatch(setCurrentPlayerId(undefined));
     setRoundResultScore(null);
     setRoundResultPenalty(null);
     setLastTranscript(undefined);
@@ -507,7 +540,7 @@ export const MinigamesPage = () => {
       players: [{ name: payload.name, avatar: payload.avatar }]
     }).unwrap();
     const newPlayer = response.players[0];
-    setCurrentPlayerId(newPlayer.id);
+    dispatch(setCurrentPlayerId(newPlayer.id));
     const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
     dispatch(setMinigameState(refreshed));
     let nextForNewPlayer = refreshed.rounds.find(

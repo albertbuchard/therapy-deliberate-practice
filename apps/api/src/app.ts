@@ -52,6 +52,11 @@ import {
 import { selectTtsProvider } from "./providers";
 import { getOrCreateTtsAsset, type TtsStorage } from "./services/ttsService";
 import { fetchLeaderboardEntries } from "./services/leaderboardService";
+import {
+  listMinigameSessions,
+  softDeleteMinigameSession,
+  updateMinigameResume
+} from "./services/minigameSessionsService";
 
 export type ApiDependencies = {
   env: RuntimeEnv;
@@ -2948,6 +2953,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json({ error: "Invalid session payload." }, 400);
     }
     const sessionId = generateUuid();
+    const now = Date.now();
     await db.insert(minigameSessions).values({
       id: sessionId,
       user_id: user.id,
@@ -2955,19 +2961,150 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       visibility_mode: parsed.data.visibility_mode,
       task_selection: parsed.data.task_selection,
       settings: parsed.data.settings,
-      created_at: Date.now(),
-      ended_at: null
+      created_at: now,
+      ended_at: null,
+      last_active_at: now
     });
     return c.json({ session_id: sessionId });
+  });
+
+  app.get("/api/v1/minigames/sessions", async (c) => {
+    const user = c.get("user");
+    const status = c.req.query("status") as "active" | "ended" | "all" | undefined;
+    const sort = c.req.query("sort") as "newest" | "oldest" | "recently_active" | undefined;
+    const sessions = await listMinigameSessions(db, { userId: user.id, status, sort });
+    return c.json({ sessions });
+  });
+
+  const fetchMinigameSessionState = async (sessionId: string, userId: string) => {
+    const [session] = await db
+      .select()
+      .from(minigameSessions)
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, userId),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
+      .limit(1);
+    if (!session) {
+      return null;
+    }
+    const teams = await db
+      .select()
+      .from(minigameTeams)
+      .where(eq(minigameTeams.session_id, sessionId));
+    const players = await db
+      .select()
+      .from(minigamePlayers)
+      .where(eq(minigamePlayers.session_id, sessionId));
+    const rounds = await db
+      .select({
+        id: minigameRounds.id,
+        session_id: minigameRounds.session_id,
+        position: minigameRounds.position,
+        task_id: minigameRounds.task_id,
+        example_id: minigameRounds.example_id,
+        player_a_id: minigameRounds.player_a_id,
+        player_b_id: minigameRounds.player_b_id,
+        team_a_id: minigameRounds.team_a_id,
+        team_b_id: minigameRounds.team_b_id,
+        status: minigameRounds.status,
+        started_at: minigameRounds.started_at,
+        completed_at: minigameRounds.completed_at,
+        patient_text: taskExamples.patient_text
+      })
+      .from(minigameRounds)
+      .leftJoin(taskExamples, eq(minigameRounds.example_id, taskExamples.id))
+      .where(eq(minigameRounds.session_id, sessionId))
+      .orderBy(minigameRounds.position);
+    const results = await db
+      .select({
+        id: minigameRoundResults.id,
+        round_id: minigameRoundResults.round_id,
+        player_id: minigameRoundResults.player_id,
+        attempt_id: minigameRoundResults.attempt_id,
+        overall_score: minigameRoundResults.overall_score,
+        overall_pass: minigameRoundResults.overall_pass,
+        created_at: minigameRoundResults.created_at,
+        transcript: attempts.transcript,
+        evaluation: attempts.evaluation
+      })
+      .from(minigameRoundResults)
+      .leftJoin(attempts, eq(minigameRoundResults.attempt_id, attempts.id))
+      .leftJoin(minigameRounds, eq(minigameRoundResults.round_id, minigameRounds.id))
+      .where(eq(minigameRounds.session_id, sessionId));
+
+    return {
+      session,
+      teams,
+      players,
+      rounds,
+      results
+    };
+  };
+
+  app.get("/api/v1/minigames/sessions/:id", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const state = await fetchMinigameSessionState(sessionId, user.id);
+    if (!state) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    return c.json(state);
+  });
+
+  app.patch("/api/v1/minigames/sessions/:id/resume", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const schema = z.object({
+      current_round_id: z.string().nullable().optional(),
+      current_player_id: z.string().nullable().optional(),
+      last_active_at: z.number().nullable().optional()
+    });
+    const body = await c.req.json().catch(() => null);
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid resume payload." }, 400);
+    }
+    const updated = await updateMinigameResume(db, {
+      userId: user.id,
+      sessionId,
+      currentRoundId: parsed.data.current_round_id,
+      currentPlayerId: parsed.data.current_player_id,
+      lastActiveAt: parsed.data.last_active_at
+    });
+    if (!updated) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/v1/minigames/sessions/:id", async (c) => {
+    const user = c.get("user");
+    const sessionId = c.req.param("id");
+    const deleted = await softDeleteMinigameSession(db, { userId: user.id, sessionId });
+    if (!deleted) {
+      return c.json({ error: "Session not found." }, 404);
+    }
+    return c.json({ ok: true });
   });
 
   app.post("/api/v1/minigames/sessions/:id/end", async (c) => {
     const user = c.get("user");
     const sessionId = c.req.param("id");
+    const now = Date.now();
     await db
       .update(minigameSessions)
-      .set({ ended_at: Date.now() })
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)));
+      .set({ ended_at: now, last_active_at: now })
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      );
     return c.json({ ok: true });
   });
 
@@ -2977,7 +3114,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [session] = await db
       .select({ id: minigameSessions.id })
       .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
       .limit(1);
     if (!session) {
       return c.json({ error: "Session not found." }, 404);
@@ -3014,7 +3157,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [session] = await db
       .select({ id: minigameSessions.id })
       .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
       .limit(1);
     if (!session) {
       return c.json({ error: "Session not found." }, 404);
@@ -3062,7 +3211,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [session] = await db
       .select()
       .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
       .limit(1);
     if (!session) {
       return c.json({ error: "Session not found." }, 404);
@@ -3181,7 +3336,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [session] = await db
       .select()
       .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
       .limit(1);
     if (!session) {
       return c.json({ error: "Session not found." }, 404);
@@ -3286,66 +3447,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
   app.get("/api/v1/minigames/sessions/:id/state", async (c) => {
     const user = c.get("user");
     const sessionId = c.req.param("id");
-    const [session] = await db
-      .select()
-      .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
-      .limit(1);
-    if (!session) {
+    const state = await fetchMinigameSessionState(sessionId, user.id);
+    if (!state) {
       return c.json({ error: "Session not found." }, 404);
     }
-    const teams = await db
-      .select()
-      .from(minigameTeams)
-      .where(eq(minigameTeams.session_id, sessionId));
-    const players = await db
-      .select()
-      .from(minigamePlayers)
-      .where(eq(minigamePlayers.session_id, sessionId));
-    const rounds = await db
-      .select({
-        id: minigameRounds.id,
-        session_id: minigameRounds.session_id,
-        position: minigameRounds.position,
-        task_id: minigameRounds.task_id,
-        example_id: minigameRounds.example_id,
-        player_a_id: minigameRounds.player_a_id,
-        player_b_id: minigameRounds.player_b_id,
-        team_a_id: minigameRounds.team_a_id,
-        team_b_id: minigameRounds.team_b_id,
-        status: minigameRounds.status,
-        started_at: minigameRounds.started_at,
-        completed_at: minigameRounds.completed_at,
-        patient_text: taskExamples.patient_text
-      })
-      .from(minigameRounds)
-      .leftJoin(taskExamples, eq(minigameRounds.example_id, taskExamples.id))
-      .where(eq(minigameRounds.session_id, sessionId))
-      .orderBy(minigameRounds.position);
-    const results = await db
-      .select({
-        id: minigameRoundResults.id,
-        round_id: minigameRoundResults.round_id,
-        player_id: minigameRoundResults.player_id,
-        attempt_id: minigameRoundResults.attempt_id,
-        overall_score: minigameRoundResults.overall_score,
-        overall_pass: minigameRoundResults.overall_pass,
-        created_at: minigameRoundResults.created_at,
-        transcript: attempts.transcript,
-        evaluation: attempts.evaluation
-      })
-      .from(minigameRoundResults)
-      .leftJoin(attempts, eq(minigameRoundResults.attempt_id, attempts.id))
-      .leftJoin(minigameRounds, eq(minigameRoundResults.round_id, minigameRounds.id))
-      .where(eq(minigameRounds.session_id, sessionId));
-
-    return c.json({
-      session,
-      teams,
-      players,
-      rounds,
-      results
-    });
+    return c.json(state);
   });
 
   app.post("/api/v1/minigames/sessions/:id/rounds/:roundId/start", async (c) => {
@@ -3355,7 +3461,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [session] = await db
       .select({ id: minigameSessions.id })
       .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
       .limit(1);
     if (!session) {
       return c.json({ error: "Session not found." }, 404);
@@ -3415,7 +3527,13 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [session] = await db
       .select({ id: minigameSessions.id })
       .from(minigameSessions)
-      .where(and(eq(minigameSessions.id, sessionId), eq(minigameSessions.user_id, user.id)))
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
       .limit(1);
     if (!session) {
       return c.json({ error: "Session not found." }, 404);

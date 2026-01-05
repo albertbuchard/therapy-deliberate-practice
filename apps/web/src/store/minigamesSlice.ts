@@ -15,6 +15,7 @@ type MinigameState = {
   rounds: MinigameRound[];
   results: MinigameRoundResult[];
   currentRoundId?: string;
+  currentPlayerId?: string;
   ui: {
     transcriptHidden: boolean;
     evaluationDrawerOpen: boolean;
@@ -47,6 +48,7 @@ const minigamesSlice = createSlice({
       state.rounds = [];
       state.results = [];
       state.currentRoundId = undefined;
+      state.currentPlayerId = undefined;
       state.ui.transcriptHidden = false;
       state.ui.evaluationDrawerOpen = false;
       state.ui.endGameOpen = false;
@@ -67,10 +69,16 @@ const minigamesSlice = createSlice({
       state.players = action.payload.players;
       state.rounds = action.payload.rounds;
       state.results = action.payload.results;
-      state.currentRoundId = action.payload.rounds.find((round) => round.status !== "completed")?.id;
+      state.currentRoundId =
+        action.payload.session.current_round_id ??
+        action.payload.rounds.find((round) => round.status !== "completed")?.id;
+      state.currentPlayerId = action.payload.session.current_player_id ?? undefined;
     },
     setCurrentRoundId(state, action: PayloadAction<string | undefined>) {
       state.currentRoundId = action.payload;
+    },
+    setCurrentPlayerId(state, action: PayloadAction<string | undefined>) {
+      state.currentPlayerId = action.payload;
     },
     addRoundResult(
       state,
@@ -135,6 +143,7 @@ export const {
   resetMinigame,
   setMinigameState,
   setCurrentRoundId,
+  setCurrentPlayerId,
   addRoundResult,
   toggleTranscriptHidden,
   setEvaluationDrawerOpen,

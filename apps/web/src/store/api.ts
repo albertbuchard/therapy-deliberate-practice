@@ -98,6 +98,29 @@ export type MinigameSession = {
   settings: Record<string, unknown>;
   created_at: number;
   ended_at: number | null;
+  last_active_at: number | null;
+  current_round_id: string | null;
+  current_player_id: string | null;
+  deleted_at?: number | null;
+};
+
+export type MinigameSessionSummary = {
+  id: string;
+  game_type: MinigameSession["game_type"];
+  created_at: number;
+  ended_at: number | null;
+  last_active_at: number | null;
+  current_round_id: string | null;
+  current_player_id: string | null;
+  progress: { completed: number; total: number };
+  players_count: number;
+  teams_count: number;
+  winner?: {
+    label: string;
+    score: number;
+    player_id?: string;
+    team_id?: string;
+  } | null;
 };
 
 export type MinigameTeam = {
@@ -179,7 +202,7 @@ export const api = createApi({
       return headers;
     }
   }),
-  tagTypes: ["Task", "Attempt"],
+  tagTypes: ["Task", "Attempt", "MinigameSession"],
   endpoints: (builder) => ({
     getAdminWhoami: builder.query<AdminWhoami, void>({
       query: () => "/admin/whoami"
@@ -323,6 +346,13 @@ export const api = createApi({
       query: (body) => ({ url: "/practice/run", method: "POST", body }),
       invalidatesTags: ["Attempt"]
     }),
+    listMinigameSessions: builder.query<
+      { sessions: MinigameSessionSummary[] },
+      { status?: "active" | "ended" | "all"; sort?: "newest" | "oldest" | "recently_active" }
+    >({
+      query: (params) => ({ url: "/minigames/sessions", params }),
+      providesTags: ["MinigameSession"]
+    }),
     createMinigameSession: builder.mutation<
       { session_id: string },
       {
@@ -334,8 +364,35 @@ export const api = createApi({
     >({
       query: (body) => ({ url: "/minigames/sessions", method: "POST", body })
     }),
+    getMinigameSessionDetail: builder.query<
+      {
+        session: MinigameSession;
+        teams: MinigameTeam[];
+        players: MinigamePlayer[];
+        rounds: MinigameRound[];
+        results: MinigameRoundResult[];
+      },
+      string
+    >({
+      query: (sessionId) => `/minigames/sessions/${sessionId}`,
+      providesTags: (_result, _err, sessionId) => [{ type: "MinigameSession", id: sessionId }]
+    }),
+    patchMinigameResume: builder.mutation<
+      { ok: boolean },
+      { sessionId: string; current_round_id?: string | null; current_player_id?: string | null }
+    >({
+      query: ({ sessionId, ...body }) => ({
+        url: `/minigames/sessions/${sessionId}/resume`,
+        method: "PATCH",
+        body
+      })
+    }),
     endMinigameSession: builder.mutation<{ ok: boolean }, { sessionId: string }>({
       query: ({ sessionId }) => ({ url: `/minigames/sessions/${sessionId}/end`, method: "POST" })
+    }),
+    deleteMinigameSession: builder.mutation<{ ok: boolean }, { sessionId: string }>({
+      query: ({ sessionId }) => ({ url: `/minigames/sessions/${sessionId}`, method: "DELETE" }),
+      invalidatesTags: ["MinigameSession"]
     }),
     addMinigameTeams: builder.mutation<{ teams: MinigameTeam[] }, { sessionId: string; teams: Array<{ name: string; color: string }> }>({
       query: ({ sessionId, teams }) => ({
@@ -493,8 +550,12 @@ export const {
   useParseTaskMutation,
   useImportTaskMutation,
   useRunPracticeMutation,
+  useListMinigameSessionsQuery,
   useCreateMinigameSessionMutation,
+  useGetMinigameSessionDetailQuery,
+  usePatchMinigameResumeMutation,
   useEndMinigameSessionMutation,
+  useDeleteMinigameSessionMutation,
   useAddMinigameTeamsMutation,
   useAddMinigamePlayersMutation,
   useGenerateMinigameRoundsMutation,

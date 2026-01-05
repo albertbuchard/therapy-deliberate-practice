@@ -148,7 +148,10 @@ test.describe("end game results overlay", () => {
             task_selection: {},
             settings: {},
             created_at: 0,
-            ended_at: null
+            ended_at: null,
+            last_active_at: 0,
+            current_round_id: null,
+            current_player_id: null
           },
           teams: [],
           players,
