@@ -485,12 +485,28 @@
           "kicker": "Recommandé",
           "title": "Utiliser la Suite locale (recommandé)",
           "body": "Téléchargez l'app, choisissez les modèles, puis collez la Base URL dans Paramètres.",
+          "stepsTitle": "Étapes Suite locale",
+          "steps": [
+            "Installez l'app Suite locale et connectez-vous si nécessaire.",
+            "Choisissez un pack de modèles adapté à votre matériel, puis démarrez la passerelle.",
+            "Copiez la Base URL depuis l'app dans Paramètres → Fournisseurs d'IA."
+          ],
           "cta": "Aller aux téléchargements"
         },
         "advanced": {
           "kicker": "Avancé",
           "title": "Avancé : utiliser vos propres modèles",
-          "body": "Vous avez déjà votre stack ? Il suffit d'exposer les mêmes endpoints.",
+          "body": "Vous avez déjà votre stack ? Il suffit d'exposer les mêmes endpoints. Pour une option plus légère, lancez scripts/start_local_ai.py au lieu de la Suite locale.",
+          "stepsTitle": "Étapes serveur personnalisé",
+          "steps": [
+            "Lancez scripts/start_local_ai.py (ou votre serveur) pour exposer les endpoints de type OpenAI ci-dessous.",
+            "Vérifiez que votre serveur implémente /v1/responses, /v1/audio/speech et /v1/audio/transcriptions.",
+            "Collez votre Base URL dans Paramètres → Fournisseurs d'IA et sélectionnez les IDs de modèle annoncés."
+          ],
+          "callout": {
+            "kicker": "Alternative script",
+            "body": "Le script fourni démarre une passerelle FastAPI légère qui reprend l'API de la Suite locale."
+          },
           "codeTitle": "Exemple de passerelle",
           "code": "from fastapi import FastAPI, UploadFile, File\nfrom fastapi.responses import JSONResponse, Response\n\napp = FastAPI()\n\n@app.post(\"/v1/responses\")\nasync def responses(payload: dict):\n    return {\"id\": \"resp_001\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"...\"}]}]}\n\n@app.post(\"/v1/audio/speech\")\nasync def audio_speech(payload: dict):\n    return Response(content=b\"\", media_type=\"audio/mpeg\")\n\n@app.post(\"/v1/audio/transcriptions\")\nasync def audio_transcriptions(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}\n\n@app.post(\"/v1/audio/translations\")\nasync def audio_translations(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}",
           "cta": "Voir les endpoints"
