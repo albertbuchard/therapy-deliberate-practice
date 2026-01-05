@@ -2,6 +2,7 @@ import { BigMicButton } from "./BigMicButton";
 import { DockPanel } from "./DockPanel";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 import { NowUpHeader } from "./NowUpHeader";
+import { PlayersPanel } from "./PlayersPanel";
 import { TranscriptOverlay } from "./TranscriptOverlay";
 import type { MinigameLayoutProps } from "./layouts";
 
@@ -16,18 +17,18 @@ export const MobileMinigameLayout = ({
   session,
   teams,
   players,
+  rounds,
   results,
   currentRound,
   currentTask,
-  currentPlayer,
   activePlayerId,
-  currentPlayerId,
-  onPlayerChange,
+  upNextPlayerId,
+  canSwitchPlayer,
+  onRequestSwitchPlayer,
   controller,
   micLabel,
   roundResultScore,
   roundResultPenalty,
-  currentScore,
   transcriptEligible,
   transcriptHidden,
   transcriptText,
@@ -42,7 +43,6 @@ export const MobileMinigameLayout = ({
   canRedraw,
   fullscreen
 }: MinigameLayoutProps) => {
-  const team = teams.find((entry) => entry.id === currentPlayer?.team_id);
   const isPlaying = controller.audioStatus === "playing";
   const playButtonLabel = playLabel(isPlaying, Boolean(controller.patientEndedAt));
 
@@ -109,52 +109,19 @@ export const MobileMinigameLayout = ({
         defaultCollapsed
         behavior="stack"
       >
-        <div className="space-y-3">
-          <div className="rounded-3xl border border-white/10 bg-slate-900/60 px-4 py-4 shadow-[0_0_20px_rgba(15,23,42,0.4)] backdrop-blur">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-slate-400">Player</p>
-                <p className="mt-1 text-lg font-semibold text-white">
-                  {currentPlayer?.name ?? "Choose player"}
-                </p>
-                <p className="text-xs text-slate-300">{team ? `${team.name} · ${team.color}` : "Solo"}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-slate-400">Score</p>
-                <p className="mt-1 text-2xl font-semibold text-teal-200">
-                  {typeof currentScore === "number" ? currentScore.toFixed(1) : "--"}
-                </p>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">
-                  Round {currentRound ? currentRound.position + 1 : "--"}
-                </p>
-              </div>
-            </div>
-            {mode === "ffa" && players.length > 0 && (
-              <div className="mt-3 flex items-center gap-3">
-                <span className="text-[10px] uppercase tracking-[0.3em] text-slate-400">Active</span>
-                <select
-                  value={currentPlayerId}
-                  onChange={(event) => onPlayerChange?.(event.target.value)}
-                  className="flex-1 rounded-full border border-white/10 bg-slate-900/60 px-3 py-1 text-xs text-white"
-                >
-                  {players.map((player) => (
-                    <option key={player.id} value={player.id}>
-                      {player.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {onNextTurn && (
-              <button
-                onClick={onNextTurn}
-                className="mt-3 w-full rounded-full border border-teal-300/60 bg-teal-500/20 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.3em] text-teal-100"
-              >
-                Next turn
-              </button>
-            )}
-          </div>
-        </div>
+        <PlayersPanel
+          mode={mode}
+          rounds={rounds}
+          currentRound={currentRound}
+          players={players}
+          teams={teams}
+          results={results}
+          activePlayerId={activePlayerId}
+          upNextPlayerId={upNextPlayerId}
+          canSwitchPlayer={canSwitchPlayer}
+          onRequestSwitchPlayer={onRequestSwitchPlayer}
+          onNextTurn={onNextTurn}
+        />
       </DockPanel>
 
       <DockPanel

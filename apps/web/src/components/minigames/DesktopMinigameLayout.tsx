@@ -3,7 +3,7 @@ import { DockPanel } from "./DockPanel";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 import { NowUpHeader } from "./NowUpHeader";
 import { PatientAudioControls } from "./PatientAudioControls";
-import { RoundHUD } from "./RoundHUD";
+import { PlayersPanel } from "./PlayersPanel";
 import { RoundTaskCard } from "./RoundTaskCard";
 import { TranscriptOverlay } from "./TranscriptOverlay";
 import type { MinigameLayoutProps } from "./layouts";
@@ -14,13 +14,14 @@ export const DesktopMinigameLayout = ({
   session,
   teams,
   players,
+  rounds,
   results,
   currentRound,
   currentTask,
-  currentPlayer,
   activePlayerId,
-  currentPlayerId,
-  onPlayerChange,
+  upNextPlayerId,
+  canSwitchPlayer,
+  onRequestSwitchPlayer,
   controller,
   micLabel,
   roundResultScore,
@@ -123,25 +124,19 @@ export const DesktopMinigameLayout = ({
             collapsedWidth={56}
             expandedWidth={360}
           >
-            <div className="space-y-3">
-              <RoundHUD round={currentRound} player={currentPlayer} teams={teams} onNextTurn={onNextTurn} />
-              {mode === "ffa" && players.length > 0 && (
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-xs text-slate-200">
-                  <span className="uppercase tracking-[0.2em] text-slate-400">Current player</span>
-                  <select
-                    value={currentPlayerId}
-                    onChange={(event) => onPlayerChange?.(event.target.value)}
-                    className="rounded-lg border border-white/10 bg-slate-900/60 px-3 py-1 text-xs text-white"
-                  >
-                    {players.map((player) => (
-                      <option key={player.id} value={player.id}>
-                        {player.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
+            <PlayersPanel
+              mode={mode}
+              rounds={rounds}
+              currentRound={currentRound}
+              players={players}
+              teams={teams}
+              results={results}
+              activePlayerId={activePlayerId}
+              upNextPlayerId={upNextPlayerId}
+              canSwitchPlayer={canSwitchPlayer}
+              onRequestSwitchPlayer={onRequestSwitchPlayer}
+              onNextTurn={onNextTurn}
+            />
           </DockPanel>
 
           <DockPanel
