@@ -147,11 +147,8 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
       if (!audioElement) return;
       if (opts?.signal?.aborted) return;
 
-      let entry = bank.getEntry(exerciseId, statementId);
-      if (!(entry?.status === "ready" && entry.blobUrl)) {
-        await bank.ensureReady(exerciseId, statementId, opts?.signal);
-        entry = bank.getEntry(exerciseId, statementId);
-      }
+      await bank.ensureReady(exerciseId, statementId, opts?.signal);
+      const entry = bank.getEntry(exerciseId, statementId);
       if (!entry?.blobUrl) return;
       if (opts?.shouldPlay && !opts.shouldPlay()) {
         logger("play.token_mismatch", { exerciseId, statementId });

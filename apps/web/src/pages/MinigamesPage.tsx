@@ -151,6 +151,14 @@ export const MinigamePlayPage = () => {
     setSetupOpen(true);
   }, [location.state]);
 
+
+  const currentRound = useMemo(
+      () =>
+          minigames.rounds.find((round) => round.id === minigames.currentRoundId) ??
+          minigames.rounds.find((round) => round.status !== "completed"),
+      [minigames.currentRoundId, minigames.rounds]
+  );
+
   useEffect(() => {
     if (mode !== "ffa") return;
     if (!minigames.rounds.length) return;
@@ -183,12 +191,6 @@ export const MinigamePlayPage = () => {
     patchResume
   ]);
 
-  const currentRound = useMemo(
-    () =>
-      minigames.rounds.find((round) => round.id === minigames.currentRoundId) ??
-      minigames.rounds.find((round) => round.status !== "completed"),
-    [minigames.currentRoundId, minigames.rounds]
-  );
   const currentTaskId = currentRound?.task_id;
   const { data: currentTask } = useGetTaskQuery(
     { id: currentTaskId ?? "" },
