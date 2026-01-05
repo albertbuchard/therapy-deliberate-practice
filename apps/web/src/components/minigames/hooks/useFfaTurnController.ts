@@ -56,7 +56,7 @@ export const useFfaTurnController = ({
 }: FfaTurnControllerOptions) => {
   const [startRound] = useStartMinigameRoundMutation();
   const [submitRound] = useSubmitMinigameRoundMutation();
-  const { recordingState, startRecording, stopRecording } = useAudioRecorder();
+  const { recordingState, startRecording, stopRecording, cancelRecording } = useAudioRecorder();
   const [patientEndedAt, setPatientEndedAt] = useState<number | null>(null);
   const playTokenRef = useRef(0);
   const { getEntry, ensureReady, play, stop, bank } = patientAudio;
@@ -304,6 +304,29 @@ export const useFfaTurnController = ({
     recordResponseStop
   ]);
 
+  const abortTurn = useCallback(
+    (reason?: string) => {
+      if (!enabled) return;
+      if (reason) {
+        console.info("[minigames] abort_turn", { reason, roundId: round?.id, playerId });
+      }
+      playTokenRef.current += 1;
+      stop(audioElement);
+      cancelRecording();
+      resetTiming();
+      startedRoundRef.current = null;
+      setState("idle");
+      setSubmitError(null);
+      setPatientEndedAt(null);
+      autoStopRef.current = false;
+      autoFailRef.current = null;
+      if (round) {
+        bank.updateEntry(round.task_id, round.example_id, { status: "ready" });
+      }
+    },
+    [audioElement, bank, cancelRecording, enabled, playerId, resetTiming, round, stop]
+  );
+
   useEffect(() => {
     if (state !== "recording" || maxDurationRemaining == null) return;
     if (maxDurationRemaining <= 0 && !autoStopRef.current) {
@@ -427,6 +450,7 @@ export const useFfaTurnController = ({
     playPatient,
     stopPatient,
     startRecording: startRecordingSafe,
-    stopAndSubmit
+    stopAndSubmit,
+    abortTurn
   };
 };

@@ -13,6 +13,13 @@ import { EndGameResultsOverlay } from "../components/minigames/EndGameResultsOve
 import { useFfaTurnController } from "../components/minigames/hooks/useFfaTurnController";
 import { useTdmMatchController } from "../components/minigames/hooks/useTdmMatchController";
 import { useFullscreen } from "../components/minigames/hooks/useFullscreen";
+import { SwitchPlayerConfirmDialog } from "../components/minigames/SwitchPlayerConfirmDialog";
+import {
+  deriveActivePlayerId,
+  getNextRoundForPlayer,
+  getUpNextPlayerId,
+  roundExampleKey
+} from "../components/minigames/utils/turnUtils";
 import { usePatientAudioBank } from "../patientAudio/usePatientAudioBank";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
@@ -70,8 +77,11 @@ export const MinigamePlayPage = () => {
   const [evaluationModalData, setEvaluationModalData] = useState<EvaluationResult | null>(null);
   const [endGameOpen, setEndGameOpen] = useState(false);
   const [winnerSummary, setWinnerSummary] = useState<WinnerSummary | null>(null);
+  const [switchTargetPlayerId, setSwitchTargetPlayerId] = useState<string | null>(null);
+  const [switchDialogOpen, setSwitchDialogOpen] = useState(false);
   const handledPreselectRef = useRef(false);
   const isMobile = useMediaQuery("(max-width: 768px)");
+  const discardedRoundIdsRef = useRef<Set<string>>(new Set());
 
   const [createSession] = useCreateMinigameSessionMutation();
   const [addTeams] = useAddMinigameTeamsMutation();
@@ -142,17 +152,17 @@ export const MinigamePlayPage = () => {
   }, [location.state]);
 
   useEffect(() => {
-    if (minigames.players.length && !minigames.currentPlayerId && mode === "ffa") {
-      const playerId = minigames.players[0].id;
-      dispatch(setCurrentPlayerId(playerId));
-      const nextForPlayer = minigames.rounds.find(
-        (round) => round.status !== "completed" && round.player_a_id === playerId
-      );
-      if (nextForPlayer && nextForPlayer.id !== minigames.currentRoundId) {
-        dispatch(setCurrentRoundId(nextForPlayer.id));
-      }
+    if (mode !== "ffa") return;
+    if (!minigames.rounds.length) return;
+    if (minigames.currentRoundId && currentRound) return;
+    const nextRound = minigames.rounds
+      .filter((round) => round.status !== "completed")
+      .sort((a, b) => a.position - b.position)
+      .find((round) => !discardedRoundIdsRef.current.has(round.id));
+    if (nextRound && nextRound.id !== minigames.currentRoundId) {
+      dispatch(setCurrentRoundId(nextRound.id));
     }
-  }, [dispatch, minigames.currentPlayerId, minigames.currentRoundId, minigames.players, minigames.rounds, mode]);
+  }, [currentRound, dispatch, minigames.currentRoundId, minigames.rounds, mode]);
 
   useEffect(() => {
     if (!minigames.session?.id) return;
@@ -208,6 +218,26 @@ export const MinigamePlayPage = () => {
       .map((round) => `${round.task_id}:${round.example_id}`)
       .join("|");
   }, [warmupRounds]);
+
+  const completedRoundIdsByPlayer = useMemo(() => {
+    return minigames.results.reduce<Map<string, Set<string>>>((acc, result) => {
+      const set = acc.get(result.player_id) ?? new Set<string>();
+      set.add(result.round_id);
+      acc.set(result.player_id, set);
+      return acc;
+    }, new Map());
+  }, [minigames.results]);
+
+  const playedExampleIdsByPlayer = useMemo(() => {
+    return minigames.results.reduce<Map<string, Set<string>>>((acc, result) => {
+      const round = minigames.rounds.find((entry) => entry.id === result.round_id);
+      if (!round) return acc;
+      const set = acc.get(result.player_id) ?? new Set<string>();
+      set.add(roundExampleKey(round));
+      acc.set(result.player_id, set);
+      return acc;
+    }, new Map());
+  }, [minigames.results, minigames.rounds]);
 
   useEffect(() => {
     warmupRoundsRef.current = warmupRounds;
@@ -269,7 +299,7 @@ export const MinigamePlayPage = () => {
     enabled: mode === "ffa",
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
-    playerId: currentPlayerId,
+    playerId: currentRound?.player_a_id,
     aiMode: settings.aiMode,
     audioElement,
     patientAudio,
@@ -297,11 +327,23 @@ export const MinigamePlayPage = () => {
       const score = payload.score ?? scoreFromEval;
       setRoundResultScore(score ?? null);
       setRoundResultPenalty(payload.timingPenalty ?? null);
-      if (payload.attemptId && currentRound && currentPlayerId && minigames.session) {
+      const resultPlayerId = currentRound?.player_a_id ?? null;
+      if (!payload.attemptId || !currentRound || !resultPlayerId || !minigames.session) {
+        return;
+      }
+      if (currentPlayerId && currentPlayerId !== resultPlayerId) {
+        console.warn("[minigames] result_player_mismatch", {
+          roundId: currentRound.id,
+          expectedPlayerId: resultPlayerId,
+          currentPlayerId
+        });
+        return;
+      }
+      if (payload.attemptId && currentRound && resultPlayerId && minigames.session) {
         dispatch(
           addRoundResult({
             roundId: currentRound.id,
-            playerId: currentPlayerId,
+            playerId: resultPlayerId,
             attemptId: payload.attemptId,
             overallScore: score ?? 0,
             overallPass: payload.evaluation?.overall?.pass ?? true,
@@ -371,24 +413,66 @@ export const MinigamePlayPage = () => {
   });
 
   const controller = mode === "tdm" ? tdmController : ffaController;
-  const activePlayerId = mode === "tdm" ? tdmController.activePlayerId : currentPlayerId;
-  const currentPlayer = minigames.players.find((player) => player.id === activePlayerId);
-
+  const activePlayerId = useMemo(
+    () =>
+      deriveActivePlayerId({
+        mode,
+        currentRound,
+        tdmActivePlayerId: tdmController.activePlayerId
+      }),
+    [currentRound, mode, tdmController.activePlayerId]
+  );
   useEffect(() => {
     setLastTranscript(undefined);
     setLastAttemptId(undefined);
   }, [activePlayerId, currentRound?.id]);
 
-  const handlePlayerChange = (playerId: string) => {
-    dispatch(setCurrentPlayerId(playerId));
-    if (mode !== "ffa" || evaluationModalOpen) return;
-    const nextForPlayer = minigames.rounds.find(
-      (round) => round.status !== "completed" && round.player_a_id === playerId
-    );
-    if (nextForPlayer && nextForPlayer.id !== minigames.currentRoundId) {
-      dispatch(setCurrentRoundId(nextForPlayer.id));
+  useEffect(() => {
+    if (mode !== "ffa") return;
+    if (!currentRound || !activePlayerId) return;
+    const playedExamples = playedExampleIdsByPlayer.get(activePlayerId);
+    const completedRounds = completedRoundIdsByPlayer.get(activePlayerId);
+    if (discardedRoundIdsRef.current.has(currentRound.id)) {
+      const nextRound = getNextRoundForPlayer({
+        rounds: minigames.rounds,
+        playerId: activePlayerId,
+        playedExampleIds: playedExamples,
+        completedRoundIds: completedRounds,
+        discardedRoundIds: discardedRoundIdsRef.current
+      });
+      if (nextRound && nextRound.id !== currentRound.id) {
+        dispatch(setCurrentRoundId(nextRound.id));
+      }
+      return;
     }
-  };
+    const exampleKey = roundExampleKey(currentRound);
+    if (playedExamples?.has(exampleKey) || completedRounds?.has(currentRound.id)) {
+      const nextRound = getNextRoundForPlayer({
+        rounds: minigames.rounds,
+        playerId: activePlayerId,
+        playedExampleIds: playedExamples,
+        completedRoundIds: completedRounds,
+        discardedRoundIds: discardedRoundIdsRef.current
+      });
+      if (nextRound && nextRound.id !== currentRound.id) {
+        dispatch(setCurrentRoundId(nextRound.id));
+      }
+    }
+  }, [
+    activePlayerId,
+    completedRoundIdsByPlayer,
+    currentRound,
+    dispatch,
+    minigames.rounds,
+    mode,
+    playedExampleIdsByPlayer
+  ]);
+
+  useEffect(() => {
+    if (!activePlayerId) return;
+    if (minigames.currentPlayerId === activePlayerId) return;
+    dispatch(setCurrentPlayerId(activePlayerId));
+  }, [activePlayerId, dispatch, minigames.currentPlayerId]);
 
   const handleModeSelect = (selected: "ffa" | "tdm") => {
     setMode(selected);
@@ -493,7 +577,17 @@ export const MinigamePlayPage = () => {
   };
 
   const nextTurn = () => {
-    const next = minigames.rounds.find((round) => round.status !== "completed");
+    const upcoming = [...minigames.rounds]
+      .filter((round) => round.status !== "completed")
+      .sort((a, b) => a.position - b.position);
+    const next = upcoming.find((round) => {
+      if (discardedRoundIdsRef.current.has(round.id)) return false;
+      const completedRounds = completedRoundIdsByPlayer.get(round.player_a_id);
+      if (completedRounds?.has(round.id)) return false;
+      const playedExamples = playedExampleIdsByPlayer.get(round.player_a_id);
+      if (playedExamples?.has(roundExampleKey(round))) return false;
+      return true;
+    });
     dispatch(setCurrentRoundId(next?.id));
     setRoundResultScore(null);
     setRoundResultPenalty(null);
@@ -540,24 +634,67 @@ export const MinigamePlayPage = () => {
 
   const handleCreatePlayer = async (payload: { name: string; avatar: string }) => {
     if (!minigames.session) return;
+    controller.abortTurn("new-player");
+    if (currentRound?.id) {
+      discardedRoundIdsRef.current.add(currentRound.id);
+    }
+    setLastTranscript(undefined);
+    setLastAttemptId(undefined);
+    setRoundResultScore(null);
+    setRoundResultPenalty(null);
     const response = await addPlayers({
       sessionId: minigames.session.id,
       players: [{ name: payload.name, avatar: payload.avatar }]
     }).unwrap();
     const newPlayer = response.players[0];
-    dispatch(setCurrentPlayerId(newPlayer.id));
     const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
     dispatch(setMinigameState(refreshed));
-    let nextForNewPlayer = refreshed.rounds.find(
-      (round) => round.status !== "completed" && round.player_a_id === newPlayer.id
-    );
+    const completedRoundIdsByPlayer = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
+      const set = acc.get(result.player_id) ?? new Set<string>();
+      set.add(result.round_id);
+      acc.set(result.player_id, set);
+      return acc;
+    }, new Map());
+    const playedExampleIdsByPlayer = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
+      const round = refreshed.rounds.find((entry) => entry.id === result.round_id);
+      if (!round) return acc;
+      const set = acc.get(result.player_id) ?? new Set<string>();
+      set.add(roundExampleKey(round));
+      acc.set(result.player_id, set);
+      return acc;
+    }, new Map());
+    let nextForNewPlayer = getNextRoundForPlayer({
+      rounds: refreshed.rounds,
+      playerId: newPlayer.id,
+      playedExampleIds: playedExampleIdsByPlayer.get(newPlayer.id),
+      completedRoundIds: completedRoundIdsByPlayer.get(newPlayer.id),
+      discardedRoundIds: discardedRoundIdsRef.current
+    });
     if (!nextForNewPlayer) {
       await generateRounds({ sessionId: minigames.session.id, count: refreshed.players.length });
       const updated = await fetchMinigameState(minigames.session.id).unwrap();
       dispatch(setMinigameState(updated));
-      nextForNewPlayer = updated.rounds.find(
-        (round) => round.status !== "completed" && round.player_a_id === newPlayer.id
-      );
+      const updatedCompletedRoundIds = updated.results.reduce<Map<string, Set<string>>>((acc, result) => {
+        const set = acc.get(result.player_id) ?? new Set<string>();
+        set.add(result.round_id);
+        acc.set(result.player_id, set);
+        return acc;
+      }, new Map());
+      const updatedExampleIds = updated.results.reduce<Map<string, Set<string>>>((acc, result) => {
+        const round = updated.rounds.find((entry) => entry.id === result.round_id);
+        if (!round) return acc;
+        const set = acc.get(result.player_id) ?? new Set<string>();
+        set.add(roundExampleKey(round));
+        acc.set(result.player_id, set);
+        return acc;
+      }, new Map());
+      nextForNewPlayer = getNextRoundForPlayer({
+        rounds: updated.rounds,
+        playerId: newPlayer.id,
+        playedExampleIds: updatedExampleIds.get(newPlayer.id),
+        completedRoundIds: updatedCompletedRoundIds.get(newPlayer.id),
+        discardedRoundIds: discardedRoundIdsRef.current
+      });
     }
     dispatch(setCurrentRoundId(nextForNewPlayer?.id));
     setNewPlayerOpen(false);
@@ -565,6 +702,7 @@ export const MinigamePlayPage = () => {
 
   const handleRedraw = async () => {
     if (!minigames.session) return;
+    controller.abortTurn("redraw");
     await redrawRound({ sessionId: minigames.session.id }).unwrap();
     const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
     dispatch(setMinigameState(refreshed));
@@ -593,13 +731,6 @@ export const MinigamePlayPage = () => {
     controller.state !== "evaluating" &&
     controller.state !== "patient_playing";
 
-  const currentScore = useMemo(() => {
-    if (!activePlayerId) return null;
-    return minigames.results
-      .filter((result) => result.player_id === activePlayerId)
-      .reduce((total, result) => total + result.overall_score, 0);
-  }, [activePlayerId, minigames.results]);
-
   const previousScore = useMemo(() => {
     if (!activePlayerId) return null;
     const history = minigames.results
@@ -617,6 +748,73 @@ export const MinigamePlayPage = () => {
       lastAttemptId
   );
 
+  const upNextPlayerId = useMemo(() => {
+    if (mode !== "ffa") return null;
+    return getUpNextPlayerId(minigames.rounds);
+  }, [minigames.rounds, mode]);
+
+  const canSwitchPlayer =
+    mode === "ffa" &&
+    controller.state !== "recording" &&
+    controller.state !== "transcribing" &&
+    controller.state !== "evaluating" &&
+    controller.state !== "patient_playing";
+
+  const handleRequestSwitchPlayer = (playerId: string) => {
+    if (!canSwitchPlayer) return;
+    if (playerId === activePlayerId) return;
+    setSwitchTargetPlayerId(playerId);
+    setSwitchDialogOpen(true);
+  };
+
+  const handleConfirmSwitchPlayer = async () => {
+    if (!minigames.session || !switchTargetPlayerId) return;
+    controller.abortTurn("switch-player");
+    if (currentRound?.id) {
+      discardedRoundIdsRef.current.add(currentRound.id);
+    }
+    setLastTranscript(undefined);
+    setLastAttemptId(undefined);
+    setRoundResultScore(null);
+    setRoundResultPenalty(null);
+    let nextRound = getNextRoundForPlayer({
+      rounds: minigames.rounds,
+      playerId: switchTargetPlayerId,
+      playedExampleIds: playedExampleIdsByPlayer.get(switchTargetPlayerId),
+      completedRoundIds: completedRoundIdsByPlayer.get(switchTargetPlayerId),
+      discardedRoundIds: discardedRoundIdsRef.current
+    });
+    if (!nextRound) {
+      await generateRounds({ sessionId: minigames.session.id, count: minigames.players.length });
+      const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
+      dispatch(setMinigameState(refreshed));
+      const refreshedCompletedRounds = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
+        const set = acc.get(result.player_id) ?? new Set<string>();
+        set.add(result.round_id);
+        acc.set(result.player_id, set);
+        return acc;
+      }, new Map());
+      const refreshedExampleIds = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
+        const round = refreshed.rounds.find((entry) => entry.id === result.round_id);
+        if (!round) return acc;
+        const set = acc.get(result.player_id) ?? new Set<string>();
+        set.add(roundExampleKey(round));
+        acc.set(result.player_id, set);
+        return acc;
+      }, new Map());
+      nextRound = getNextRoundForPlayer({
+        rounds: refreshed.rounds,
+        playerId: switchTargetPlayerId,
+        playedExampleIds: refreshedExampleIds.get(switchTargetPlayerId),
+        completedRoundIds: refreshedCompletedRounds.get(switchTargetPlayerId),
+        discardedRoundIds: discardedRoundIdsRef.current
+      });
+    }
+    dispatch(setCurrentRoundId(nextRound?.id));
+    setSwitchDialogOpen(false);
+    setSwitchTargetPlayerId(null);
+  };
+
   return (
     <div className="fixed inset-0 z-0 overflow-hidden bg-slate-950 text-white">
       <AudioReactiveBackground
@@ -632,18 +830,18 @@ export const MinigamePlayPage = () => {
           session={minigames.session}
           teams={minigames.teams}
           players={minigames.players}
+          rounds={minigames.rounds}
           results={minigames.results}
           currentRound={currentRound}
           currentTask={currentTask}
-          currentPlayer={currentPlayer}
           activePlayerId={activePlayerId}
-          currentPlayerId={currentPlayerId}
-          onPlayerChange={handlePlayerChange}
+          upNextPlayerId={upNextPlayerId}
+          canSwitchPlayer={canSwitchPlayer}
+          onRequestSwitchPlayer={handleRequestSwitchPlayer}
           controller={controller}
           micLabel={micLabel}
           roundResultScore={roundResultScore}
           roundResultPenalty={roundResultPenalty}
-          currentScore={currentScore}
           transcriptEligible={transcriptEligible}
           transcriptHidden={minigames.ui.transcriptHidden}
           transcriptText={lastTranscript}
@@ -670,13 +868,14 @@ export const MinigamePlayPage = () => {
           session={minigames.session}
           teams={minigames.teams}
           players={minigames.players}
+          rounds={minigames.rounds}
           results={minigames.results}
           currentRound={currentRound}
           currentTask={currentTask}
-          currentPlayer={currentPlayer}
           activePlayerId={activePlayerId}
-          currentPlayerId={currentPlayerId}
-          onPlayerChange={handlePlayerChange}
+          upNextPlayerId={upNextPlayerId}
+          canSwitchPlayer={canSwitchPlayer}
+          onRequestSwitchPlayer={handleRequestSwitchPlayer}
           controller={controller}
           micLabel={micLabel}
           roundResultScore={roundResultScore}
@@ -750,6 +949,15 @@ export const MinigamePlayPage = () => {
         open={newPlayerOpen}
         onClose={() => setNewPlayerOpen(false)}
         onCreate={handleCreatePlayer}
+      />
+      <SwitchPlayerConfirmDialog
+        open={switchDialogOpen}
+        playerName={minigames.players.find((player) => player.id === switchTargetPlayerId)?.name}
+        onCancel={() => {
+          setSwitchDialogOpen(false);
+          setSwitchTargetPlayerId(null);
+        }}
+        onConfirm={handleConfirmSwitchPlayer}
       />
       {mode === "tdm" && currentRound && (
         <VersusIntroOverlay

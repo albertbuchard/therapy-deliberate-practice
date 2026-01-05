@@ -57,7 +57,7 @@ export const useTdmMatchController = ({
 }: TdmMatchControllerOptions) => {
   const [startRound] = useStartMinigameRoundMutation();
   const [submitRound] = useSubmitMinigameRoundMutation();
-  const { recordingState, startRecording, stopRecording } = useAudioRecorder();
+  const { recordingState, startRecording, stopRecording, cancelRecording } = useAudioRecorder();
   const [patientEndedAt, setPatientEndedAt] = useState<number | null>(null);
   const playTokenRef = useRef(0);
   const { getEntry, ensureReady, play, stop, bank } = patientAudio;
@@ -363,6 +363,31 @@ export const useTdmMatchController = ({
     stop
   ]);
 
+  const abortTurn = useCallback(
+    (reason?: string) => {
+      if (!enabled) return;
+      if (reason) {
+        console.info("[minigames] abort_turn", { reason, roundId: round?.id, playerId: activePlayerId });
+      }
+      playTokenRef.current += 1;
+      stop(audioElement);
+      cancelRecording();
+      resetTiming();
+      startedRoundRef.current = null;
+      introShownRef.current = null;
+      setIntroOpen(false);
+      setState("idle");
+      setSubmitError(null);
+      setPatientEndedAt(null);
+      autoStopRef.current = false;
+      autoFailRef.current = null;
+      if (round) {
+        bank.updateEntry(round.task_id, round.example_id, { status: "ready" });
+      }
+    },
+    [activePlayerId, audioElement, bank, cancelRecording, enabled, resetTiming, round, stop]
+  );
+
   useEffect(() => {
     if (state !== "recording" || maxDurationRemaining == null) return;
     if (maxDurationRemaining <= 0 && !autoStopRef.current) {
@@ -498,6 +523,7 @@ export const useTdmMatchController = ({
     playPatient,
     stopPatient,
     startRecording: startRecordingSafe,
-    stopAndSubmit
+    stopAndSubmit,
+    abortTurn
   };
 };

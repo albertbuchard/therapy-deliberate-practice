@@ -123,7 +123,7 @@ export const NowUpHeader = ({
             </p>
             {activePlayerId && activePlayerId === playerA?.id && (
               <span className="mt-2 inline-flex rounded-full border border-teal-300/50 bg-teal-500/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-teal-100">
-                Speaking
+                Turn
               </span>
             )}
           </div>
@@ -146,7 +146,7 @@ export const NowUpHeader = ({
             </p>
             {activePlayerId && activePlayerId === playerB?.id && (
               <span className="mt-2 inline-flex rounded-full border border-rose-300/50 bg-rose-500/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-rose-100">
-                Speaking
+                Turn
               </span>
             )}
           </div>
@@ -154,14 +154,17 @@ export const NowUpHeader = ({
       ) : (
         <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
           <p className="text-[10px] uppercase tracking-[0.35em] text-slate-400">
-            Current speaker
+            Player turn
           </p>
           <p className="mt-2 text-lg font-semibold text-white">
-            {playerA?.name ?? players.find((player) => player.id === activePlayerId)?.name ?? "Player"}
+            {players.find((player) => player.id === activePlayerId)?.name ?? playerA?.name ?? "Player"} Turn
           </p>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-300">
             {teamSummary(teamA)}
           </p>
+          <span className="mt-2 inline-flex rounded-full border border-teal-300/50 bg-teal-500/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-teal-100">
+            Turn
+          </span>
         </div>
       )}
     </div>
