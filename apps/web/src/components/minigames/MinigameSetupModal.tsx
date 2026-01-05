@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskSelectionStep, type TaskSelectionState } from "./TaskSelectionStep";
 import { VisibilityModeStep } from "./VisibilityModeStep";
 import { PlayersTeamsStep, type PlayerDraft, type TeamDraft } from "./PlayersTeamsStep";
@@ -39,6 +39,8 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
   const [responseTimerSeconds, setResponseTimerSeconds] = useState<number | undefined>(2);
   const [maxResponseEnabled, setMaxResponseEnabled] = useState(false);
   const [maxResponseSeconds, setMaxResponseSeconds] = useState<number | undefined>(15);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const steps = useMemo(
     () => [
@@ -65,6 +67,45 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
     setMaxResponseSeconds(15);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      previousFocusRef.current?.focus();
+      return;
+    }
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const firstFocusable = modalRef.current?.querySelector<HTMLElement>(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+    );
+    firstFocusable?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+      if (event.key === "Tab") {
+        const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        );
+        if (!focusable || focusable.length === 0) return;
+        const items = Array.from(focusable);
+        const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+        let nextIndex = currentIndex;
+        if (event.shiftKey) {
+          nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
+        } else {
+          nextIndex = currentIndex === items.length - 1 ? 0 : currentIndex + 1;
+        }
+        items[nextIndex]?.focus();
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose, open]);
+
   if (!open) return null;
 
   const responseTimerValid =
@@ -80,8 +121,13 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
       className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-6"
       style={{ WebkitOverflowScrolling: "touch" }}
     >
-      <div className="flex min-h-[100dvh] items-center justify-center">
-        <div className="mx-auto w-full max-w-5xl max-h-[90dvh] overflow-y-auto rounded-3xl border border-white/10 bg-slate-950/80 p-8 shadow-2xl backdrop-blur">
+      <div className="flex min-h-[100dvh] items-end justify-center md:items-center">
+        <div
+          ref={modalRef}
+          role="dialog"
+          aria-modal="true"
+          className="mx-auto w-full max-w-5xl max-h-[90dvh] overflow-y-auto rounded-t-3xl border border-white/10 bg-slate-950/80 p-8 shadow-2xl backdrop-blur md:rounded-3xl"
+        >
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-teal-200/70">Setup</p>

@@ -5,7 +5,9 @@ import { UserRouteGuard } from "./components/UserRouteGuard";
 import { LibraryPage } from "./pages/LibraryPage";
 import { ExerciseDetailPage } from "./pages/ExerciseDetailPage";
 import { PracticePage } from "./pages/PracticePage";
-import { MinigamesPage } from "./pages/MinigamesPage";
+import { MinigamePlayPage } from "./pages/MinigamesPage";
+import { MinigameHubPage } from "./pages/MinigameHubPage";
+import { MinigameSessionDetailPage } from "./pages/MinigameSessionDetailPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { AdminPortalPage } from "./pages/AdminPortalPage";
 import { AdminLibraryPage } from "./pages/AdminLibraryPage";
@@ -43,7 +45,31 @@ export const router = createBrowserRouter([
         path: "minigames",
         element: (
           <UserRouteGuard>
-            <MinigamesPage />
+            <MinigameHubPage />
+          </UserRouteGuard>
+        )
+      },
+      {
+        path: "minigames/play",
+        element: (
+          <UserRouteGuard>
+            <MinigamePlayPage />
+          </UserRouteGuard>
+        )
+      },
+      {
+        path: "minigames/play/:sessionId",
+        element: (
+          <UserRouteGuard>
+            <MinigamePlayPage />
+          </UserRouteGuard>
+        )
+      },
+      {
+        path: "minigames/session/:sessionId",
+        element: (
+          <UserRouteGuard>
+            <MinigameSessionDetailPage />
           </UserRouteGuard>
         )
       },
