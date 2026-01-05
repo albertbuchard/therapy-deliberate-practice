@@ -1,12 +1,10 @@
 import { useMemo } from "react";
 import { PlayerCard } from "./PlayerCard";
-import { RoundHUD } from "./RoundHUD";
 import type { MinigamePlayer, MinigameRound, MinigameRoundResult, MinigameTeam } from "../../store/api";
 
 type PlayersPanelProps = {
   mode: "ffa" | "tdm" | null;
   rounds: MinigameRound[];
-  currentRound?: MinigameRound;
   players: MinigamePlayer[];
   teams: MinigameTeam[];
   results: MinigameRoundResult[];
@@ -21,7 +19,6 @@ type PlayersPanelProps = {
 export const PlayersPanel = ({
   mode,
   rounds,
-  currentRound,
   players,
   teams,
   results,
@@ -32,7 +29,6 @@ export const PlayersPanel = ({
   onNextTurn,
   nextTurnDisabled
 }: PlayersPanelProps) => {
-  const activePlayer = players.find((player) => player.id === activePlayerId);
   const scoresByPlayer = useMemo(() => {
     return players.reduce<Record<string, number>>((acc, player) => {
       acc[player.id] = results
@@ -60,63 +56,49 @@ export const PlayersPanel = ({
   }, [players, rounds]);
 
   return (
-    <div className="space-y-3">
-      <RoundHUD
-        round={currentRound}
-        player={activePlayer}
-        teams={teams}
-        onNextTurn={onNextTurn}
-        nextTurnDisabled={nextTurnDisabled}
-      />
-      <div className="rounded-3xl border border-white/10 bg-slate-900/60 px-4 py-4 shadow-[0_0_20px_rgba(15,23,42,0.4)] backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.35em] text-slate-400">Players</p>
-            <p className="mt-1 text-sm font-semibold text-white">
-              {activePlayer ? `${activePlayer.name} Turn` : "Waiting for players"}
-            </p>
-          </div>
-          {mode === "ffa" && activePlayer && (
-            <span className="rounded-full border border-teal-300/50 bg-teal-500/15 px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-teal-100">
-              Player Turn
-            </span>
-          )}
-          {mode === "tdm" && (
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-white/70">
-              Team Match
-            </span>
-          )}
+    <div className="space-y-4">
+      {onNextTurn && (
+        <div className="flex justify-end">
+          <button
+            onClick={onNextTurn}
+            disabled={nextTurnDisabled}
+            className="rounded-full border border-teal-300/60 bg-teal-500/20 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] text-teal-100 hover:border-teal-200 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-white/50"
+          >
+            Next turn
+          </button>
         </div>
-        <div className="mt-4 space-y-2">
-          {players.map((player) => {
-            const team = player.team_id ? teams.find((entry) => entry.id === player.team_id) : null;
-            const isActive = player.id === activePlayerId;
-            const isUpNext = !isActive && player.id === upNextPlayerId;
-            return (
-              <PlayerCard
-                key={player.id}
-                player={player}
-                team={team}
-                score={scoresByPlayer[player.id] ?? 0}
-                remainingRounds={remainingRoundsByPlayer[player.id] ?? 0}
-                isActive={isActive}
-                isUpNext={isUpNext}
-                canSwitch={canSwitchPlayer}
-                onClick={
-                  mode === "ffa" && onRequestSwitchPlayer
-                    ? () => onRequestSwitchPlayer(player.id)
-                    : undefined
-                }
-              />
-            );
-          })}
-        </div>
-        {mode === "ffa" && !canSwitchPlayer && (
-          <p className="mt-3 text-[10px] uppercase tracking-[0.3em] text-slate-400">
-            Finish the current action to switch players.
-          </p>
-        )}
+      )}
+
+      <div className="space-y-2">
+        {players.map((player) => {
+          const team = player.team_id ? teams.find((entry) => entry.id === player.team_id) : null;
+          const isActive = player.id === activePlayerId;
+          const isUpNext = !isActive && player.id === upNextPlayerId;
+          return (
+            <PlayerCard
+              key={player.id}
+              player={player}
+              team={team}
+              score={scoresByPlayer[player.id] ?? 0}
+              remainingRounds={remainingRoundsByPlayer[player.id] ?? 0}
+              isActive={isActive}
+              isUpNext={isUpNext}
+              canSwitch={canSwitchPlayer}
+              onClick={
+                mode === "ffa" && onRequestSwitchPlayer
+                  ? () => onRequestSwitchPlayer(player.id)
+                  : undefined
+              }
+            />
+          );
+        })}
       </div>
+
+      {mode === "ffa" && !canSwitchPlayer && (
+        <p className="text-[10px] uppercase tracking-[0.3em] text-slate-400">
+          Finish the current action to switch players.
+        </p>
+      )}
     </div>
   );
 };

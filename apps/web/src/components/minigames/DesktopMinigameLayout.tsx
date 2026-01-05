@@ -137,7 +137,6 @@ export const DesktopMinigameLayout = ({
             <PlayersPanel
               mode={mode}
               rounds={rounds}
-              currentRound={currentRound}
               players={players}
               teams={teams}
               results={results}
