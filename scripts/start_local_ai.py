@@ -15,9 +15,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 
+STT_PORT = int(os.getenv("LOCAL_STT_PORT", "7001"))
 LLM_PORT = int(os.getenv("LOCAL_LLM_PORT", "7002"))
 TTS_PORT = int(os.getenv("LOCAL_TTS_PORT", "7003"))
 
+STT_MODEL = os.getenv("LOCAL_STT_MODEL", "whisper-large-v3")
 LLM_MODEL_MLX = os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen3-4B-MLX-4bit")
 LLM_MODEL_HF = os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
 
@@ -81,9 +83,23 @@ class EvaluateRequest(BaseModel):
     transcript: Dict[str, Any]
 
 
+class SttRequest(BaseModel):
+    audio: str
+
+
 class TtsRequest(BaseModel):
     text: str
     language: Optional[str] = None
+
+
+class TranscriptResponse(BaseModel):
+    text: str
+    confidence: Optional[float] = None
+    words: Optional[list[Dict[str, Any]]] = None
+    segments: Optional[list[Dict[str, Any]]] = None
+
+    class Config:
+        extra = "allow"
 
 
 class TtsResponse(BaseModel):
@@ -148,6 +164,13 @@ class TtsRuntime:
     sample_rate: int
 
 
+@dataclass
+class SttRuntime:
+    mode: str
+    model_name: str
+    model: Any
+
+
 def load_tts_runtime(use_mlx: bool) -> TtsRuntime:
     if use_mlx:
         require_module("mlx_audio", "Install mlx-audio to run MLX TTS inference.")
@@ -169,6 +192,29 @@ def load_tts_runtime(use_mlx: bool) -> TtsRuntime:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = ChatterboxMultilingualTTS.from_pretrained(device=device)
     return TtsRuntime(mode="hf", model_name="chatterbox-mls", model=model, sample_rate=model.sr)
+
+
+def resolve_stt_model_name() -> str:
+    if STT_MODEL == "whisper-large-v3":
+        return "large-v3"
+    if STT_MODEL.startswith("whisper-"):
+        return STT_MODEL.replace("whisper-", "")
+    return STT_MODEL
+
+
+def load_stt_runtime(use_mlx: bool) -> SttRuntime:
+    if use_mlx:
+        require_module("mlx_whisper", "Install mlx-whisper to run MLX STT inference.")
+        from mlx_whisper import transcribe
+
+        return SttRuntime(mode="mlx", model_name=STT_MODEL, model=transcribe)
+
+    require_module("faster_whisper", "Install faster-whisper to run local STT inference.")
+    from faster_whisper import WhisperModel
+
+    model_name = resolve_stt_model_name()
+    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    return SttRuntime(mode="hf", model_name=model_name, model=model)
 
 
 def build_prompt(payload: Dict[str, Any]) -> str:
@@ -228,6 +274,75 @@ def create_llm_app(runtime: LlmRuntime) -> FastAPI:
         )
         return parsed
 
+    @app.post("/v1/responses")
+    def responses(payload: EvaluateRequest) -> Dict[str, Any]:
+        return evaluate(payload)
+
+    return app
+
+
+def decode_audio_payload(audio_b64: str) -> bytes:
+    content = audio_b64.strip()
+    if "base64," in content:
+        content = content.split("base64,", 1)[1]
+    return base64.b64decode(content)
+
+
+def transcribe_audio(runtime: SttRuntime, audio_b64: str) -> TranscriptResponse:
+    import tempfile
+
+    audio_bytes = decode_audio_payload(audio_b64)
+    with tempfile.NamedTemporaryFile(suffix=".audio") as temp_audio:
+        temp_audio.write(audio_bytes)
+        temp_audio.flush()
+
+        if runtime.mode == "mlx":
+            result = runtime.model(temp_audio.name)
+            text = (result.get("text") or "").strip()
+            response = {
+                "text": text,
+                "segments": result.get("segments")
+            }
+            return TranscriptResponse(**response)
+
+        segments, info = runtime.model.transcribe(temp_audio.name)
+        segments_list = []
+        text_parts = []
+        for segment in segments:
+            text_parts.append(segment.text)
+            segments_list.append(
+                {
+                    "text": segment.text,
+                    "start": segment.start,
+                    "end": segment.end
+                }
+            )
+        response = {
+            "text": "".join(text_parts).strip(),
+            "confidence": getattr(info, "language_probability", None),
+            "segments": segments_list or None
+        }
+        return TranscriptResponse(**response)
+
+
+def create_stt_app(runtime: SttRuntime) -> FastAPI:
+    app = FastAPI(title="Local STT", version="1.0")
+
+    @app.get("/health")
+    def health() -> Dict[str, Any]:
+        return {"status": "ok", "mode": runtime.mode, "model": runtime.model_name}
+
+    @app.post("/transcribe", response_model=TranscriptResponse)
+    def transcribe(payload: SttRequest) -> TranscriptResponse:
+        audio = payload.audio.strip()
+        if not audio:
+            raise HTTPException(status_code=400, detail="Audio is required.")
+        return transcribe_audio(runtime, audio)
+
+    @app.post("/v1/audio/transcriptions", response_model=TranscriptResponse)
+    def transcribe_openai(payload: SttRequest) -> TranscriptResponse:
+        return transcribe(payload)
+
     return app
 
 
@@ -278,10 +393,12 @@ def main() -> None:
     use_mlx = is_apple_silicon()
     logger.info("Starting local AI servers (mode=%s)", "mlx" if use_mlx else "hf")
 
+    stt_runtime = load_stt_runtime(use_mlx)
     llm_runtime = load_llm_runtime(use_mlx)
     tts_runtime = load_tts_runtime(use_mlx)
 
     threads = [
+        threading.Thread(target=serve, args=(create_stt_app(stt_runtime), STT_PORT), daemon=True),
         threading.Thread(target=serve, args=(create_llm_app(llm_runtime), LLM_PORT), daemon=True),
         threading.Thread(target=serve, args=(create_tts_app(tts_runtime), TTS_PORT), daemon=True)
     ]
@@ -289,6 +406,7 @@ def main() -> None:
     for thread in threads:
         thread.start()
 
+    logger.info("STT server listening on http://localhost:%s", STT_PORT)
     logger.info("LLM server listening on http://localhost:%s", LLM_PORT)
     logger.info("TTS server listening on http://localhost:%s", TTS_PORT)
 
