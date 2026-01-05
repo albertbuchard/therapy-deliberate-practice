@@ -69,7 +69,7 @@ SPEC = {
 
 
 async def run(req: RunRequest, ctx: RunContext):
-    input_text = (req.json or {}).get("input", "")
+    input_text = (req.payload or {}).get("input", "")
     payload = f"KOKORO:{input_text}".encode("utf-8")
     if req.stream:
         async def generator() -> AsyncIterator[bytes]:

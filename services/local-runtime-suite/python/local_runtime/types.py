@@ -3,15 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 EndpointLiteral = Literal["responses", "audio.speech", "audio.transcriptions", "audio.translations"]
 
 
 class RunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     endpoint: EndpointLiteral
     model: str | None = None
-    json: dict | None = None
+    payload: dict | None = Field(default=None, alias="json")
     form: dict | None = None
     files: dict | None = None
     stream: bool | None = None

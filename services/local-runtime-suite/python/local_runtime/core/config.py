@@ -17,10 +17,17 @@ class RuntimeConfig(BaseModel):
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RuntimeConfig":
-        config_path = path or Path(os.getenv("LOCAL_RUNTIME_CONFIG", ""))
-        if not config_path:
-            config_path = Path.home() / ".therapy" / "local-runtime" / "config.json"
+        if path is not None:
+            config_path = Path(path).expanduser()
+        else:
+            raw = os.getenv("LOCAL_RUNTIME_CONFIG")
+            if raw and raw.strip():
+                config_path = Path(raw).expanduser()
+            else:
+                config_path = Path.home() / ".therapy" / "local-runtime" / "config.json"
         if not config_path.exists():
+            return cls()
+        if not config_path.is_file():
             return cls()
         data: dict[str, Any] = json.loads(config_path.read_text())
         return cls.model_validate(data)

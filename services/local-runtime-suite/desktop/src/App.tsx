@@ -174,12 +174,16 @@ export const App = () => {
 
   useEffect(() => {
     refreshStatus();
-    refreshModels();
     refreshLogs();
     refreshConnectionInfo();
     refreshConfig();
     runDoctor();
   }, []);
+
+  useEffect(() => {
+    if (status !== "running") return;
+    refreshModels();
+  }, [status]);
 
   useEffect(() => {
     setSaveState("idle");
