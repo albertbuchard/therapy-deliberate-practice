@@ -171,17 +171,17 @@ export const MinigamePlayPage = () => {
     setSetupOpen(true);
   }, [location.state]);
 
-
   const currentRound = useMemo(
-      () =>
-          minigames.rounds.find((round) => round.id === minigames.currentRoundId) ??
-          minigames.rounds.find((round) => round.status !== "completed"),
-      [minigames.currentRoundId, minigames.rounds]
+    () =>
+      minigames.rounds.find((round) => round.id === minigames.currentRoundId) ??
+      minigames.rounds.find((round) => round.status !== "completed"),
+    [minigames.currentRoundId, minigames.rounds]
   );
 
   useEffect(() => {
     if (mode !== "ffa") return;
     if (!minigames.rounds.length) return;
+    if (evaluationModalOpen) return;
     if (minigames.currentRoundId && currentRound) return;
     const nextRound = minigames.rounds
       .filter((round) => round.status !== "completed")
@@ -190,7 +190,7 @@ export const MinigamePlayPage = () => {
     if (nextRound && nextRound.id !== minigames.currentRoundId) {
       dispatch(setCurrentRoundId(nextRound.id));
     }
-  }, [currentRound, dispatch, minigames.currentRoundId, minigames.rounds, mode]);
+  }, [currentRound, dispatch, evaluationModalOpen, minigames.currentRoundId, minigames.rounds, mode]);
 
   useEffect(() => {
     if (!minigames.session?.id) return;
@@ -452,6 +452,7 @@ export const MinigamePlayPage = () => {
   useEffect(() => {
     if (mode !== "ffa") return;
     if (!currentRound || !activePlayerId) return;
+    if (recapLock) return;
     const playedExamples = playedExampleIdsByPlayer.get(activePlayerId);
     const completedRounds = completedRoundIdsByPlayer.get(activePlayerId);
     if (discardedRoundIdsRef.current.has(currentRound.id)) {
@@ -487,7 +488,8 @@ export const MinigamePlayPage = () => {
     dispatch,
     minigames.rounds,
     mode,
-    playedExampleIdsByPlayer
+    playedExampleIdsByPlayer,
+    recapLock
   ]);
 
   useEffect(() => {
@@ -662,6 +664,12 @@ export const MinigamePlayPage = () => {
     nextTurn();
   };
 
+  const handleAddPlayer = () => {
+    setEvaluationModalOpen(false);
+    setEvaluationModalData(null);
+    setNewPlayerOpen(true);
+  };
+
   const handleCreatePlayer = async (payload: { name: string; avatar: string }) => {
     if (!minigames.session) return;
     controller.abortTurn("new-player");
@@ -768,7 +776,7 @@ export const MinigamePlayPage = () => {
     return "Record";
   }, [controller.maxDurationRemaining, controller.responseCountdownLabel, controller.state]);
 
-  const nextTurnDisabled = Boolean(promptExhaustedMessage);
+  const nextTurnDisabled = Boolean(promptExhaustedMessage || evaluationModalOpen);
 
   const canRedraw =
     mode === "tdm" &&
@@ -805,7 +813,15 @@ export const MinigamePlayPage = () => {
     controller.state !== "recording" &&
     controller.state !== "transcribing" &&
     controller.state !== "evaluating" &&
-    controller.state !== "patient_playing";
+    controller.state !== "patient_playing" &&
+    !evaluationModalOpen;
+
+  const recapLock =
+    mode === "ffa" &&
+    (evaluationModalOpen ||
+      newPlayerOpen ||
+      switchDialogOpen ||
+      (controller.state === "complete" && (lastAttemptId || roundResultScore != null)));
 
   const handleRequestSwitchPlayer = (playerId: string) => {
     if (!canSwitchPlayer) return;
@@ -1003,7 +1019,7 @@ export const MinigamePlayPage = () => {
           setEvaluationModalData(null);
         }}
         onNextRound={handleNextRound}
-        onAddPlayer={mode === "ffa" ? () => setNewPlayerOpen(true) : undefined}
+        onAddPlayer={mode === "ffa" ? handleAddPlayer : undefined}
       />
       <NewPlayerDialog
         open={newPlayerOpen}
