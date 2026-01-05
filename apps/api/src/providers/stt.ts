@@ -1,40 +1,25 @@
 import type { SttProvider, SttTranscribeOptions } from "@deliberate/shared";
-import type { RuntimeEnv } from "../env";
 import type { LogFn } from "../utils/logger";
-import { safeTruncate } from "../utils/logger";
-import { LOCAL_STT_MODEL, OPENAI_STT_MODEL } from "./models";
+import { OPENAI_STT_MODEL } from "./models";
 import { BaseSttProvider } from "./base";
 import { transcribeWithOpenAI } from "./openaiStt";
-
-const healthCheck = async (url: string) => {
-  try {
-    const response = await fetch(`${url}/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-};
+import { localSuiteHealthCheck, localSuiteTranscribe } from "./localSuite";
 
 class LocalWhisperSttProviderImpl extends BaseSttProvider {
-  constructor(private env: RuntimeEnv, logger?: LogFn) {
-    super("local", LOCAL_STT_MODEL, logger);
+  constructor(private baseUrl: string, logger?: LogFn) {
+    super("local", undefined, logger);
   }
 
   healthCheck() {
-    return healthCheck(this.env.localSttUrl);
+    return localSuiteHealthCheck(this.baseUrl);
   }
 
   protected async doTranscribe(audio: string) {
-    const response = await fetch(`${this.env.localSttUrl}/transcribe`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio })
+    const result = await localSuiteTranscribe({
+      baseUrl: this.baseUrl,
+      audioBase64: audio
     });
-    if (!response.ok) {
-      const body = safeTruncate(await response.text(), 200);
-      throw new Error(`Local STT failed (${response.status}): ${body}`);
-    }
-    return { value: await response.json() };
+    return { value: result.transcript };
   }
 }
 
@@ -77,8 +62,8 @@ class OpenAISttProviderImpl extends BaseSttProvider {
   }
 }
 
-export const LocalWhisperSttProvider = (env: RuntimeEnv, logger?: LogFn): SttProvider =>
-  new LocalWhisperSttProviderImpl(env, logger);
+export const LocalWhisperSttProvider = (baseUrl: string, logger?: LogFn): SttProvider =>
+  new LocalWhisperSttProviderImpl(baseUrl, logger);
 
 export const OpenAISttProvider = (
   { apiKey }: { apiKey: string },

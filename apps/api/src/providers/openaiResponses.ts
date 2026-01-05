@@ -171,7 +171,7 @@ export const createTextResponse = async ({
   temperature,
   client
 }: OpenAIResponseInput): Promise<OpenAITextResult> => {
-  const openai = client ?? getOpenAIClient(apiKey);
+  const openai = client ?? getOpenAIClient({ apiKey });
   let response: unknown;
   try {
     response = await openai.responses.create({
@@ -207,7 +207,7 @@ export const createStructuredResponse = async <T>({
   client
 }: StructuredResponseInput<T>): Promise<OpenAIResponseResult<T>> => {
   const jsonSchema = buildStrictJsonSchema(schema, schemaName);
-  const openai = client ?? getOpenAIClient(apiKey);
+  const openai = client ?? getOpenAIClient({ apiKey });
   let response: unknown;
   try {
     response = await openai.responses.create({

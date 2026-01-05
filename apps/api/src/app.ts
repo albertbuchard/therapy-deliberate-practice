@@ -36,7 +36,7 @@ import {
 } from "@deliberate/shared";
 import { selectLlmProvider, selectSttProvider } from "./providers";
 import { attemptJsonRepair } from "./utils/jsonRepair";
-import type { ProviderMode, RuntimeEnv } from "./env";
+import type { RuntimeEnv } from "./env";
 import type { ApiDatabase } from "./db/types";
 import { createAdminAuth, resolveAdminStatus } from "./middleware/adminAuth";
 import { createUserAuth } from "./middleware/userAuth";
@@ -51,6 +51,15 @@ import {
   safeTruncate
 } from "./utils/logger";
 import { selectTtsProvider } from "./providers";
+import {
+  assertLocalBaseUrl,
+  assertOpenAiKey,
+  buildEnvAiConfig,
+  resolveEffectiveAiConfig,
+  type EffectiveAiConfig
+} from "./providers/config";
+import { isProviderConfigError } from "./providers/providerErrors";
+import { localSuiteHealthCheck } from "./providers/localSuite";
 import { getOrCreateTtsAsset, type TtsStorage } from "./services/ttsService";
 import { fetchLeaderboardEntries } from "./services/leaderboardService";
 import {
@@ -355,8 +364,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
   };
 
   const normalizeSettings = (settings: typeof userSettings.$inferSelect) => {
-    const localSttUrl = settings.local_stt_url ?? env.localSttUrl;
-    const localLlmUrl = settings.local_llm_url ?? env.localLlmUrl;
+    const localSttUrl = settings.local_stt_url ?? null;
+    const localLlmUrl = settings.local_llm_url ?? null;
     return {
       aiMode: settings.ai_mode,
       localAiBaseUrl: deriveLocalBaseUrl(localLlmUrl, localSttUrl),
@@ -440,18 +449,43 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
   app.get("/api/v1/health", (c) => c.json({ status: "ok" }));
 
-  app.get("/api/v1/health/local-ai", async (c) => {
+  app.get("/api/v1/health/local-ai", userAuth, async (c) => {
     const log = logger.child({ requestId: c.get("requestId"), endpoint: "health_local_ai" });
-    const stt = await selectSttProvider("local_only", env, env.openaiApiKey).then(
-      () => true,
-      () => false
-    );
-    const llm = await selectLlmProvider("local_only", env, env.openaiApiKey).then(
-      () => true,
-      () => false
-    );
-    log.info("Local AI health check completed", { stt, llm });
-    return c.json({ stt, llm });
+    const user = c.get("user");
+    const settings = await getUserSettingsRow(user.id);
+    if (!settings) {
+      return c.json({ error: "Settings not found." }, 404);
+    }
+
+    let config: EffectiveAiConfig;
+    try {
+      config = await resolveEffectiveAiConfig({
+        env,
+        settings,
+        decryptOpenAiKey
+      });
+    } catch (error) {
+      if (isProviderConfigError(error)) {
+        log.warn("Local AI config error", { code: error.code });
+        return c.json({ error: error.message, code: error.code }, error.status);
+      }
+      logServerError("health.local_ai.config_error", error as Error, {
+        requestId: c.get("requestId"),
+        userId: user.id
+      });
+      return c.json({ error: "Local AI configuration failed." }, 500);
+    }
+
+    if (!config.local.baseUrl) {
+      return c.json(
+        { error: "Local AI mode requires a local base URL.", code: "LOCAL_BASE_URL_MISSING" },
+        400
+      );
+    }
+
+    const healthy = await localSuiteHealthCheck(config.local.baseUrl);
+    log.info("Local AI health check completed", { stt: healthy, llm: healthy, tts: healthy });
+    return c.json({ stt: healthy, llm: healthy, tts: healthy });
   });
 
   app.get("/api/v1/tasks", async (c) => {
@@ -975,11 +1009,26 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
   const ttsConfigReady = Boolean(env.r2Bucket);
   const selectPatientTtsProvider = async (
-    mode: ProviderMode,
+    config: EffectiveAiConfig,
     logEvent: (level: "debug" | "info" | "warn" | "error", event: string, fields?: Record<string, unknown>) => void
   ) => {
-    logEvent("info", "tts.select.start", { mode });
-    const ttsSelection = await selectTtsProvider(mode, env, env.openaiApiKey, logEvent);
+    logEvent("info", "tts.select.start", { mode: config.mode });
+    const ttsSelection = await selectTtsProvider(
+      config,
+      {
+        openai: {
+          model: env.openaiTtsModel,
+          voice: env.openaiTtsVoice,
+          format: env.openaiTtsFormat,
+          instructions: env.openaiTtsInstructions
+        },
+        local: {
+          voice: env.localTtsVoice,
+          format: env.localTtsFormat
+        }
+      },
+      logEvent
+    );
     logEvent("info", "tts.select.ok", {
       selected: { kind: ttsSelection.provider.kind, model: ttsSelection.provider.model },
       health: ttsSelection.health
@@ -1053,7 +1102,24 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json({ error: "Settings not found." }, 404);
     }
 
-    const mode = (settings.ai_mode ?? env.aiMode) as ProviderMode;
+    let config: EffectiveAiConfig;
+    try {
+      config = await resolveEffectiveAiConfig({
+        env,
+        settings,
+        decryptOpenAiKey
+      });
+    } catch (error) {
+      if (isProviderConfigError(error)) {
+        logEvent("warn", "tts.prefetch.config_error", { code: error.code });
+        return c.json({ error: error.message, code: error.code }, error.status);
+      }
+      logServerError("tts.prefetch.config_error", error as Error, {
+        requestId,
+        userId: user?.id ?? null
+      });
+      return c.json({ error: "TTS configuration failed." }, 500);
+    }
 
     const schema = z.object({
       exercise_id: z.string(),
@@ -1100,7 +1166,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
     let ttsProvider: Awaited<ReturnType<typeof selectPatientTtsProvider>>;
     try {
-      ttsProvider = await selectPatientTtsProvider(mode, logEvent);
+      ttsProvider = await selectPatientTtsProvider(config, logEvent);
     } catch (error) {
       logEvent("error", "tts.select.error", { error: safeError(error) });
       return c.json(
@@ -1196,10 +1262,27 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json({ error: "Patient text too long for TTS." }, 400);
     }
 
-    const mode = (settings.ai_mode ?? env.aiMode) as ProviderMode;
+    let config: EffectiveAiConfig;
+    try {
+      config = await resolveEffectiveAiConfig({
+        env,
+        settings,
+        decryptOpenAiKey
+      });
+    } catch (error) {
+      if (isProviderConfigError(error)) {
+        logEvent("warn", "tts.prefetch_batch.config_error", { code: error.code });
+        return c.json({ error: error.message, code: error.code }, error.status);
+      }
+      logServerError("tts.prefetch_batch.config_error", error as Error, {
+        requestId,
+        userId: user?.id ?? null
+      });
+      return c.json({ error: "TTS configuration failed." }, 500);
+    }
     let ttsProvider: Awaited<ReturnType<typeof selectPatientTtsProvider>>;
     try {
-      ttsProvider = await selectPatientTtsProvider(mode, logEvent);
+      ttsProvider = await selectPatientTtsProvider(config, logEvent);
     } catch (error) {
       logEvent("error", "tts.select.error", { error: safeError(error) });
       return c.json(
@@ -1301,7 +1384,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     }
     let llmProvider;
     try {
-      const selection = await selectLlmProvider("openai_only", env, env.openaiApiKey);
+      const selection = await selectLlmProvider(buildEnvAiConfig(env, "openai_only"), log);
       llmProvider = selection.provider;
     } catch (error) {
       log.error("LLM provider selection failed", { error: safeError(error) });
@@ -1724,7 +1807,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
     let llmProvider;
     try {
-      const selection = await selectLlmProvider("openai_only", env, env.openaiApiKey);
+      const selection = await selectLlmProvider(buildEnvAiConfig(env, "openai_only"), log);
       llmProvider = selection.provider;
     } catch (error) {
       log.error("LLM provider selection failed", { error: safeError(error) });
@@ -2301,60 +2384,59 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       };
     }
 
-    const mode = (settings.ai_mode ?? env.aiMode) as ProviderMode;
-    const envWithOverrides = {
-      ...env,
-      localSttUrl: settings.local_stt_url ?? env.localSttUrl,
-      localLlmUrl: settings.local_llm_url ?? env.localLlmUrl
-    };
-
-    let openaiApiKey = env.openaiApiKey;
-    if (settings.openai_key_ciphertext && settings.openai_key_iv) {
-      if (!env.openaiKeyEncryptionSecret) {
-        logServerError(
-          "practice.openai_key.encryption_secret_missing",
-          new Error("OPENAI_KEY_ENCRYPTION_SECRET is not configured."),
-          { requestId, userId: user.id }
-        );
+    let config: EffectiveAiConfig;
+    try {
+      config = await resolveEffectiveAiConfig({
+        env,
+        settings,
+        decryptOpenAiKey
+      });
+    } catch (error) {
+      if (isProviderConfigError(error)) {
+        logEvent("warn", "auth.context.error", { reason: error.code, mode: settings.ai_mode });
         return {
-          status: 500,
+          status: error.status,
           payload: {
             requestId,
-            errors: [
-              { stage: "input", message: "OPENAI_KEY_ENCRYPTION_SECRET is not configured." }
-            ]
+            errors: [{ stage: "input", message: error.message }]
           }
         };
       }
-      openaiApiKey = await decryptOpenAiKey(env.openaiKeyEncryptionSecret, {
-        ciphertextB64: settings.openai_key_ciphertext,
-        ivB64: settings.openai_key_iv
-      });
+      logServerError("practice.config.error", error as Error, { requestId, userId: user.id });
+      return {
+        status: 500,
+        payload: { requestId, errors: [{ stage: "input", message: "AI configuration failed." }] }
+      };
+    }
+
+    try {
+      assertOpenAiKey(config);
+      assertLocalBaseUrl(config);
+    } catch (error) {
+      if (isProviderConfigError(error)) {
+        logEvent("warn", "auth.context.error", { reason: error.code, mode: settings.ai_mode });
+        return {
+          status: error.status,
+          payload: {
+            requestId,
+            errors: [{ stage: "input", message: error.message }]
+          }
+        };
+      }
+      logServerError("practice.config.error", error as Error, { requestId, userId: user.id });
+      return {
+        status: 500,
+        payload: { requestId, errors: [{ stage: "input", message: "AI configuration failed." }] }
+      };
     }
 
     logEvent("info", "auth.context.ok", {
-      mode,
+      mode: config.mode,
       store_audio: settings.store_audio ?? false,
-      has_openai_key: Boolean(openaiApiKey),
-      local_stt_configured: Boolean(envWithOverrides.localSttUrl),
-      local_llm_configured: Boolean(envWithOverrides.localLlmUrl)
+      has_openai_key: Boolean(config.openai.apiKey),
+      local_base_configured: Boolean(config.local.baseUrl),
+      resolved_from: config.resolvedFrom
     });
-
-    if (mode === "openai_only" && !openaiApiKey) {
-      logEvent("warn", "auth.context.error", { reason: "openai_key_missing", mode });
-      return {
-        status: 400,
-        payload: {
-          requestId,
-          errors: [
-            {
-              stage: "input",
-              message: "OpenAI mode requires an API key. Add one in Settings to continue."
-            }
-          ]
-        }
-      };
-    }
 
     let taskId = input.task_id ?? null;
     let exampleId = input.example_id ?? null;
@@ -2467,9 +2549,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         transcript_length: transcript.text?.length ?? 0
       });
     } else {
-      logEvent("info", "stt.select.start", { mode });
+      logEvent("info", "stt.select.start", { mode: config.mode });
       try {
-        const sttSelection = await selectSttProvider(mode, envWithOverrides, openaiApiKey, logEvent);
+        const sttSelection = await selectSttProvider(config, logEvent);
         sttProvider = sttSelection.provider;
         sttMeta = { kind: sttProvider.kind, model: sttProvider.model ?? "unknown" };
         logEvent("info", "stt.select.ok", {
@@ -2523,9 +2605,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const skipScoring = Boolean(input.skip_scoring);
     let llmProvider;
     if (!skipScoring) {
-      logEvent("info", "llm.select.start", { mode });
+      logEvent("info", "llm.select.start", { mode: config.mode });
       try {
-        const llmSelection = await selectLlmProvider(mode, envWithOverrides, openaiApiKey, logEvent);
+        const llmSelection = await selectLlmProvider(config, logEvent);
         llmProvider = llmSelection.provider;
         logEvent("info", "llm.select.ok", {
           selected: { kind: llmProvider.kind, model: llmProvider.model },

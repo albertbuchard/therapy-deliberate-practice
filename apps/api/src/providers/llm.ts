@@ -6,43 +6,34 @@ import type {
   DeliberatePracticeTaskV2,
   ParseMode
 } from "@deliberate/shared";
-import type { RuntimeEnv } from "../env";
 import type { LogFn } from "../utils/logger";
-import { safeTruncate } from "../utils/logger";
 import { deliberatePracticeTaskV2Schema, evaluationResultSchema, llmParseSchema } from "@deliberate/shared";
 import { createStructuredResponse } from "./openaiResponses";
 import { OPENAI_LLM_MODEL } from "./models";
 import { BaseLlmProvider } from "./base";
-
-const healthCheck = async (url: string) => {
-  try {
-    const response = await fetch(`${url}/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-};
+import { localSuiteHealthCheck, localSuiteStructuredResponse } from "./localSuite";
 
 class LocalMlxLlmProviderImpl extends BaseLlmProvider {
-  constructor(private env: RuntimeEnv, logger?: LogFn) {
-    super("local", env.localLlmModel, logger);
+  constructor(private baseUrl: string, logger?: LogFn) {
+    super("local", undefined, logger);
   }
 
   healthCheck() {
-    return healthCheck(this.env.localLlmUrl);
+    return localSuiteHealthCheck(this.baseUrl);
   }
 
   protected async doEvaluateDeliberatePractice(input: EvaluationInput) {
-    const response = await fetch(`${this.env.localLlmUrl}/evaluate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input)
+    const systemPrompt =
+      "You are an evaluator for psychotherapy deliberate practice tasks. Return strict JSON only that matches EvaluationResult with criterion_scores.";
+    const result = await localSuiteStructuredResponse<EvaluationResult>({
+      baseUrl: this.baseUrl,
+      temperature: 0.2,
+      instructions: systemPrompt,
+      input: JSON.stringify(input),
+      schemaName: "EvaluationResult",
+      schema: evaluationResultSchema
     });
-    if (!response.ok) {
-      const body = safeTruncate(await response.text(), 200);
-      throw new Error(`Local LLM failed (${response.status}): ${body}`);
-    }
-    return { value: (await response.json()) as EvaluationResult };
+    return { value: result.value, requestId: result.responseId };
   }
 
   protected async doParseExercise(_input: { sourceText: string; parseMode?: ParseMode }) {
@@ -297,8 +288,8 @@ Translation rules:
   }
 }
 
-export const LocalMlxLlmProvider = (env: RuntimeEnv, logger?: LogFn): LlmProvider =>
-  new LocalMlxLlmProviderImpl(env, logger);
+export const LocalMlxLlmProvider = (baseUrl: string, logger?: LogFn): LlmProvider =>
+  new LocalMlxLlmProviderImpl(baseUrl, logger);
 
 export const OpenAILlmProvider = (
   { apiKey }: { apiKey: string },

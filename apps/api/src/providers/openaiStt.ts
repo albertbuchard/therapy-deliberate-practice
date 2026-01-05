@@ -62,7 +62,7 @@ export const transcribeWithOpenAI = async (
   },
   client?: OpenAI
 ): Promise<OpenAiSttResult> => {
-  const openai = client ?? getOpenAIClient(input.apiKey);
+  const openai = client ?? getOpenAIClient({ apiKey: input.apiKey });
   const model = input.opts?.model ?? "gpt-4o-mini-transcribe";
   const isDiarize = model === "gpt-4o-transcribe-diarize";
   const responseFormat = input.opts?.responseFormat ?? (isDiarize ? "diarized_json" : undefined);
