@@ -284,7 +284,7 @@ async function ensureSidecar(plan) {
           const downloaded = [];
           for (const target of plan.targets) {
             const filename = `${sidecarName}-${target}${exeSuffix}`;
-            const url = `${baseUrl.replace(/\\/$/, "")}/${filename}`;
+            const url = `${baseUrl.replace(/\/$/, "")}/${filename}`;
             const destination = path.resolve(downloadDir, filename);
             await downloadFile(url, destination);
             downloaded.push(destination);
@@ -295,7 +295,7 @@ async function ensureSidecar(plan) {
           return true;
         }
         const filename = `${sidecarName}-${plan.target}${exeSuffix}`;
-        const url = explicitUrl ?? `${baseUrl?.replace(/\\/$/, "")}/${filename}`;
+        const url = explicitUrl ?? `${baseUrl?.replace(/\/$/, "")}/${filename}`;
         if (!url) {
           throw new Error("LOCAL_RUNTIME_SIDECAR_URL or LOCAL_RUNTIME_SIDECAR_BASE_URL must be set.");
         }
