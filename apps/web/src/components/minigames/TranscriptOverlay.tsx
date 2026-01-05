@@ -21,18 +21,57 @@ export const TranscriptOverlay = ({
         ? "Evaluating"
         : null;
   const statusTone = processingStage === "evaluating" ? "warning" : "info";
-  const containerClass =
-    variant === "embedded"
-      ? "relative overflow-hidden"
-      : "relative overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70 shadow-[0_0_30px_rgba(15,23,42,0.5)] backdrop-blur";
-  const headerPadding = variant === "embedded" ? "px-1" : "px-5";
-  const footerPadding = variant === "embedded" ? "px-1" : "px-5";
+
+  if (variant === "embedded") {
+    return (
+      <div className="space-y-4">
+        <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-slate-950/30 p-4">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-teal-400/10 to-transparent" />
+          <div className="max-h-[40vh] overflow-y-auto pr-1">
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100/90">
+              {hasText ? text : "Awaiting transcript..."}
+            </p>
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-slate-950/80 to-transparent" />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {statusLabel ? (
+            <StatusPill label={statusLabel} tone={statusTone} showSpinner />
+          ) : (
+            <span className="text-xs text-slate-300/80">
+              {hasText ? "Ready" : "Listening…"}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-white/70 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-teal-300/40"
+          >
+            Hide
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className={containerClass}>
+    <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70 shadow-[0_0_30px_rgba(15,23,42,0.5)] backdrop-blur">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-teal-400/10 to-transparent" />
       <div className="max-h-[50vh] overflow-hidden transition-[max-height,opacity,transform] duration-300 ease-out">
-        <div className={`${headerPadding} pt-4`}>
+        <div className="px-5 pt-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-slate-300/80">
               Transcript
@@ -72,7 +111,7 @@ export const TranscriptOverlay = ({
           </div>
         </div>
 
-        <div className={`mt-4 border-t border-white/10 bg-slate-950/40 ${footerPadding} py-3`}>
+        <div className="mt-4 border-t border-white/10 bg-slate-950/40 px-5 py-3">
           <div className="flex items-center justify-between gap-3">
             {statusLabel ? (
               <StatusPill label={statusLabel} tone={statusTone} showSpinner />

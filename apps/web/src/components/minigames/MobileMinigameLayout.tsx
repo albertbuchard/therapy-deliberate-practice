@@ -3,6 +3,7 @@ import { DockPanel } from "./DockPanel";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 import { NowUpHeader } from "./NowUpHeader";
 import { PlayersPanel } from "./PlayersPanel";
+import { RoundTaskCard } from "./RoundTaskCard";
 import { TranscriptOverlay } from "./TranscriptOverlay";
 import type { MinigameLayoutProps } from "./layouts";
 
@@ -122,7 +123,6 @@ export const MobileMinigameLayout = ({
         <PlayersPanel
           mode={mode}
           rounds={rounds}
-          currentRound={currentRound}
           players={players}
           teams={teams}
           results={results}
@@ -146,25 +146,15 @@ export const MobileMinigameLayout = ({
         defaultCollapsed
         behavior="stack"
       >
-        <div className="space-y-3 text-sm text-slate-200">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Task</p>
-            <p className="mt-1 text-base font-semibold text-white">
-              {currentTask?.title ?? "Select a task to begin"}
-            </p>
-          </div>
-          <div className="space-y-2">
-            {(currentTask?.criteria ?? []).map((criterion) => (
-              <div key={criterion.id} className="rounded-2xl border border-white/10 bg-slate-950/50 px-3 py-2">
-                <p className="text-xs font-semibold text-white">{criterion.label}</p>
-                <p className="text-[11px] text-slate-300">{criterion.description}</p>
-              </div>
-            ))}
-            {!currentTask?.criteria?.length && (
-              <p className="text-xs text-slate-300">Criteria details will appear shortly.</p>
-            )}
-          </div>
-        </div>
+        {session ? (
+          <RoundTaskCard
+            title={currentTask?.title}
+            criteria={currentTask?.criteria ?? []}
+            visibilityMode={session.visibility_mode}
+          />
+        ) : (
+          <div className="text-sm text-slate-300">Select a game to preview tasks.</div>
+        )}
       </DockPanel>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
