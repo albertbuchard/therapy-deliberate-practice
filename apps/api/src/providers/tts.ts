@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../env";
 import type { LogFn } from "../utils/logger";
 import { safeTruncate } from "../utils/logger";
-import { OPENAI_TTS_FORMAT, OPENAI_TTS_MODEL } from "./models";
+import {OPENAI_TTS_FORMAT, OPENAI_TTS_INSTRUCTIONS, OPENAI_TTS_MODEL} from "./models";
 import { BaseTtsProvider } from "./base";
 import { synthesizeWithOpenAI } from "./openaiTts";
 

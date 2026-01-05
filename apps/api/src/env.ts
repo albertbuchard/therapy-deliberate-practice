@@ -99,7 +99,7 @@ export const resolveEnv = (bindings: EnvBindings): RuntimeEnv => ({
   openaiTtsVoice: bindings.OPENAI_TTS_VOICE ?? "sage",
   openaiTtsFormat: normalizeTtsFormat(bindings.OPENAI_TTS_FORMAT, "mp3"),
   openaiTtsInstructions:
-    bindings.OPENAI_TTS_INSTRUCTIONS ?? "Speak like a patient in a therapy session.",
+    bindings.OPENAI_TTS_INSTRUCTIONS ?? "Speaking to a friend.",
   supabaseUrl: bindings.SUPABASE_URL ?? "",
   supabaseAnonKey: bindings.SUPABASE_ANON_KEY ?? "",
   supabaseJwtSecret: bindings.SUPABASE_JWT_SECRET ?? "",
