@@ -233,12 +233,11 @@ def main() -> None:
     config = RuntimeConfig.load(config_path)
     if args.port is not None:
         config.port = args.port
-    reload_enabled = os.environ.get("LOCAL_RUNTIME_RELOAD", "").lower() in {"1", "true", "yes"}
     uvicorn.run(
         app,
         host="127.0.0.1",
         port=config.port,
-        reload=False,
+        reload=os.environ.get("LOCAL_RUNTIME_RELOAD", "").lower() in {"1", "true", "yes"},
     )
 
 

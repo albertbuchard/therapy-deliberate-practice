@@ -90,7 +90,6 @@ export const MinigamePlayPage = () => {
   const discardedRoundIdsRef = useRef<Set<string>>(new Set());
   const autoEndTriggeredRef = useRef<string | null>(null);
   const [pendingAutoEndSessionId, setPendingAutoEndSessionId] = useState<string | null>(null);
-  const endGamePendingRef = useRef(false);
   const isMountedRef = useRef(true);
 
   const [createSession] = useCreateMinigameSessionMutation();
@@ -335,14 +334,15 @@ export const MinigamePlayPage = () => {
   }, [minigames.session?.settings]);
 
   const endGame = useCallback(async () => {
-    if (!minigames.session || endGamePendingRef.current) return;
-    endGamePendingRef.current = true;
-    if (isMountedRef.current) {
-      setEndGamePending(true);
-    }
+    if (!minigames.session || endGamePending) return;
     setPendingAutoEndSessionId(null);
     try {
-      await endSession({ sessionId: minigames.session.id });
+      setEndGamePending(true);
+      try {
+        await endSession({ sessionId: minigames.session.id });
+      } catch {
+        // keep local state if end-session call fails
+      }
       dispatch(setEvaluationDrawerOpen(false));
       let nextState = {
         session: minigames.session,
@@ -372,7 +372,6 @@ export const MinigamePlayPage = () => {
         setEndGameOpen(true);
       }
     } finally {
-      endGamePendingRef.current = false;
       if (isMountedRef.current) {
         setEndGamePending(false);
       }
@@ -380,6 +379,7 @@ export const MinigamePlayPage = () => {
   }, [
     dispatch,
     endSession,
+    endGamePending,
     fetchMinigameState,
     minigames.players,
     minigames.results,
