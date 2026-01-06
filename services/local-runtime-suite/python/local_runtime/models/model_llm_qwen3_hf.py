@@ -7,7 +7,7 @@ import time
 from typing import Any, AsyncIterator
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModel, AutoTokenizer, TextIteratorStreamer
 
 from local_runtime.helpers.responses_helpers import new_response
 from local_runtime.runtime_types import RunContext, RunRequest
@@ -130,7 +130,7 @@ def load(ctx: RunContext) -> dict[str, Any]:
     ctx.logger.info("qwen3_hf.load.start", extra={"model_id": SPEC["id"], "repo": model_ref})
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_ref, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
+        model = AutoModel.from_pretrained(
             model_ref,
             trust_remote_code=True,
             torch_dtype="auto",
@@ -241,6 +241,7 @@ async def run(req: RunRequest, ctx: RunContext):
         "model_id": model_id,
         "stream": bool(req.stream),
         "prompt_chars": len(prompt),
+        "prompt_preview": prompt[:120],
     }
     ctx.logger.info("qwen3_hf.run.start", extra=run_meta)
     start = time.perf_counter()
@@ -263,12 +264,18 @@ async def run(req: RunRequest, ctx: RunContext):
                 yield {"event": "response.completed", "data": response}
             finally:
                 duration_ms = round((time.perf_counter() - start) * 1000, 2)
-                ctx.logger.info("qwen3_hf.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+                ctx.logger.info(
+                    "qwen3_hf.run.complete",
+                    extra={**run_meta, "duration_ms": duration_ms, "output_chars": len(accumulated), "output_preview": accumulated[:120]},
+                )
 
         return generator()
 
     reply = await _generate(instance, prompt, params)
     payload = new_response(model_id, reply, request_id=ctx.request_id)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    ctx.logger.info("qwen3_hf.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+    ctx.logger.info(
+        "qwen3_hf.run.complete",
+        extra={**run_meta, "duration_ms": duration_ms, "output_chars": len(reply), "output_preview": reply[:120]},
+    )
     return payload

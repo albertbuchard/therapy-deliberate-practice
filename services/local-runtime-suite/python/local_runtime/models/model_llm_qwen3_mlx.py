@@ -203,6 +203,7 @@ async def run(req: RunRequest, ctx: RunContext):
         "model_id": model_id,
         "stream": bool(req.stream),
         "prompt_chars": len(prompt),
+        "prompt_preview": prompt[:120],
     }
     ctx.logger.info("qwen3_mlx.run.start", extra=run_meta)
     start = time.perf_counter()
@@ -225,12 +226,18 @@ async def run(req: RunRequest, ctx: RunContext):
                 yield {"event": "response.completed", "data": response}
             finally:
                 duration_ms = round((time.perf_counter() - start) * 1000, 2)
-                ctx.logger.info("qwen3_mlx.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+                ctx.logger.info(
+                    "qwen3_mlx.run.complete",
+                    extra={**run_meta, "duration_ms": duration_ms, "output_chars": len(accumulated), "output_preview": accumulated[:120]},
+                )
 
         return generator()
 
     reply = await _generate_text(instance, prompt, params)
     payload = new_response(model_id, reply, request_id=ctx.request_id)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    ctx.logger.info("qwen3_mlx.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+    ctx.logger.info(
+        "qwen3_mlx.run.complete",
+        extra={**run_meta, "duration_ms": duration_ms, "output_chars": len(reply), "output_preview": reply[:120]},
+    )
     return payload

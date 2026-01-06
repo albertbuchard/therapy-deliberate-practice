@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator, List
@@ -122,6 +123,15 @@ DEFAULT_SAMPLE_RATE = 44100
 
 def load(ctx: RunContext) -> dict[str, Any]:
     _ensure_autoconfig_available()
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    try:
+        import tqdm  # type: ignore
+        from threading import RLock
+
+        if not hasattr(tqdm, "_lock"):
+            tqdm._lock = RLock()  # type: ignore[attr-defined]
+    except Exception:
+        pass
     try:
         from mlx_audio.tts.utils import load_model  # type: ignore
     except ImportError as exc:
