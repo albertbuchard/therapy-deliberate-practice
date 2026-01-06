@@ -195,16 +195,27 @@
     "profileSaved": "Profile saved",
     "profileError": "We couldn't save your profile. Try again."
   },
-  "players": {
-    "tagline": "Community",
-    "title": "Player profiles",
-    "subtitle": "Meet other practitioners, see their bios, and connect through shared practice goals.",
-    "loading": "Loading player profiles...",
-    "error": "We couldn't load player profiles. Try again.",
-    "empty": "No profiles yet",
-    "emptyHint": "Check back once more players have joined.",
-    "cardLabel": "Profile",
-    "defaultBio": "This player hasn't added a bio yet."
+  "publicProfile": {
+    "tagline": "Player spotlight",
+    "loadingTitle": "Player profile",
+    "loading": "Loading profile...",
+    "error": "We couldn't load this profile. Try again.",
+    "missing": "This profile is no longer available.",
+    "bioEmpty": "This player hasn't added a bio yet.",
+    "backToLeaderboard": "Back to leaderboard",
+    "joined": "Joined {{date}}",
+    "joinedUnknown": "Join date unavailable",
+    "statsTitle": "Practice snapshot",
+    "statsSubtitle": "Highlights based on the latest completed tasks.",
+    "stats": {
+      "averageScore": "Average score",
+      "averageScoreHint": "Latest average across published tasks.",
+      "tasksPlayed": "Tasks played",
+      "tasksPlayedHint": "Unique tasks with a completed attempt.",
+      "lastActive": "Last active",
+      "lastActiveHint": "Latest completed attempt timestamp.",
+      "lastActiveUnknown": "Not yet active"
+    }
   },
   "settings": {
     "tagline": "Preferences",

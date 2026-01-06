@@ -62,7 +62,7 @@ import {
 import { isProviderConfigError } from "./providers/providerErrors";
 import { localSuiteHealthCheck } from "./providers/localSuite";
 import { getOrCreateTtsAsset, type TtsStorage } from "./services/ttsService";
-import { fetchLeaderboardEntries } from "./services/leaderboardService";
+import { fetchLeaderboardEntries, fetchUserProfileStats } from "./services/leaderboardService";
 import {
   listMinigameSessions,
   softDeleteMinigameSession,
@@ -667,9 +667,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     });
   });
 
-  app.get("/api/v1/profiles", userAuth, async (c) => {
-    const log = logger.child({ requestId: c.get("requestId"), endpoint: "profiles" });
-    const rows = await db
+  app.get("/api/v1/profiles/:id", userAuth, async (c) => {
+    const profileId = c.req.param("id");
+    const log = logger.child({ requestId: c.get("requestId"), endpoint: "profile_public", profileId });
+
+    const [row] = await db
       .select({
         id: users.id,
         display_name: users.display_name,
@@ -677,15 +679,29 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         created_at: users.created_at
       })
       .from(users)
-      .orderBy(desc(users.created_at));
-    log.info("Profiles fetched", { count: rows.length });
+      .where(eq(users.id, profileId))
+      .limit(1);
+
+    if (!row) {
+      log.warn("Profile not found");
+      return c.json({ error: "Not found" }, 404);
+    }
+
+    const stats = await fetchUserProfileStats(db, row.id);
+    log.info("Public profile fetched");
+
     return c.json({
-      profiles: rows.map((row) => ({
+      profile: {
         id: row.id,
         display_name: row.display_name,
         bio: row.bio ?? null,
-        created_at: new Date(row.created_at).toISOString()
-      }))
+        created_at: new Date(row.created_at).toISOString(),
+        stats: {
+          average_score: stats.average_score,
+          tasks_played: stats.tasks_played,
+          last_active_at: stats.last_active_at ? new Date(stats.last_active_at).toISOString() : null
+        }
+      }
     });
   });
 

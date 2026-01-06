@@ -15,9 +15,9 @@ import { AdminTaskEditPage } from "./pages/AdminTaskEditPage";
 import { AdminParseTaskPage } from "./pages/AdminParseTaskPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { PublicProfilePage } from "./pages/PublicProfilePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
-import { PlayersPage } from "./pages/PlayersPage";
 import { HelpLayout } from "./pages/help/HelpLayout";
 import { GettingStarted } from "./pages/help/pages/GettingStarted";
 import { HowItWorks } from "./pages/help/pages/HowItWorks";
@@ -90,18 +90,18 @@ export const router = createBrowserRouter([
         )
       },
       {
-        path: "players",
-        element: (
-          <UserRouteGuard>
-            <PlayersPage />
-          </UserRouteGuard>
-        )
-      },
-      {
         path: "profile",
         element: (
           <UserRouteGuard>
             <ProfilePage />
+          </UserRouteGuard>
+        )
+      },
+      {
+        path: "profiles/:id",
+        element: (
+          <UserRouteGuard>
+            <PublicProfilePage />
           </UserRouteGuard>
         )
       },
