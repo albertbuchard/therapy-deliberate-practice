@@ -82,6 +82,7 @@ export const MinigamePlayPage = () => {
   const [promptExhaustedMessage, setPromptExhaustedMessage] = useState<string | null>(null);
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false);
   const [ffaNextRoundBlocked, setFfaNextRoundBlocked] = useState(false);
+  const [pendingWinnerState, setPendingWinnerState] = useState<{ summary: WinnerSummary | null } | null>(null);
   const handledPreselectRef = useRef(false);
   const isMobile = useMediaQuery("(max-width: 768px)");
   const discardedRoundIdsRef = useRef<Set<string>>(new Set());
@@ -146,6 +147,7 @@ export const MinigamePlayPage = () => {
 
   useEffect(() => {
     setPendingAutoEndSessionId(null);
+    setPendingWinnerState(null);
   }, [minigames.session?.id]);
 
   useEffect(() => {
@@ -347,8 +349,12 @@ export const MinigamePlayPage = () => {
       teams: nextState.teams,
       results: nextState.results
     });
-    setWinnerSummary(summary);
-    setEndGameOpen(true);
+    if (roundFlowLocked) {
+      setPendingWinnerState({ summary });
+    } else {
+      setWinnerSummary(summary);
+      setEndGameOpen(true);
+    }
   }, [
     dispatch,
     endSession,
@@ -357,7 +363,8 @@ export const MinigamePlayPage = () => {
     minigames.results,
     minigames.rounds,
     minigames.session,
-    minigames.teams
+    minigames.teams,
+    roundFlowLocked
   ]);
 
   useEffect(() => {
@@ -405,6 +412,14 @@ export const MinigamePlayPage = () => {
     setPendingAutoEndSessionId(null);
     void endGame();
   }, [endGame, evaluationModalOpen, minigames.session?.id, pendingAutoEndSessionId]);
+
+  useEffect(() => {
+    if (roundFlowLocked) return;
+    if (!pendingWinnerState) return;
+    setWinnerSummary(pendingWinnerState.summary);
+    setEndGameOpen(true);
+    setPendingWinnerState(null);
+  }, [pendingWinnerState, roundFlowLocked]);
 
   useEffect(() => {
     if (!warmupKey) return;
@@ -759,6 +774,7 @@ export const MinigamePlayPage = () => {
     setLastTranscript(undefined);
     setLastAttemptId(undefined);
     setPendingAutoEndSessionId(null);
+    setPendingWinnerState(null);
     closeEvaluationModal();
     setNewPlayerOpen(false);
     setEndGameOpen(false);
