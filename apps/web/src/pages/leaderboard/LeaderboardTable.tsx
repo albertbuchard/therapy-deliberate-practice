@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import type { LeaderboardEntry } from "../../store/api";
 import { formatDateTime, formatRelativeTime, formatScore } from "../../utils/scoreFormatters";
 
@@ -77,7 +78,12 @@ export const LeaderboardTable = ({ entries, isLoading, locale }: LeaderboardTabl
                   {index + 1}
                 </div>
                 <div>
-                  <p className="font-semibold text-white">{entry.display_name}</p>
+                  <Link
+                    to={`/profiles/${entry.user_id}`}
+                    className="font-semibold text-white transition hover:text-teal-200"
+                  >
+                    {entry.display_name}
+                  </Link>
                   <p className="text-xs text-slate-500">{t("leaderboard.table.playerSubtext")}</p>
                 </div>
                 <div className="text-base font-semibold text-teal-200">

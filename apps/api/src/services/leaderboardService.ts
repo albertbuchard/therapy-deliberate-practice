@@ -17,6 +17,12 @@ export type LeaderboardEntry = {
   last_active_at: number | null;
 };
 
+export type UserProfileStats = {
+  average_score: number;
+  tasks_played: number;
+  last_active_at: number | null;
+};
+
 const buildTaskFilters = (query: LeaderboardQuery) => {
   const filters = [eq(tasks.is_published, true)];
   if (query.skillDomain) {
@@ -127,4 +133,70 @@ export const fetchLeaderboardEntries = async (
     played: Number(row.played ?? 0),
     last_active_at: row.last_active_at ?? null
   }));
+};
+
+export const fetchUserProfileStats = async (
+  db: ApiDatabase,
+  userId: string
+): Promise<UserProfileStats> => {
+  const taskRows = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(eq(tasks.is_published, true));
+  const taskIds = taskRows.map((row) => row.id);
+
+  if (taskIds.length === 0) {
+    return { average_score: 0, tasks_played: 0, last_active_at: null };
+  }
+
+  const attemptFilters = [
+    eq(attempts.user_id, userId),
+    inArray(attempts.task_id, taskIds),
+    isNotNull(attempts.completed_at),
+    isNotNull(attempts.overall_score)
+  ];
+
+  const latestAttemptSubquery = db
+    .select({
+      task_id: attempts.task_id,
+      completed_at: sql<number>`max(${attempts.completed_at})`.as("completed_at")
+    })
+    .from(attempts)
+    .where(and(...attemptFilters))
+    .groupBy(attempts.task_id)
+    .as("latest_attempt");
+
+  const latestAttemptCompletedAt = sql<number>`"latest_attempt"."completed_at"`;
+
+  const latestAttempts = db
+    .select({
+      task_id: attempts.task_id,
+      completed_at: latestAttemptCompletedAt.as("completed_at"),
+      overall_score: sql<number>`max(${attempts.overall_score})`.as("overall_score")
+    })
+    .from(attempts)
+    .innerJoin(
+      latestAttemptSubquery,
+      and(
+        eq(attempts.task_id, latestAttemptSubquery.task_id),
+        eq(attempts.completed_at, latestAttemptCompletedAt)
+      )
+    )
+    .where(eq(attempts.user_id, userId))
+    .groupBy(attempts.task_id, latestAttemptCompletedAt)
+    .as("latest_attempts");
+
+  const [row] = await db
+    .select({
+      average_score: sql<number>`avg(${latestAttempts.overall_score})`.as("average_score"),
+      tasks_played: sql<number>`count(distinct ${latestAttempts.task_id})`.as("tasks_played"),
+      last_active_at: sql<number>`max(${latestAttempts.completed_at})`.as("last_active_at")
+    })
+    .from(latestAttempts);
+
+  return {
+    average_score: Number(row?.average_score ?? 0),
+    tasks_played: Number(row?.tasks_played ?? 0),
+    last_active_at: row?.last_active_at ?? null
+  };
 };

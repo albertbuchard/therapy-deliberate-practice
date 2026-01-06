@@ -229,7 +229,6 @@ export const AppShell = () => {
     { key: "library", label: t("appShell.nav.library"), to: "/", exact: true },
     ...(isAdmin ? [{ key: "admin", label: t("appShell.nav.admin"), to: "/admin" }] : []),
     { key: "minigames", label: t("appShell.nav.minigames"), onClick: handleDrawerMinigames },
-    { key: "players", label: t("appShell.nav.players"), to: "/players" },
     { key: "leaderboard", label: t("leaderboard.tooltip"), to: "/leaderboard" },
     { key: "help", label: t("appShell.nav.help"), to: "/help" }
   ];
@@ -282,9 +281,6 @@ export const AppShell = () => {
                   >
                     {t("appShell.nav.minigames")}
                   </button>
-                  <NavLink to="/players" className={linkClass}>
-                    {t("appShell.nav.players")}
-                  </NavLink>
                   <Tooltip label={t("leaderboard.tooltip")}>
                     <NavLink
                       to="/leaderboard"

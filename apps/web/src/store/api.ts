@@ -49,15 +49,20 @@ export type UserProfileInput = {
   bio?: string | null;
 };
 
-export type PlayerProfile = {
+export type PublicProfile = {
   id: string;
   display_name: string;
   bio: string | null;
   created_at: string;
+  stats: {
+    average_score: number;
+    tasks_played: number;
+    last_active_at: string | null;
+  };
 };
 
-export type PlayerProfilesResponse = {
-  profiles: PlayerProfile[];
+export type PublicProfileResponse = {
+  profile: PublicProfile;
 };
 
 export type PracticeSessionItem = {
@@ -213,8 +218,8 @@ export const api = createApi({
     updateMeProfile: builder.mutation<{ ok: boolean; display_name: string; bio: string | null }, UserProfileInput>({
       query: (body) => ({ url: "/me/profile", method: "PUT", body })
     }),
-    getProfiles: builder.query<PlayerProfilesResponse, void>({
-      query: () => "/profiles"
+    getPublicProfile: builder.query<PublicProfileResponse, string>({
+      query: (profileId) => `/profiles/${profileId}`
     }),
     getMeSettings: builder.query<UserSettings, void>({
       query: () => "/me/settings"
@@ -567,7 +572,7 @@ export const {
   useGetMeSettingsQuery,
   useUpdateMeProfileMutation,
   useUpdateMeSettingsMutation,
-  useGetProfilesQuery,
+  useGetPublicProfileQuery,
   useUpdateOpenAiKeyMutation,
   useDeleteOpenAiKeyMutation,
   useValidateOpenAiKeyMutation,

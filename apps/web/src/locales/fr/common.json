@@ -195,16 +195,27 @@
     "profileSaved": "Profil enregistré",
     "profileError": "Impossible d'enregistrer votre profil. Réessayez."
   },
-  "players": {
-    "tagline": "Communauté",
-    "title": "Profils des joueurs",
-    "subtitle": "Découvrez d'autres praticiens, leurs bios et leurs objectifs de pratique.",
-    "loading": "Chargement des profils...",
-    "error": "Impossible de charger les profils. Réessayez.",
-    "empty": "Aucun profil pour l'instant",
-    "emptyHint": "Revenez quand plus de joueurs auront rejoint.",
-    "cardLabel": "Profil",
-    "defaultBio": "Ce joueur n'a pas encore ajouté de bio."
+  "publicProfile": {
+    "tagline": "En lumière",
+    "loadingTitle": "Profil du joueur",
+    "loading": "Chargement du profil...",
+    "error": "Impossible de charger ce profil. Réessayez.",
+    "missing": "Ce profil n'est plus disponible.",
+    "bioEmpty": "Ce joueur n'a pas encore ajouté de bio.",
+    "backToLeaderboard": "Retour au classement",
+    "joined": "Inscrit le {{date}}",
+    "joinedUnknown": "Date d’inscription indisponible",
+    "statsTitle": "Instantané de pratique",
+    "statsSubtitle": "Points clés basés sur les dernières tâches terminées.",
+    "stats": {
+      "averageScore": "Score moyen",
+      "averageScoreHint": "Moyenne récente sur les tâches publiées.",
+      "tasksPlayed": "Tâches jouées",
+      "tasksPlayedHint": "Tâches uniques avec une tentative terminée.",
+      "lastActive": "Dernière activité",
+      "lastActiveHint": "Horodatage de la dernière tentative terminée.",
+      "lastActiveUnknown": "Pas encore actif"
+    }
   },
   "settings": {
     "tagline": "Préférences",
