@@ -10,6 +10,7 @@ import { VersusIntroOverlay } from "../components/minigames/VersusIntroOverlay";
 import { DesktopMinigameLayout } from "../components/minigames/DesktopMinigameLayout";
 import { MobileMinigameLayout } from "../components/minigames/MobileMinigameLayout";
 import { EndGameResultsOverlay } from "../components/minigames/EndGameResultsOverlay";
+import { EndGameLoadingOverlay } from "../components/minigames/EndGameLoadingOverlay";
 import { useFfaTurnController } from "../components/minigames/hooks/useFfaTurnController";
 import { useTdmMatchController } from "../components/minigames/hooks/useTdmMatchController";
 import { useFullscreen } from "../components/minigames/hooks/useFullscreen";
@@ -77,6 +78,7 @@ export const MinigamePlayPage = () => {
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
   const [evaluationModalData, setEvaluationModalData] = useState<EvaluationResult | null>(null);
   const [endGameOpen, setEndGameOpen] = useState(false);
+  const [endGamePending, setEndGamePending] = useState(false);
   const [winnerSummary, setWinnerSummary] = useState<WinnerSummary | null>(null);
   const [switchTargetPlayerId, setSwitchTargetPlayerId] = useState<string | null>(null);
   const [promptExhaustedMessage, setPromptExhaustedMessage] = useState<string | null>(null);
@@ -88,6 +90,8 @@ export const MinigamePlayPage = () => {
   const discardedRoundIdsRef = useRef<Set<string>>(new Set());
   const autoEndTriggeredRef = useRef<string | null>(null);
   const [pendingAutoEndSessionId, setPendingAutoEndSessionId] = useState<string | null>(null);
+  const endGamePendingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const [createSession] = useCreateMinigameSessionMutation();
   const [addTeams] = useAddMinigameTeamsMutation();
@@ -119,6 +123,12 @@ export const MinigamePlayPage = () => {
         "You\u2019ve used all available unique patient prompts for this session. Start a new game or broaden task selection."
     );
     return true;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   const closeEvaluationModal = useCallback(() => {
@@ -325,35 +335,47 @@ export const MinigamePlayPage = () => {
   }, [minigames.session?.settings]);
 
   const endGame = useCallback(async () => {
-    if (!minigames.session) return;
-    setPendingAutoEndSessionId(null);
-    await endSession({ sessionId: minigames.session.id });
-    dispatch(setEvaluationDrawerOpen(false));
-    let nextState = {
-      session: minigames.session,
-      teams: minigames.teams,
-      players: minigames.players,
-      rounds: minigames.rounds,
-      results: minigames.results
-    };
-    try {
-      const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
-      dispatch(setMinigameState(refreshed));
-      nextState = refreshed;
-    } catch {
-      // keep local state if fetch fails
+    if (!minigames.session || endGamePendingRef.current) return;
+    endGamePendingRef.current = true;
+    if (isMountedRef.current) {
+      setEndGamePending(true);
     }
-    const summary = computeWinner({
-      mode: nextState.session.game_type,
-      players: nextState.players,
-      teams: nextState.teams,
-      results: nextState.results
-    });
-    if (roundFlowLocked) {
-      setPendingWinnerState({ summary });
-    } else {
-      setWinnerSummary(summary);
-      setEndGameOpen(true);
+    setPendingAutoEndSessionId(null);
+    try {
+      await endSession({ sessionId: minigames.session.id });
+      dispatch(setEvaluationDrawerOpen(false));
+      let nextState = {
+        session: minigames.session,
+        teams: minigames.teams,
+        players: minigames.players,
+        rounds: minigames.rounds,
+        results: minigames.results
+      };
+      try {
+        const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
+        dispatch(setMinigameState(refreshed));
+        nextState = refreshed;
+      } catch {
+        // keep local state if fetch fails
+      }
+      const summary = computeWinner({
+        mode: nextState.session.game_type,
+        players: nextState.players,
+        teams: nextState.teams,
+        results: nextState.results
+      });
+      if (!isMountedRef.current) return;
+      if (roundFlowLocked) {
+        setPendingWinnerState({ summary });
+      } else {
+        setWinnerSummary(summary);
+        setEndGameOpen(true);
+      }
+    } finally {
+      endGamePendingRef.current = false;
+      if (isMountedRef.current) {
+        setEndGamePending(false);
+      }
     }
   }, [
     dispatch,
@@ -366,6 +388,11 @@ export const MinigamePlayPage = () => {
     minigames.teams,
     roundFlowLocked
   ]);
+
+  const handleReturnToHub = useCallback(() => {
+    dispatch(resetMinigame());
+    navigate("/minigames");
+  }, [dispatch, navigate]);
 
   useEffect(() => {
     if (mode !== "ffa") return;
@@ -1120,6 +1147,7 @@ export const MinigamePlayPage = () => {
         players={minigames.players}
         onClose={handleFinalReviewClose}
       />
+      <EndGameLoadingOverlay open={endGamePending} onReturnToHub={handleReturnToHub} />
       <EndGameResultsOverlay
         open={endGameOpen}
         mode={mode ?? "ffa"}
