@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import AsyncIterator
+import asyncio
+import os
+import threading
+from typing import Any, AsyncIterator
 
-from local_runtime.helpers.responses_helpers import new_response, stream_events
+from local_runtime.helpers.responses_helpers import new_response
 from local_runtime.types import RunContext, RunRequest
 
 SPEC = {
@@ -60,31 +63,157 @@ SPEC = {
     "ui_params": [],
     "deps": {
         "python_extras": ["mlx"],
-        "pip": [],
+        "pip": ["mlx-lm>=0.25.2"],
         "system": [],
         "notes": "Requires Apple Silicon with MLX support.",
     },
 }
 
+DEFAULT_MAX_TOKENS = int(os.getenv("LOCAL_RUNTIME_QWEN_MAX_TOKENS", SPEC["limits"]["max_output_tokens_default"]))
+DEFAULT_TEMPERATURE = float(os.getenv("LOCAL_RUNTIME_QWEN_TEMPERATURE", "0.7"))
+DEFAULT_TOP_P = float(os.getenv("LOCAL_RUNTIME_QWEN_TOP_P", "0.9"))
 
-def _extract_prompt(payload: dict | None) -> str:
+
+def _prepare_prompt(payload: dict | None, tokenizer: Any | None = None) -> str:
     if not payload:
-        return "Hello from local runtime."
+        return "You are a helpful assistant."
+    if payload.get("messages"):
+        messages = payload["messages"]
+        if tokenizer and getattr(tokenizer, "chat_template", None):
+            return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return "\n".join(f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in messages)
+    if isinstance(payload.get("input"), list):
+        fragments: list[str] = []
+        for entry in payload["input"]:
+            if isinstance(entry, str):
+                fragments.append(entry)
+            elif isinstance(entry, dict):
+                if entry.get("type") == "text" and "text" in entry:
+                    fragments.append(str(entry["text"]))
+                elif entry.get("content"):
+                    fragments.extend(str(chunk.get("text", "")) for chunk in entry["content"] if isinstance(chunk, dict))
+        if fragments:
+            return "\n".join(fragments)
     if isinstance(payload.get("input"), str):
         return payload["input"]
-    if isinstance(payload.get("input"), list) and payload["input"]:
-        first = payload["input"][0]
-        if isinstance(first, dict) and "content" in first:
-            return str(first["content"])
-    return "Hello from local runtime."
+    return str(payload.get("prompt") or "You are a helpful assistant.")
+
+
+def _generation_params(payload: dict | None) -> dict[str, Any]:
+    if not payload:
+        return {"max_tokens": DEFAULT_MAX_TOKENS, "temperature": DEFAULT_TEMPERATURE, "top_p": DEFAULT_TOP_P}
+    return {
+        "max_tokens": int(payload.get("max_output_tokens") or DEFAULT_MAX_TOKENS),
+        "temperature": float(payload.get("temperature") or DEFAULT_TEMPERATURE),
+        "top_p": float(payload.get("top_p") or DEFAULT_TOP_P),
+    }
+
+
+async def _generate_text(instance: dict, prompt: str, params: dict[str, Any]) -> str:
+    def _invoke() -> str:
+        from mlx_lm import generate  # type: ignore
+
+        return generate(
+            instance["model"],
+            instance["tokenizer"],
+            prompt=prompt,
+            max_tokens=params["max_tokens"],
+            temperature=params["temperature"],
+            top_p=params["top_p"],
+            stream=False,
+        )
+
+    return await asyncio.to_thread(_invoke)
+
+
+async def _generate_stream(instance: dict, prompt: str, params: dict[str, Any]) -> AsyncIterator[str]:
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[str | Exception | None] = asyncio.Queue()
+
+    def _reader() -> None:
+        from mlx_lm import generate  # type: ignore
+
+        try:
+            for chunk in generate(
+                instance["model"],
+                instance["tokenizer"],
+                prompt=prompt,
+                max_tokens=params["max_tokens"],
+                temperature=params["temperature"],
+                top_p=params["top_p"],
+                stream=True,
+            ):
+                loop.call_soon_threadsafe(queue.put_nowait, str(chunk))
+        except Exception as exc:  # pragma: no cover - propagate to async loop
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
+def load(ctx: RunContext) -> dict[str, Any]:
+    try:
+        from mlx_lm import load as mlx_load  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("mlx-lm is required for Qwen3 MLX. Install with `pip install mlx-lm`.") from exc
+    model_ref = os.getenv("LOCAL_RUNTIME_QWEN3_MLX_MODEL", SPEC["backend"]["model_ref"])
+    ctx.logger.info("qwen3_mlx.load", extra={"model_id": SPEC["id"], "model_ref": model_ref})
+    model, tokenizer = mlx_load(model_ref)
+    return {"model": model, "tokenizer": tokenizer, "model_ref": model_ref}
+
+
+def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
+    prompt = "You are a helpful assistant. Say hello."
+    try:
+        from mlx_lm import generate  # type: ignore
+
+        generate(
+            instance["model"],
+            instance["tokenizer"],
+            prompt=prompt,
+            max_tokens=32,
+            temperature=0.6,
+            top_p=0.9,
+            stream=False,
+        )
+        ctx.logger.info("qwen3_mlx.warmup", extra={"model_id": SPEC["id"], "status": "ok"})
+    except Exception as exc:
+        ctx.logger.warning("qwen3_mlx.warmup_failed", extra={"error": str(exc)})
 
 
 async def run(req: RunRequest, ctx: RunContext):
-    prompt = _extract_prompt(req.payload)
-    reply = f"(local mlx) You said: {prompt}"
+    payload = req.payload or {}
+    model_id = req.model or SPEC["id"]
+    instance = await ctx.registry.ensure_instance(model_id, ctx)
+    if not instance:
+        raise RuntimeError("Qwen3 MLX model not initialized.")
+    prompt = _prepare_prompt(payload, tokenizer=instance.get("tokenizer"))
+    params = _generation_params(payload)
+    reply = await _generate_text(instance, prompt, params)
     if req.stream:
         async def generator() -> AsyncIterator[dict]:
-            for event, data in stream_events(req.model or SPEC["id"], reply, request_id=ctx.request_id):
-                yield {"event": event, "data": data}
+            response = new_response(model_id, "", request_id=ctx.request_id)
+            yield {"event": "response.created", "data": response}
+            accumulated = ""
+            async for chunk in _generate_stream(instance, prompt, params):
+                if not chunk:
+                    continue
+                accumulated += chunk
+                yield {"event": "response.output_text.delta", "data": {"id": response["id"], "delta": chunk}}
+            response["output_text"] = accumulated
+            response["output"][0]["content"][0]["text"] = accumulated
+            yield {"event": "response.output_text.done", "data": {"id": response["id"], "text": accumulated}}
+            yield {"event": "response.completed", "data": response}
+
         return generator()
-    return new_response(req.model or SPEC["id"], reply, request_id=ctx.request_id)
+
+    return new_response(model_id, reply, request_id=ctx.request_id)

@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from local_runtime.api.openai_compat import (
@@ -24,6 +25,7 @@ from local_runtime.core.errors import ModelNotFoundError
 from local_runtime.core.loader import LoadedModel, load_models
 from local_runtime.core.logging import configure_logging, pop_log_context, push_log_context
 from local_runtime.core.readiness import ReadinessTracker
+from local_runtime.core.load_manager import ModelLoadManager
 from local_runtime.core.registry import ModelRegistry
 from local_runtime.core.selector import SelectionStrategy, detect_platform
 from local_runtime.core.selftest import run_startup_self_test
@@ -34,7 +36,87 @@ from local_runtime.types import RunContext, RunRequest
 
 LOGGER = configure_logging()
 
-app = FastAPI(title="Local Runtime Gateway", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger = LOGGER
+    app.state.logger = logger
+    readiness = ReadinessTracker()
+    app.state.readiness = readiness
+    readiness.mark_phase("config", "ok")
+    try:
+        config = RuntimeConfig.load()
+        config.ensure_dirs()
+        app.state.config = config
+        platform_id = detect_platform()
+        app.state.platform_id = platform_id
+        readiness.platform_id = platform_id
+        logger.info("startup.platform", extra={"platform_id": platform_id})
+
+        models = load_models()
+        readiness.mark_phase("discover_models", "ok", detail=f"models={len(models)}")
+        registry = ModelRegistry(models, platform_id, logger)
+        app.state.registry = registry
+
+        selection = SelectionStrategy(platform_id)
+        app.state.selection = selection
+        defaults = config.default_models or selection.compute_defaults(registry.models_by_endpoint)
+        if not config.default_models:
+            config.default_models = defaults
+        registry.set_defaults(defaults)
+        readiness.defaults = defaults
+        readiness.mark_phase("select_defaults", "ok", detail=str(defaults))
+
+        app.state.http_client = httpx.AsyncClient(timeout=30)
+        app.state.supervisor = Supervisor()
+        app.state.started_at = time.time()
+        load_manager = ModelLoadManager(registry, lambda rid: _ctx_factory(rid), readiness, logger)
+        app.state.load_manager = load_manager
+
+        await registry.run_startup_hooks(lambda rid: _ctx_factory(rid))
+        readiness.mark_phase("startup_hooks", "ok")
+
+        preload_all = _env_flag("LOCAL_RUNTIME_PRELOAD_ALL", False)
+        if preload_all:
+            targets = [model.spec.id for model in registry.list_models()]
+        else:
+            targets = list(dict.fromkeys(defaults.values()))
+        if targets:
+            job = load_manager.create_job(targets)
+            await load_manager.wait_for_job(job.id)
+            readiness.loaded_models = sorted(registry.model_instances.keys())
+            readiness.mark_phase("preload", "ok", detail=f"job_id={job.id} status={job.status}")
+        else:
+            readiness.mark_phase("preload", "ok", detail="no targets")
+
+        selftest_enabled = _env_flag("LOCAL_RUNTIME_SELFTEST", True)
+        strict_selftest = _env_flag("LOCAL_RUNTIME_SELFTEST_STRICT", False)
+        if selftest_enabled:
+            try:
+                await run_startup_self_test(registry, defaults, _ctx_factory, readiness, strict_selftest)
+            except Exception as exc:
+                logger.exception("selftest.failed", extra={"error": str(exc)})
+                if strict_selftest:
+                    readiness.mark_error("self_test_failed")
+                    raise
+        else:
+            readiness.self_test.status = "skipped"
+            readiness.self_test.started_at = readiness.self_test.finished_at = time.time()
+        readiness.mark_ready()
+        yield
+    except Exception:
+        readiness.mark_error("startup_failure")
+        raise
+    finally:
+        registry: ModelRegistry | None = getattr(app.state, "registry", None)
+        if registry:
+            await registry.shutdown(lambda rid: _ctx_factory(rid))
+        http_client: httpx.AsyncClient | None = getattr(app.state, "http_client", None)
+        if http_client:
+            await http_client.aclose()
+
+
+app = FastAPI(title="Local Runtime Gateway", version="0.2.0", lifespan=lifespan)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -93,81 +175,6 @@ async def request_context_middleware(request: Request, call_next: Callable):
         pop_log_context(token)
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    logger = LOGGER
-    app.state.logger = logger
-    readiness = ReadinessTracker()
-    app.state.readiness = readiness
-    readiness.mark_phase("config", "ok")
-    try:
-        config = RuntimeConfig.load()
-        config.ensure_dirs()
-        app.state.config = config
-        platform_id = detect_platform()
-        app.state.platform_id = platform_id
-        readiness.platform_id = platform_id
-        logger.info("startup.platform", extra={"platform_id": platform_id})
-
-        models = load_models()
-        readiness.mark_phase("discover_models", "ok", detail=f"models={len(models)}")
-        registry = ModelRegistry(models, platform_id, logger)
-        app.state.registry = registry
-
-        selection = SelectionStrategy(platform_id)
-        app.state.selection = selection
-        defaults = config.default_models or selection.compute_defaults(registry.models_by_endpoint)
-        if not config.default_models:
-            config.default_models = defaults
-        registry.set_defaults(defaults)
-        readiness.defaults = defaults
-        readiness.mark_phase("select_defaults", "ok", detail=str(defaults))
-
-        app.state.http_client = httpx.AsyncClient(timeout=30)
-        app.state.supervisor = Supervisor()
-        app.state.started_at = time.time()
-
-        await registry.run_startup_hooks(lambda rid: _ctx_factory(rid))
-        readiness.mark_phase("startup_hooks", "ok")
-
-        preload_all = _env_flag("LOCAL_RUNTIME_PRELOAD_ALL", False)
-        if preload_all:
-            targets = [model.spec.id for model in registry.list_models()]
-        else:
-            targets = list(defaults.values())
-        await registry.preload(targets, lambda rid: _ctx_factory(rid))
-        readiness.loaded_models = sorted(registry.model_instances.keys())
-        readiness.mark_phase("preload", "ok", detail=f"targets={len(targets)}")
-
-        selftest_enabled = _env_flag("LOCAL_RUNTIME_SELFTEST", True)
-        strict_selftest = _env_flag("LOCAL_RUNTIME_SELFTEST_STRICT", False)
-        if selftest_enabled:
-            try:
-                await run_startup_self_test(registry, defaults, _ctx_factory, readiness, strict_selftest)
-            except Exception as exc:
-                logger.exception("selftest.failed", extra={"error": str(exc)})
-                if strict_selftest:
-                    readiness.mark_error("self_test_failed")
-                    raise
-        else:
-            readiness.self_test.status = "skipped"
-            readiness.self_test.started_at = readiness.self_test.finished_at = time.time()
-        readiness.mark_ready()
-    except Exception:
-        readiness.mark_error("startup_failure")
-        raise
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    registry: ModelRegistry | None = getattr(app.state, "registry", None)
-    if registry:
-        await registry.shutdown(lambda rid: _ctx_factory(rid))
-    http_client: httpx.AsyncClient | None = getattr(app.state, "http_client", None)
-    if http_client:
-        await http_client.aclose()
-
-
 @app.get("/health")
 async def health() -> JSONResponse:
     data = app.state.readiness.as_payload()
@@ -181,6 +188,41 @@ async def list_models() -> JSONResponse:
     registry: ModelRegistry = app.state.registry
     payload = format_models_list(registry.list_models(), int(app.state.started_at))
     return JSONResponse(payload)
+
+
+@app.post("/load_models")
+async def trigger_model_load(request: Request) -> JSONResponse:
+    load_manager: ModelLoadManager = app.state.load_manager
+    registry: ModelRegistry = app.state.registry
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    requested_models = payload.get("models")
+    targets: list[str]
+    if requested_models:
+        if isinstance(requested_models, str):
+            targets = [requested_models]
+        elif isinstance(requested_models, (list, tuple, set)):
+            targets = [str(model_id) for model_id in requested_models if model_id]
+        else:
+            raise HTTPException(status_code=400, detail="models must be a string or list of strings")
+    else:
+        targets = list(dict.fromkeys(registry.selected_defaults.values()))
+    if not targets:
+        raise HTTPException(status_code=400, detail="No models specified for loading")
+
+    job = load_manager.create_job(targets)
+    return JSONResponse({"job_id": job.id, "status": job.to_dict()})
+
+
+@app.get("/load_models/{job_id}")
+async def get_model_load_status(job_id: str) -> JSONResponse:
+    load_manager: ModelLoadManager = app.state.load_manager
+    job = load_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Load job not found")
+    return JSONResponse(job.to_dict())
 
 
 def _select_model(endpoint: str, requested: str | None) -> LoadedModel:

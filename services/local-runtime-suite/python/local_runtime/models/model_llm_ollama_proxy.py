@@ -79,6 +79,15 @@ def _extract_prompt(payload: dict | None) -> str:
     return "Hello from local runtime."
 
 
+def load(ctx: RunContext) -> dict:
+    ctx.logger.info("ollama_proxy.load", extra={"model_id": SPEC["id"]})
+    return {"status": "ready"}
+
+
+def warmup(instance: dict, ctx: RunContext) -> None:
+    ctx.logger.info("ollama_proxy.warmup", extra={"model_id": SPEC["id"]})
+
+
 async def run(req: RunRequest, ctx: RunContext):
     prompt = _extract_prompt(req.payload)
     reply = f"(ollama proxy stub) You said: {prompt}"
