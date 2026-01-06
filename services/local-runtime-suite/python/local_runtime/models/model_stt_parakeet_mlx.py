@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from typing import Any, AsyncIterator
 
 from local_runtime.helpers.multipart_helpers import UploadedFile
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//stt/parakeet-mlx",
@@ -184,6 +185,15 @@ async def run(req: RunRequest, ctx: RunContext):
     overlap_duration = float(form_data.get("overlap_duration", DEFAULT_OVERLAP_SECONDS))
     language = form_data.get("language")
 
+    run_meta = {
+        "model_id": model_id,
+        "stream": bool(req.stream),
+        "input_bytes": len(upload.data),
+        "chunk_duration": chunk_duration,
+        "overlap_duration": overlap_duration,
+    }
+    ctx.logger.info("parakeet_mlx.run.start", extra=run_meta)
+    start = time.perf_counter()
     try:
         result = await _run_transcribe(
             instance["model"],
@@ -207,6 +217,22 @@ async def run(req: RunRequest, ctx: RunContext):
                     yield {"event": "transcript.text.delta", "data": {"text": segment["text"], "start": segment["start"], "end": segment["end"]}}
             yield {"event": "transcript.text.done", "data": {"text": transcript}}
 
-        return generator()
+        async def tracked() -> AsyncIterator[dict]:
+            try:
+                async for item in generator():
+                    yield item
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 2)
+                ctx.logger.info(
+                    "parakeet_mlx.run.complete",
+                    extra={**run_meta, "duration_ms": duration_ms, "segments": len(payload_segments)},
+                )
 
+        return tracked()
+
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    ctx.logger.info(
+        "parakeet_mlx.run.complete",
+        extra={**run_meta, "duration_ms": duration_ms, "segments": len(payload_segments), "text_chars": len(transcript)},
+    )
     return {"text": transcript, "segments": payload_segments}

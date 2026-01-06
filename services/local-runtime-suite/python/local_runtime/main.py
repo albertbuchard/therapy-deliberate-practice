@@ -27,12 +27,12 @@ from local_runtime.core.logging import configure_logging, pop_log_context, push_
 from local_runtime.core.readiness import ReadinessTracker
 from local_runtime.core.load_manager import ModelLoadManager
 from local_runtime.core.registry import ModelRegistry
-from local_runtime.core.selector import SelectionStrategy, detect_platform
+from local_runtime.core.selector import SelectionStrategy, detect_platform, is_platform_supported
 from local_runtime.core.selftest import run_startup_self_test
 from local_runtime.core.supervisor import Supervisor
 from local_runtime.helpers.audio_helpers import resolve_content_type
 from local_runtime.helpers.multipart_helpers import enforce_max_size, extract_form_fields
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 LOGGER = configure_logging()
 
@@ -60,9 +60,30 @@ async def lifespan(app: FastAPI):
 
         selection = SelectionStrategy(platform_id)
         app.state.selection = selection
-        defaults = config.default_models or selection.compute_defaults(registry.models_by_endpoint)
-        if not config.default_models:
-            config.default_models = defaults
+        computed_defaults = selection.compute_defaults(registry.models_by_endpoint)
+        allowed_endpoints = set(registry.models_by_endpoint.keys())
+        user_defaults = config.default_models or {}
+        defaults: dict[str, str] = {
+            endpoint: model_id
+            for endpoint, model_id in computed_defaults.items()
+            if endpoint in allowed_endpoints
+        }
+        for endpoint, model_id in user_defaults.items():
+            if endpoint not in allowed_endpoints:
+                logger.warning(
+                    "defaults.override.skipped",
+                    extra={"endpoint": endpoint, "model_id": model_id, "reason": "unknown_endpoint"},
+                )
+                continue
+            loaded_model = registry.get_loaded(model_id)
+            if loaded_model and is_platform_supported(loaded_model.spec, platform_id):
+                defaults[endpoint] = model_id
+            else:
+                logger.warning(
+                    "defaults.override.skipped",
+                    extra={"endpoint": endpoint, "model_id": model_id, "reason": "platform_not_supported"},
+                )
+        config.default_models = defaults
         registry.set_defaults(defaults)
         readiness.defaults = defaults
         readiness.mark_phase("select_defaults", "ok", detail=str(defaults))
@@ -194,11 +215,13 @@ async def list_models() -> JSONResponse:
 async def trigger_model_load(request: Request) -> JSONResponse:
     load_manager: ModelLoadManager = app.state.load_manager
     registry: ModelRegistry = app.state.registry
+    logger = getattr(app.state, "logger", LOGGER)
     try:
         payload = await request.json()
     except Exception:
         payload = {}
     requested_models = payload.get("models")
+    scope = str(payload.get("scope") or "selected").lower()
     targets: list[str]
     if requested_models:
         if isinstance(requested_models, str):
@@ -207,8 +230,26 @@ async def trigger_model_load(request: Request) -> JSONResponse:
             targets = [str(model_id) for model_id in requested_models if model_id]
         else:
             raise HTTPException(status_code=400, detail="models must be a string or list of strings")
+        scope = "custom"
     else:
-        targets = list(dict.fromkeys(registry.selected_defaults.values()))
+        if scope == "all":
+            targets = [loaded.spec.id for loaded in registry.list_models()]
+        elif scope == "selected":
+            targets = [model_id for model_id in dict.fromkeys(registry.selected_defaults.values()) if model_id]
+        else:
+            raise HTTPException(status_code=400, detail="scope must be 'selected' or 'all'")
+    filtered: list[str] = []
+    missing: list[str] = []
+    for model_id in dict.fromkeys(targets):
+        if not model_id:
+            continue
+        if registry.get_loaded(model_id):
+            filtered.append(model_id)
+        else:
+            missing.append(model_id)
+    if missing:
+        logger.warning("load_models.unknown_models", extra={"models": missing, "scope": scope})
+    targets = filtered
     if not targets:
         raise HTTPException(status_code=400, detail="No models specified for loading")
 

@@ -17,6 +17,9 @@ dependencies = [
   "parakeet-mlx==0.4.1; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
   "sounddevice==0.5.3; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
   "soundfile==0.13.1; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+  "llama-cpp-python>=0.2.90",
+  "huggingface_hub>=0.24",
+  "accelerate>=0.33"
 ]
 
 [project.optional-dependencies]

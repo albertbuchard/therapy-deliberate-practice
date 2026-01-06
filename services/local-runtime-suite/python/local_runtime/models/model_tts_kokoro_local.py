@@ -2,12 +2,47 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
+import time
+from pathlib import Path
 from typing import Any, AsyncIterator, List
 
 import numpy as np
 import soundfile as sf
 
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
+
+
+def _ensure_autoconfig_available() -> None:
+    """
+    mlx-audio expects transformers.AutoConfig to exist.
+    Some lightweight installs omit it, so we create a minimal shim if needed.
+    """
+    try:
+        import transformers  # type: ignore
+    except ImportError as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError(
+            "Kokoro TTS requires the 'transformers' package. Install it with `pip install transformers>=4.52`."
+        ) from exc
+
+    if hasattr(transformers, "AutoConfig"):
+        return
+
+    class _PatchedConfig:
+        def __init__(self, payload: dict):
+            self._payload = payload
+
+        def to_dict(self) -> dict:
+            return dict(self._payload)
+
+    class _PatchedAutoConfig:
+        @classmethod
+        def from_pretrained(cls, model_path: str | Path, **kwargs):
+            cfg_path = Path(model_path) / "config.json"
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+            return _PatchedConfig(data)
+
+    transformers.AutoConfig = _PatchedAutoConfig  # type: ignore[attr-defined]
 
 SPEC = {
     "id": "local//tts/kokoro-local",
@@ -86,6 +121,7 @@ DEFAULT_SAMPLE_RATE = 44100
 
 
 def load(ctx: RunContext) -> dict[str, Any]:
+    _ensure_autoconfig_available()
     try:
         from mlx_audio.tts.utils import load_model  # type: ignore
     except ImportError as exc:
@@ -189,6 +225,15 @@ async def run(req: RunRequest, ctx: RunContext):
     lang_code = _resolve_lang_code(language)
     voice = _resolve_voice(lang_code, payload.get("voice"))
 
+    run_meta = {
+        "model_id": model_id,
+        "language": lang_code,
+        "voice": voice,
+        "stream": bool(req.stream),
+        "text_chars": len(text),
+    }
+    ctx.logger.info("kokoro_tts.run.start", extra=run_meta)
+    start = time.perf_counter()
     audio_bytes = await _run_generate(instance, text, lang_code=lang_code, voice=voice)
     if req.stream:
         async def generator() -> AsyncIterator[bytes]:
@@ -196,5 +241,15 @@ async def run(req: RunRequest, ctx: RunContext):
             for idx in range(0, len(audio_bytes), chunk):
                 yield audio_bytes[idx : idx + chunk]
 
-        return generator()
+        async def tracked_generator() -> AsyncIterator[bytes]:
+            try:
+                async for chunk_bytes in generator():
+                    yield chunk_bytes
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 2)
+                ctx.logger.info("kokoro_tts.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+
+        return tracked_generator()
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    ctx.logger.info("kokoro_tts.run.complete", extra={**run_meta, "duration_ms": duration_ms, "bytes": len(audio_bytes)})
     return audio_bytes

@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+import time
 from typing import Any, AsyncIterator
 
 from local_runtime.helpers.responses_helpers import new_response
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//llm/qwen3-mlx",
@@ -198,22 +199,38 @@ async def run(req: RunRequest, ctx: RunContext):
         raise RuntimeError("Qwen3 MLX model not initialized.")
     prompt = _prepare_prompt(payload, tokenizer=instance.get("tokenizer"))
     params = _generation_params(payload)
-    reply = await _generate_text(instance, prompt, params)
+    run_meta = {
+        "model_id": model_id,
+        "stream": bool(req.stream),
+        "prompt_chars": len(prompt),
+    }
+    ctx.logger.info("qwen3_mlx.run.start", extra=run_meta)
+    start = time.perf_counter()
+
     if req.stream:
+
         async def generator() -> AsyncIterator[dict]:
             response = new_response(model_id, "", request_id=ctx.request_id)
             yield {"event": "response.created", "data": response}
             accumulated = ""
-            async for chunk in _generate_stream(instance, prompt, params):
-                if not chunk:
-                    continue
-                accumulated += chunk
-                yield {"event": "response.output_text.delta", "data": {"id": response["id"], "delta": chunk}}
-            response["output_text"] = accumulated
-            response["output"][0]["content"][0]["text"] = accumulated
-            yield {"event": "response.output_text.done", "data": {"id": response["id"], "text": accumulated}}
-            yield {"event": "response.completed", "data": response}
+            try:
+                async for chunk in _generate_stream(instance, prompt, params):
+                    if not chunk:
+                        continue
+                    accumulated += chunk
+                    yield {"event": "response.output_text.delta", "data": {"id": response["id"], "delta": chunk}}
+                response["output_text"] = accumulated
+                response["output"][0]["content"][0]["text"] = accumulated
+                yield {"event": "response.output_text.done", "data": {"id": response["id"], "text": accumulated}}
+                yield {"event": "response.completed", "data": response}
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 2)
+                ctx.logger.info("qwen3_mlx.run.complete", extra={**run_meta, "duration_ms": duration_ms})
 
         return generator()
 
-    return new_response(model_id, reply, request_id=ctx.request_id)
+    reply = await _generate_text(instance, prompt, params)
+    payload = new_response(model_id, reply, request_id=ctx.request_id)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    ctx.logger.info("qwen3_mlx.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+    return payload

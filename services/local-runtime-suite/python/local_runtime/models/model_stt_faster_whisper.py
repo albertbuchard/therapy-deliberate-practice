@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import time
 from typing import AsyncIterator
 
 from local_runtime.helpers.multipart_helpers import UploadedFile
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//stt/faster-whisper",
@@ -105,6 +106,14 @@ async def run(req: RunRequest, ctx: RunContext):
     upload = _extract_upload(req)
     language = req.form.get("language") if req.form else None
     prompt = req.form.get("prompt") if req.form else None
+    run_meta = {
+        "model_id": model_id,
+        "stream": bool(req.stream),
+        "language": language,
+        "input_bytes": len(upload.data),
+    }
+    ctx.logger.info("faster_whisper.run.start", extra=run_meta)
+    start = time.perf_counter()
     transcript, payload_segments = _fake_transcription(upload, language, prompt)
 
     if req.stream:
@@ -113,9 +122,19 @@ async def run(req: RunRequest, ctx: RunContext):
                 if segment["text"]:
                     yield {"event": "transcript.text.delta", "data": {"text": segment["text"]}}
             yield {"event": "transcript.text.done", "data": {"text": transcript}}
-        return generator()
+        async def tracked() -> AsyncIterator[dict]:
+            try:
+                async for event in generator():
+                    yield event
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 2)
+                ctx.logger.info("faster_whisper.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+
+        return tracked()
 
     response = {"text": transcript, "segments": payload_segments}
     if language:
         response["language"] = language
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    ctx.logger.info("faster_whisper.run.complete", extra={**run_meta, "duration_ms": duration_ms})
     return response

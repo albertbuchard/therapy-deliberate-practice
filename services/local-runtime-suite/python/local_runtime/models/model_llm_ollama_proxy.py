@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import AsyncIterator
 
 from local_runtime.helpers.responses_helpers import new_response, stream_events
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//llm/ollama-proxy",
