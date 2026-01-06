@@ -102,7 +102,7 @@ export const MinigameSessionDetailPage = () => {
         <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-emerald-500/20 via-slate-900/60 to-slate-950/80 p-6">
           <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Winner</p>
           <h3 className="mt-2 text-2xl font-semibold text-white">{winnerSummary.label}</h3>
-          <p className="mt-1 text-sm text-emerald-100">Score {winnerSummary.score.toFixed(2)}</p>
+          <p className="mt-1 text-sm text-emerald-100">Score {winnerSummary.subLabel}</p>
         </section>
       )}
 
