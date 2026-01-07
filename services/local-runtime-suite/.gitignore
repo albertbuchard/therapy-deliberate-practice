@@ -1,7 +1,21 @@
-**/target
-**/gen
-**/.venv-tauri
-**/.venv_id
-**/.runtime-cache
-desktop/src-tauri/resources
-desktop/src-tauri/binaries
+# python build artifacts
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
+**/dist/
+**/build/
+**/.venv*/
+python/.runtime-cache/
+**/.pytest_cache/
+**/.ruff_cache/
+
+# node build artifacts
+**/node_modules/
+desktop/dist/
+desktop/.vite/
+
+# rust / tauri build artifacts
+**/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/
+desktop/src-tauri/resources/local-runtime-python/
