@@ -63,6 +63,6 @@ class SelectionStrategy:
             score -= 20
         if spec.execution.mode == "inprocess":
             score += 5
-        if provider in {"hf", "kokoro", "faster_whisper", "ollama", "chatterbox"}:
+        if provider in {"hf", "faster_whisper"}:
             score += 2
         return score

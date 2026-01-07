@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 
-def test_audio_speech_returns_bytes(client):
+def test_audio_speech_disabled(client):
     response = client.post("/v1/audio/speech", json={"input": "Audio please", "response_format": "wav"})
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("audio/")
-    assert len(response.content) > 0
+    payload = response.json()
+    assert payload["message"]
+    assert "not enabled" in payload["message"].lower()
 
 
 def test_audio_transcription_json(client):

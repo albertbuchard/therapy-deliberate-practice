@@ -12,7 +12,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from local_runtime.api.openai_compat import (
-    format_audio_speech_response,
     format_audio_transcription_response,
     format_error,
     format_models_list,
@@ -30,7 +29,6 @@ from local_runtime.core.registry import ModelRegistry
 from local_runtime.core.selector import SelectionStrategy, detect_platform, is_platform_supported
 from local_runtime.core.selftest import run_startup_self_test
 from local_runtime.core.supervisor import Supervisor
-from local_runtime.helpers.audio_helpers import resolve_content_type
 from local_runtime.helpers.multipart_helpers import enforce_max_size, extract_form_fields
 from local_runtime.runtime_types import RunContext, RunRequest
 
@@ -703,24 +701,16 @@ async def responses(request: Request) -> Response:
 
 
 @app.post("/v1/audio/speech")
-async def audio_speech(request: Request) -> Response:
-    payload = await request.json()
-    stream = bool(payload.get("stream"))
+async def audio_speech(request: Request) -> JSONResponse:
     request_id = getattr(request.state, "request_id", f"req_{uuid.uuid4().hex}")
-    response_format = payload.get("response_format")
-    try:
-        selected = _select_model("audio.speech", payload.get("model"))
-    except ModelNotFoundError as exc:
-        return format_error(str(exc), err_type="not_found", status_code=404)
-    model_id = selected.spec.id
-    run_request = RunRequest(endpoint="audio.speech", model=model_id, json=payload, stream=stream)
-    ctx = _ctx_factory(request_id, endpoint="audio.speech", model_id=model_id)
-    start = time.perf_counter()
-    result = await selected.module.run(run_request, ctx)
-    duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info("audio.speech.run", extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms})
-    content_type = resolve_content_type(response_format)
-    return format_audio_speech_response(result, content_type, stream)
+    app.state.logger.info(
+        "audio.speech.disabled",
+        extra={"request_id": request_id},
+    )
+    return JSONResponse(
+        {"message": "Text-to-speech is not enabled in this build of the local runtime."},
+        status_code=200,
+    )
 
 
 @app.post("/v1/audio/transcriptions")
