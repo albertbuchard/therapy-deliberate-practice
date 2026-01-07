@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 block_cipher = None
 
@@ -10,23 +10,38 @@ hiddenimports += collect_submodules("local_runtime.api")
 hiddenimports += collect_submodules("local_runtime.core")
 hiddenimports += collect_submodules("local_runtime.helpers")
 hiddenimports += collect_submodules("local_runtime.workers")
-hiddenimports += collect_submodules("mlx")
-hiddenimports += collect_submodules("mlx_lm")
-hiddenimports += collect_submodules("parakeet_mlx")
+hiddenimports += [
+    "mlx",
+    "mlx.core",
+    "mlx.nn",
+    "mlx.optimizers",
+    "mlx.utils",
+    "mlx_lm",
+    "mlx_lm.models",
+    "mlx_lm.utils",
+    "parakeet_mlx",
+]
+
+datas = []
+datas += collect_data_files("mlx_lm", include_py_files=False)
+datas += collect_data_files("parakeet_mlx", include_py_files=False)
+
+binaries = []
+binaries += collect_dynamic_libs("torchaudio")
 
 a = Analysis(
     ["local_runtime/main.py"],
     pathex=["."],
-    binaries=[],
-    datas=[],
+    binaries=binaries,
+    datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=["pyinstaller-hooks"],
     runtime_hooks=[],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
-    noarchive=False,
+    noarchive=True,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)

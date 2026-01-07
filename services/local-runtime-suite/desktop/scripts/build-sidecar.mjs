@@ -84,6 +84,25 @@ function resolveTarget() {
   return resolveHostTarget();
 }
 
+function resolveSoxDylib() {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  try {
+    const prefix = execFileSync("brew", ["--prefix", "sox"], { encoding: "utf8" }).trim();
+    if (!prefix) {
+      return null;
+    }
+    const candidate = path.resolve(prefix, "lib", "libsox.dylib");
+    if (!existsSync(candidate)) {
+      return null;
+    }
+    return candidate;
+  } catch (error) {
+    return null;
+  }
+}
+
 function readPythonVersion(executable) {
   const version = execFileSync(
     executable,
@@ -192,6 +211,33 @@ function syncDependencies() {
     },
   });
   writeFileSync(stampPath, computeStamp(pyprojectHash, pythonVersion));
+}
+
+function vendorMacSox(soxDylib, distDir) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  if (!soxDylib) {
+    throw new Error(
+      "Homebrew libsox not found. Install it via `brew install sox` so torchaudio's SOX backend can be bundled.",
+    );
+  }
+  console.log("Vendoring libsox dependencies into PyInstaller dist...");
+  runCommand(
+    "Vendor libsox",
+    venvPython,
+    ["-m", "tools.vendor_macos_sox", "--dist", distDir],
+    {
+      cwd: pythonRoot,
+      env: {
+        ...process.env,
+        VIRTUAL_ENV: venvDir,
+        PYTHONPATH: pythonRoot,
+        PYTHONNOUSERSITE: "1",
+        SOX_DYLIB: soxDylib,
+      },
+    },
+  );
 }
 
 function buildSidecar(distPath) {
@@ -328,6 +374,8 @@ async function ensureSidecar(plan) {
         ensureVenv();
         syncDependencies();
         buildSidecar(distPath);
+        const soxDylib = resolveSoxDylib();
+        vendorMacSox(soxDylib, path.resolve(pythonRoot, "dist"));
         banner(5, 5, "Validating sidecar artifact...");
         chmodSync(distPath, process.platform === "win32" ? 0o644 : 0o755);
         mkdirSync(binariesDir, { recursive: true });
