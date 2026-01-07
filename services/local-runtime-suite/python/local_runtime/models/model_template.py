@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//template",

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
-import uuid
-from typing import AsyncIterator, Iterable
+import time
+from typing import AsyncIterator
 
 from local_runtime.helpers.multipart_helpers import UploadedFile
-
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//stt/faster-whisper",
@@ -70,19 +68,9 @@ SPEC = {
 }
 
 
-def _load_model(ctx: RunContext):
-    if "faster_whisper_model" in ctx.model_state:
-        return ctx.model_state["faster_whisper_model"]
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise RuntimeError("faster-whisper is not installed. Install it to enable local STT.") from exc
-    model_name = os.getenv("LOCAL_RUNTIME_STT_MODEL", SPEC["backend"]["model_ref"])
-    device = os.getenv("LOCAL_RUNTIME_STT_DEVICE", "cpu")
-    compute_type = os.getenv("LOCAL_RUNTIME_STT_COMPUTE_TYPE", "int8")
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
-    ctx.model_state["faster_whisper_model"] = model
-    return model
+def load(ctx: RunContext) -> dict:
+    ctx.logger.info("faster_whisper.load", extra={"model_id": SPEC["id"]})
+    return {"status": "ready"}
 
 
 def _extract_upload(req: RunRequest) -> UploadedFile:
@@ -102,48 +90,35 @@ def _extract_upload(req: RunRequest) -> UploadedFile:
     return UploadedFile(filename=filename, content_type=content_type, data=bytes(data))
 
 
-def _write_temp_audio(upload: UploadedFile, cache_dir: str) -> str:
-    suffix = os.path.splitext(upload.filename or "")[1] or ".audio"
-    filename = f"stt_{uuid.uuid4().hex}{suffix}"
-    path = os.path.join(cache_dir, filename)
-    with open(path, "wb") as handle:
-        handle.write(upload.data)
-    return path
-
-
-def _segments_to_text(segments: Iterable) -> tuple[str, list[dict]]:
-    transcript_chunks = []
-    payload_segments: list[dict] = []
-    for idx, segment in enumerate(segments):
-        text = segment.text.strip()
-        if text:
-            transcript_chunks.append(text)
-        payload_segments.append(
-            {
-                "id": idx,
-                "start": float(segment.start),
-                "end": float(segment.end),
-                "text": segment.text,
-            }
-        )
-    transcript = " ".join(transcript_chunks).strip()
-    return transcript, payload_segments
+def _fake_transcription(upload: UploadedFile, language: str | None, prompt: str | None) -> tuple[str, list[dict]]:
+    text = f"[{SPEC['display']['title']}] {upload.filename or 'audio'} len={len(upload.data)}"
+    if language:
+        text += f" lang={language}"
+    if prompt:
+        text += " prompt"
+    segment = {"id": 0, "start": 0.0, "end": 0.5, "text": text}
+    return text, [segment]
 
 
 async def run(req: RunRequest, ctx: RunContext):
+    model_id = req.model or SPEC["id"]
+    await ctx.registry.ensure_instance(model_id, ctx)
     upload = _extract_upload(req)
-    audio_path = _write_temp_audio(upload, ctx.cache_dir)
-    try:
-        model = _load_model(ctx)
-        language = req.form.get("language") if req.form else None
-        prompt = req.form.get("prompt") if req.form else None
-        segments, info = model.transcribe(audio_path, language=language, initial_prompt=prompt)
-        transcript, payload_segments = _segments_to_text(segments)
-    finally:
-        try:
-            os.remove(audio_path)
-        except OSError:
-            ctx.logger.warning("Failed to clean up temp audio file: %s", audio_path)
+    language = req.form.get("language") if req.form else None
+    prompt = req.form.get("prompt") if req.form else None
+    run_meta = {
+        "model_id": model_id,
+        "stream": bool(req.stream),
+        "language": language,
+        "input_bytes": len(upload.data),
+    }
+    ctx.logger.info("faster_whisper.run.start", extra=run_meta)
+    start = time.perf_counter()
+    transcript, payload_segments = _fake_transcription(upload, language, prompt)
+    ctx.logger.info(
+        "faster_whisper.run.output",
+        extra={**run_meta, "text": transcript, "segments": len(payload_segments)},
+    )
 
     if req.stream:
         async def generator() -> AsyncIterator[dict]:
@@ -151,9 +126,19 @@ async def run(req: RunRequest, ctx: RunContext):
                 if segment["text"]:
                     yield {"event": "transcript.text.delta", "data": {"text": segment["text"]}}
             yield {"event": "transcript.text.done", "data": {"text": transcript}}
-        return generator()
+        async def tracked() -> AsyncIterator[dict]:
+            try:
+                async for event in generator():
+                    yield event
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 2)
+                ctx.logger.info("faster_whisper.run.complete", extra={**run_meta, "duration_ms": duration_ms})
+
+        return tracked()
 
     response = {"text": transcript, "segments": payload_segments}
-    if info and getattr(info, "language", None):
-        response["language"] = info.language
+    if language:
+        response["language"] = language
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    ctx.logger.info("faster_whisper.run.complete", extra={**run_meta, "duration_ms": duration_ms})
     return response

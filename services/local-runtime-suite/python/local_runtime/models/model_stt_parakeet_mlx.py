@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 import uuid
-from typing import AsyncIterator, Iterable
+from typing import Any, AsyncIterator
 
 from local_runtime.helpers.multipart_helpers import UploadedFile
-from local_runtime.types import RunContext, RunRequest
+from local_runtime.runtime_types import RunContext, RunRequest
 
 SPEC = {
     "id": "local//stt/parakeet-mlx",
@@ -37,7 +39,7 @@ SPEC = {
     },
     "backend": {
         "provider": "mlx",
-        "model_ref": "mlx-community/parakeet-tdt-0.6b-v2",
+        "model_ref": "mlx-community/parakeet-tdt-0.6b-v3",
         "revision": None,
         "device_hint": "metal",
         "extra": {},
@@ -62,29 +64,37 @@ SPEC = {
     "ui_params": [],
     "deps": {
         "python_extras": ["mlx", "stt"],
-        "pip": ["mlx-whisper"],
+        "pip": ["parakeet-mlx>=0.2.0"],
         "system": [],
-        "notes": "Requires mlx-whisper for MLX transcription.",
+        "notes": "Requires parakeet-mlx for transcription.",
     },
 }
 
+DEFAULT_CHUNK_SECONDS = float(os.getenv("LOCAL_RUNTIME_STT_CHUNK_SEC", "120"))
+DEFAULT_OVERLAP_SECONDS = float(os.getenv("LOCAL_RUNTIME_STT_OVERLAP_SEC", "15"))
 
-def _load_model(ctx: RunContext):
-    if "parakeet_mlx_model" in ctx.model_state:
-        return ctx.model_state["parakeet_mlx_model"]
+
+def load(ctx: RunContext) -> dict[str, Any]:
     try:
-        import mlx_whisper
+        from parakeet_mlx import from_pretrained  # type: ignore
     except ImportError as exc:
-        raise RuntimeError("mlx-whisper is not installed. Install it to enable MLX STT.") from exc
+        raise RuntimeError(
+            "parakeet-mlx is required for MLX transcription. Install with `pip install parakeet-mlx`."
+        ) from exc
     model_name = os.getenv("LOCAL_RUNTIME_STT_MODEL", SPEC["backend"]["model_ref"])
-    if hasattr(mlx_whisper, "load_model"):
-        model = mlx_whisper.load_model(model_name)
-    elif hasattr(mlx_whisper, "load"):
-        model = mlx_whisper.load(model_name)
-    else:
-        raise RuntimeError("mlx-whisper load method not found.")
-    ctx.model_state["parakeet_mlx_model"] = (model, mlx_whisper)
-    return model, mlx_whisper
+    ctx.logger.info("parakeet_mlx.load", extra={"model_id": SPEC["id"], "model_ref": model_name})
+    model = from_pretrained(model_name)
+
+    if os.getenv("LOCAL_RUNTIME_STT_LOCAL_ATTENTION", "0").lower() in {"1", "true", "yes"}:
+        encoder = getattr(model, "encoder", None)
+        if encoder and hasattr(encoder, "set_attention_model"):
+            encoder.set_attention_model("rel_pos_local_attn", (256, 256))
+
+    return {"model": model}
+
+
+def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
+    ctx.logger.info("parakeet_mlx.warmup", extra={"model_id": SPEC["id"]})
 
 
 def _extract_upload(req: RunRequest) -> UploadedFile:
@@ -105,7 +115,7 @@ def _extract_upload(req: RunRequest) -> UploadedFile:
 
 
 def _write_temp_audio(upload: UploadedFile, cache_dir: str) -> str:
-    suffix = os.path.splitext(upload.filename or "")[1] or ".audio"
+    suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
     filename = f"stt_{uuid.uuid4().hex}{suffix}"
     path = os.path.join(cache_dir, filename)
     with open(path, "wb") as handle:
@@ -113,72 +123,121 @@ def _write_temp_audio(upload: UploadedFile, cache_dir: str) -> str:
     return path
 
 
-def _segments_to_text(segments: Iterable) -> tuple[str, list[dict]]:
-    transcript_chunks = []
-    payload_segments: list[dict] = []
-    for idx, segment in enumerate(segments):
-        if isinstance(segment, dict):
-            text = str(segment.get("text") or "").strip()
-            start = float(segment.get("start", 0.0))
-            end = float(segment.get("end", 0.0))
-        else:
-            text = str(getattr(segment, "text", "") or "").strip()
-            start = float(getattr(segment, "start", 0.0))
-            end = float(getattr(segment, "end", 0.0))
-        if text:
-            transcript_chunks.append(text)
-        payload_segments.append({"id": idx, "start": start, "end": end, "text": text})
-    transcript = " ".join(transcript_chunks).strip()
-    return transcript, payload_segments
+def _build_decoding_config():
+    try:
+        from parakeet_mlx import DecodingConfig, SentenceConfig  # type: ignore
+    except ImportError:
+        return None
+
+    return DecodingConfig(
+        sentence=SentenceConfig(
+            max_words=int(os.getenv("LOCAL_RUNTIME_STT_SENTENCE_MAX_WORDS", "30")),
+            silence_gap=float(os.getenv("LOCAL_RUNTIME_STT_SENTENCE_SILENCE_GAP", "4.0")),
+            max_duration=float(os.getenv("LOCAL_RUNTIME_STT_SENTENCE_MAX_DURATION", "40.0")),
+        )
+    )
 
 
-def _transcribe_audio(model, mlx_whisper, audio_path: str, language: str | None, prompt: str | None):
-    if hasattr(model, "transcribe"):
-        try:
-            return model.transcribe(audio_path, language=language, prompt=prompt, initial_prompt=prompt)
-        except TypeError:
-            return model.transcribe(audio_path)
-    if hasattr(mlx_whisper, "transcribe"):
-        try:
-            return mlx_whisper.transcribe(model, audio_path, language=language, prompt=prompt, initial_prompt=prompt)
-        except TypeError:
-            return mlx_whisper.transcribe(model, audio_path)
-    raise RuntimeError("mlx-whisper transcribe method not found.")
+async def _run_transcribe(model, audio_path: str, chunk_duration: float, overlap_duration: float, decoding_config, language: str | None):
+    def _invoke():
+        kwargs: dict[str, Any] = {
+            "audio": audio_path,
+            "chunk_duration": chunk_duration,
+            "overlap_duration": overlap_duration,
+        }
+        if decoding_config:
+            kwargs["decoding_config"] = decoding_config
+        if language:
+            kwargs["language"] = language
+        return model.transcribe(**kwargs)
+
+    return await asyncio.to_thread(_invoke)
 
 
-def _parse_transcribe_result(result) -> tuple[str, list[dict]]:
-    if isinstance(result, dict):
-        text = str(result.get("text") or "").strip()
-        segments = result.get("segments") or []
-        transcript, payload_segments = _segments_to_text(segments)
-        return text or transcript, payload_segments
-    if isinstance(result, tuple) and len(result) >= 2:
-        transcript, payload_segments = _segments_to_text(result[0])
-        return transcript, payload_segments
-    return str(result or ""), []
+def _parse_result(result) -> tuple[str, list[dict]]:
+    text = ""
+    segments: list[dict] = []
+    if hasattr(result, "text"):
+        text = str(getattr(result, "text", "") or "")
+    if hasattr(result, "sentences"):
+        for idx, sentence in enumerate(getattr(result, "sentences") or []):
+            segment_text = str(getattr(sentence, "text", "") or "").strip()
+            start = float(getattr(sentence, "start", 0.0))
+            end = float(getattr(sentence, "end", start))
+            if segment_text:
+                segments.append({"id": idx, "start": start, "end": end, "text": segment_text})
+    if not text and segments:
+        text = " ".join(segment["text"] for segment in segments).strip()
+    return text, segments
 
 
 async def run(req: RunRequest, ctx: RunContext):
     upload = _extract_upload(req)
     audio_path = _write_temp_audio(upload, ctx.cache_dir)
+    model_id = req.model or SPEC["id"]
+    instance = await ctx.registry.ensure_instance(model_id, ctx)
+    if not instance:
+        raise RuntimeError("Parakeet MLX model is not initialized.")
+
+    form_data = req.form or {}
+    decoding_config = _build_decoding_config()
+    chunk_duration = float(form_data.get("chunk_duration", DEFAULT_CHUNK_SECONDS))
+    overlap_duration = float(form_data.get("overlap_duration", DEFAULT_OVERLAP_SECONDS))
+    language = form_data.get("language")
+
+    run_meta = {
+        "model_id": model_id,
+        "stream": bool(req.stream),
+        "input_bytes": len(upload.data),
+        "chunk_duration": chunk_duration,
+        "overlap_duration": overlap_duration,
+    }
+    ctx.logger.info("parakeet_mlx.run.start", extra=run_meta)
+    start = time.perf_counter()
     try:
-        model, mlx_whisper = _load_model(ctx)
-        language = req.form.get("language") if req.form else None
-        prompt = req.form.get("prompt") if req.form else None
-        result = _transcribe_audio(model, mlx_whisper, audio_path, language, prompt)
-        transcript, payload_segments = _parse_transcribe_result(result)
+        result = await _run_transcribe(
+            instance["model"],
+            audio_path,
+            chunk_duration=chunk_duration,
+            overlap_duration=overlap_duration,
+            decoding_config=decoding_config,
+            language=language,
+        )
+        transcript, payload_segments = _parse_result(result)
     finally:
         try:
             os.remove(audio_path)
         except OSError:
             ctx.logger.warning("Failed to clean up temp audio file: %s", audio_path)
 
+    ctx.logger.info(
+        "parakeet_mlx.run.output",
+        extra={**run_meta, "text": transcript, "segments": len(payload_segments), "text_chars": len(transcript)},
+    )
+
     if req.stream:
         async def generator() -> AsyncIterator[dict]:
             for segment in payload_segments:
                 if segment["text"]:
-                    yield {"event": "transcript.text.delta", "data": {"text": segment["text"]}}
+                    yield {"event": "transcript.text.delta", "data": {"text": segment["text"], "start": segment["start"], "end": segment["end"]}}
             yield {"event": "transcript.text.done", "data": {"text": transcript}}
-        return generator()
 
+        async def tracked() -> AsyncIterator[dict]:
+            try:
+                async for item in generator():
+                    yield item
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 2)
+                ctx.logger.info(
+                    "parakeet_mlx.run.complete",
+                    extra={**run_meta, "duration_ms": duration_ms, "segments": len(payload_segments)},
+                )
+
+        return tracked()
+
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    ctx.logger.info(
+        "parakeet_mlx.run.complete",
+        extra={**run_meta, "duration_ms": duration_ms, "segments": len(payload_segments), "text_chars": len(transcript)},
+    )
     return {"text": transcript, "segments": payload_segments}

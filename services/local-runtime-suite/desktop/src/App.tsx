@@ -42,7 +42,7 @@ export const App = () => {
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [doctorChecks, setDoctorChecks] = useState<DoctorCheck[]>([]);
-  const [defaults, setDefaults] = useState({ llm: "", tts: "", stt: "" });
+  const [defaults, setDefaults] = useState({ llm: "", stt: "" });
   const [preferLocal, setPreferLocal] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [startError, setStartError] = useState<string | null>(null);
@@ -108,7 +108,6 @@ export const App = () => {
     setPreferLocal(result.prefer_local);
     setDefaults({
       llm: result.default_models.responses ?? "",
-      tts: result.default_models["audio.speech"] ?? "",
       stt: result.default_models["audio.transcriptions"] ?? ""
     });
   };
@@ -122,7 +121,6 @@ export const App = () => {
           port,
           default_models: {
             responses: defaults.llm,
-            "audio.speech": defaults.tts,
             "audio.transcriptions": defaults.stt
           },
           prefer_local: preferLocal
@@ -149,7 +147,6 @@ export const App = () => {
           port: parsed,
           default_models: {
             responses: defaults.llm,
-            "audio.speech": defaults.tts,
             "audio.transcriptions": defaults.stt
           },
           prefer_local: preferLocal
@@ -225,7 +222,7 @@ export const App = () => {
 
   useEffect(() => {
     setSaveState("idle");
-  }, [defaults.llm, defaults.tts, defaults.stt, preferLocal]);
+  }, [defaults.llm, defaults.stt, preferLocal]);
 
   useEffect(() => {
     setPortSaveState("idle");
@@ -245,24 +242,22 @@ export const App = () => {
   }, [showAdvanced]);
 
   const llmOptions = models.filter((model) => model.metadata.api.endpoint === "responses");
-  const ttsOptions = models.filter((model) => model.metadata.api.endpoint === "audio.speech");
   const sttOptions = models.filter((model) =>
     ["audio.transcriptions", "audio.translations"].includes(model.metadata.api.endpoint)
   );
 
   useEffect(() => {
     if (!models.length) return;
-    if (defaults.llm && defaults.tts && defaults.stt) return;
+    if (defaults.llm && defaults.stt) return;
     const pickModel = (options: ModelSummary[], preferredId: string) =>
       options.find((model) => model.id === preferredId)?.id ?? options[0]?.id ?? "";
     const nextDefaults = {
       llm: defaults.llm || pickModel(llmOptions, isMac ? "local//llm/qwen3-mlx" : "local//llm/qwen3-hf"),
-      tts: defaults.tts || pickModel(ttsOptions, "local//tts/kokoro-local"),
       stt: defaults.stt || pickModel(sttOptions, isMac ? "local//stt/parakeet-mlx" : "local//stt/faster-whisper")
     };
     setDefaults(nextDefaults);
     logEvent(`Selected ${isMac ? "MLX" : "non-MLX"} defaults based on platform.`);
-  }, [models, llmOptions, ttsOptions, sttOptions, isMac, defaults.llm, defaults.tts, defaults.stt]);
+  }, [models, llmOptions, sttOptions, isMac, defaults.llm, defaults.stt]);
 
   const isGatewayRunning = status === "running";
   const portValue = Number(portInput);
@@ -275,7 +270,7 @@ export const App = () => {
   const canLoadModels = isGatewayRunning;
   const hasModels = models.length > 0;
   const canChooseDefaults = hasModels;
-  const defaultsComplete = Boolean(defaults.llm && defaults.tts && defaults.stt);
+  const defaultsComplete = Boolean(defaults.llm && defaults.stt);
   const canSave = defaultsComplete;
   const isSaved = saveState === "saved";
   const simpleStep1Complete = isGatewayRunning;
@@ -319,7 +314,7 @@ export const App = () => {
     },
     {
       id: 3,
-      title: "Choose default LLM, TTS, STT",
+      title: "Choose default LLM + STT",
       description: "Pick the defaults the suite should use for sessions.",
       complete: defaultsComplete
     },
@@ -669,7 +664,7 @@ export const App = () => {
                 <span className="badge">{defaultsComplete ? "Defaults selected" : "Waiting on selections"}</span>
               </div>
               <p className="step-description">
-                Select your preferred LLM, TTS, and STT models to use in sessions.
+                Select your preferred LLM and STT models to use in sessions.
               </p>
               <div className="grid">
                 <div>
@@ -682,22 +677,6 @@ export const App = () => {
                   >
                     <option value="">Select LLM</option>
                     {llmOptions.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.metadata.display.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <div className="label">Default TTS</div>
-                  <select
-                    className="select"
-                    value={defaults.tts}
-                    onChange={(event) => setDefaults((prev) => ({ ...prev, tts: event.target.value }))}
-                    disabled={!canChooseDefaults}
-                  >
-                    <option value="">Select TTS</option>
-                    {ttsOptions.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.metadata.display.title}
                       </option>
@@ -856,12 +835,6 @@ export const App = () => {
             </div>
           </div>
 
-          <div className="panel">
-            <div className="label">TTS disclosure</div>
-            <div className="disclosure">
-              Voices generated by the local suite are AI-generated. Always disclose synthetic speech to listeners.
-            </div>
-          </div>
         </div>
       </aside>
     </div>

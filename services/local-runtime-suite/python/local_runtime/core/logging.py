@@ -1,8 +1,88 @@
+from __future__ import annotations
+
+import json
 import logging
+import time
+from collections import deque
+from typing import Any
+
+import contextvars
+
+_LOG_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("local_runtime_log_ctx", default={})
+_LOG_BUFFER: deque[dict[str, Any]] = deque(maxlen=500)
 
 
-def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+class ContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        context = _LOG_CONTEXT.get({})
+        for key, value in context.items():
+            setattr(record, key, value)
+        return True
+
+
+class StructuredFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
+        payload: dict[str, Any] = {
+            "timestamp": f"{timestamp}.{int(record.msecs):03d}Z",
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for key in ("request_id", "endpoint", "model_id", "platform_id", "phase", "status", "duration_ms"):
+            value = getattr(record, key, None)
+            if value is not None:
+                payload[key] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+class InMemoryLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            formatted = self.format(record)
+            payload = json.loads(formatted)
+        except Exception:
+            payload = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+                "level": "error",
+                "logger": "local-runtime",
+                "message": "log_buffer_format_error",
+            }
+        _LOG_BUFFER.append(payload)
+
+
+def configure_logging(level: int = logging.INFO) -> logging.Logger:
+    formatter = StructuredFormatter()
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    handler.addFilter(ContextFilter())
+    buffer_handler = InMemoryLogHandler()
+    buffer_handler.setFormatter(formatter)
+    buffer_handler.addFilter(ContextFilter())
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers = [handler, buffer_handler]
+    logger = logging.getLogger("local-runtime")
+    return logger
+
+
+def push_log_context(**kwargs: Any) -> contextvars.Token:
+    context = dict(_LOG_CONTEXT.get({}))
+    for key, value in kwargs.items():
+        if value is not None:
+            context[key] = value
+    return _LOG_CONTEXT.set(context)
+
+
+def pop_log_context(token: contextvars.Token) -> None:
+    _LOG_CONTEXT.reset(token)
+
+
+def get_recent_logs(limit: int = 200) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    if limit >= len(_LOG_BUFFER):
+        return list(_LOG_BUFFER)
+    return list(_LOG_BUFFER)[-limit:]
