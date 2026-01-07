@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/")
+VIRTUAL_PREFIXES = ("@loader_path/", "@rpath/", "@executable_path/")
 
 
 def run(*args: str) -> None:
@@ -16,7 +17,7 @@ def otool_deps(target: Path) -> list[str]:
     deps: list[str] = []
     for line in output.splitlines()[1:]:
         candidate = line.strip().split(" ", 1)[0]
-        if candidate.startswith(SYSTEM_PREFIXES):
+        if candidate.startswith(SYSTEM_PREFIXES) or candidate.startswith(VIRTUAL_PREFIXES):
             continue
         deps.append(candidate)
     return deps
@@ -33,8 +34,8 @@ def change_ref(target: Path, old: str, new: str) -> None:
         pass
 
 
-def find_sox_extensions(dist: Path) -> list[Path]:
-    return list(dist.rglob("_torchaudio_sox.so")) + list(dist.rglob("libtorchaudio_sox.so"))
+def find_sox_extensions(root: Path) -> list[Path]:
+    return list(root.rglob("_torchaudio_sox.so")) + list(root.rglob("libtorchaudio_sox.so"))
 
 
 def copy_tree(root_src: Path, dest_dir: Path) -> tuple[Path, dict[str, str]]:
@@ -74,21 +75,25 @@ def copy_tree(root_src: Path, dest_dir: Path) -> tuple[Path, dict[str, str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dist", required=True, help="PyInstaller dist directory")
+    parser.add_argument(
+        "--root",
+        required=True,
+        help="Directory to scan for torchaudio SOX binaries (site-packages or PyInstaller dist).",
+    )
     args = parser.parse_args()
 
     sox_env = os.environ.get("SOX_DYLIB")
     if not sox_env:
         raise SystemExit("SOX_DYLIB env var not set (path to libsox.dylib).")
 
-    dist = Path(args.dist).resolve()
-    if not dist.exists():
-        raise SystemExit(f"Dist path not found: {dist}")
+    root = Path(args.root).resolve()
+    if not root.exists():
+        raise SystemExit(f"Path not found: {root}")
 
-    sox_exts = find_sox_extensions(dist)
+    sox_exts = find_sox_extensions(root)
     if not sox_exts:
         raise SystemExit(
-            "Could not find torchaudio SOX extensions in dist (expected _torchaudio_sox.so / libtorchaudio_sox.so)."
+            "Could not find torchaudio SOX extensions in the provided path (expected _torchaudio_sox.so / libtorchaudio_sox.so)."
         )
 
     sox_src = Path(sox_env).resolve()

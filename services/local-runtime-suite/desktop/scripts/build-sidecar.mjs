@@ -103,6 +103,20 @@ function resolveSoxDylib() {
   }
 }
 
+function resolveTorchaudioLibDir() {
+  const script = 'import sysconfig; print(sysconfig.get_path("purelib"))';
+  const sitePackages = execFileSync(venvPython, ["-c", script], { encoding: "utf8" }).trim();
+  if (!sitePackages) {
+    throw new Error("Unable to resolve venv site-packages path.");
+  }
+  const resolvedSite = path.resolve(sitePackages);
+  const resolved = path.resolve(resolvedSite, "torchaudio", "lib");
+  if (!existsSync(resolved)) {
+    throw new Error(`torchaudio lib directory not found: ${resolved}`);
+  }
+  return resolved;
+}
+
 function readPythonVersion(executable) {
   const version = execFileSync(
     executable,
@@ -213,7 +227,7 @@ function syncDependencies() {
   writeFileSync(stampPath, computeStamp(pyprojectHash, pythonVersion));
 }
 
-function vendorMacSox(soxDylib, distDir) {
+function vendorMacSox(soxDylib, searchRoot) {
   if (process.platform !== "darwin") {
     return;
   }
@@ -222,11 +236,14 @@ function vendorMacSox(soxDylib, distDir) {
       "Homebrew libsox not found. Install it via `brew install sox` so torchaudio's SOX backend can be bundled.",
     );
   }
-  console.log("Vendoring libsox dependencies into PyInstaller dist...");
+  if (!searchRoot || !existsSync(searchRoot)) {
+    throw new Error(`Vendoring target directory does not exist: ${searchRoot || "<missing>"}`);
+  }
+  console.log(`Vendoring libsox dependencies into ${searchRoot} ...`);
   runCommand(
     "Vendor libsox",
     venvPython,
-    ["-m", "tools.vendor_macos_sox", "--dist", distDir],
+    ["-m", "tools.vendor_macos_sox", "--root", searchRoot],
     {
       cwd: pythonRoot,
       env: {
@@ -373,9 +390,12 @@ async function ensureSidecar(plan) {
         banner(2, 5, "Bootstrapping venv...");
         ensureVenv();
         syncDependencies();
+        if (process.platform === "darwin") {
+          const soxDylib = resolveSoxDylib();
+          const torchaudioLibDir = resolveTorchaudioLibDir();
+          vendorMacSox(soxDylib, torchaudioLibDir);
+        }
         buildSidecar(distPath);
-        const soxDylib = resolveSoxDylib();
-        vendorMacSox(soxDylib, path.resolve(pythonRoot, "dist"));
         banner(5, 5, "Validating sidecar artifact...");
         chmodSync(distPath, process.platform === "win32" ? 0o644 : 0o755);
         mkdirSync(binariesDir, { recursive: true });
