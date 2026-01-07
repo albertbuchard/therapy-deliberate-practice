@@ -9,6 +9,9 @@
       "allow": [
         {
           "url": "https://therapy-deliberate-practice.com/settings"
+        },
+        {
+          "url": "https://therapy-deliberate-practice.com/help"
         }
       ]
     },
