@@ -254,9 +254,11 @@ async function downloadFile(url, outputPath) {
   }
 }
 
+const forceFlag = process.argv.slice(2).includes("--force");
+
 async function ensureSidecar(plan) {
   const outputPath = path.resolve(binariesDir, plan.outputName);
-  const forceRebuild = process.env.FORCE_SIDECAR_REBUILD === "1";
+  const forceRebuild = process.env.FORCE_SIDECAR_REBUILD === "1" || forceFlag;
 
   const strategies = [
     {

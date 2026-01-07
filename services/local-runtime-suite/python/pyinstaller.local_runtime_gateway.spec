@@ -10,6 +10,9 @@ hiddenimports += collect_submodules("local_runtime.api")
 hiddenimports += collect_submodules("local_runtime.core")
 hiddenimports += collect_submodules("local_runtime.helpers")
 hiddenimports += collect_submodules("local_runtime.workers")
+hiddenimports += collect_submodules("mlx")
+hiddenimports += collect_submodules("mlx_lm")
+hiddenimports += collect_submodules("parakeet_mlx")
 
 a = Analysis(
     ["local_runtime/main.py"],

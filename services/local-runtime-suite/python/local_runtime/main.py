@@ -10,6 +10,7 @@ from typing import Callable
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from local_runtime.api.openai_compat import (
     format_audio_transcription_response,
@@ -616,6 +617,38 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Local Runtime Gateway", version="0.2.0", lifespan=lifespan)
+
+
+def _parse_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _resolve_cors_settings() -> tuple[list[str], str | None]:
+    """
+    Allow localhost/127.0.0.1 origins by default while enabling overrides via env.
+    LOCAL_RUNTIME_ALLOW_ORIGINS="https://app.example.com,https://studio.example.com"
+    """
+    raw = os.getenv("LOCAL_RUNTIME_ALLOW_ORIGINS")
+    if raw:
+        origins = _parse_csv(raw)
+        if "*" in origins:
+            return ["*"], None
+        return origins, None
+    # Allow any localhost / 127.0.0.1 origin + port (dev server, desktop wrapper, etc).
+    return [], r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+
+cors_origins, cors_regex = _resolve_cors_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins or [],
+    allow_origin_regex=cors_regex,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
 
 
 def _env_flag(name: str, default: bool) -> bool:
