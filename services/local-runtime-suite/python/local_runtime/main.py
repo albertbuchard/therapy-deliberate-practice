@@ -496,7 +496,7 @@ async def lifespan(app: FastAPI):
         else:
             readiness.mark_phase("preload", "ok", detail="no targets")
 
-        selftest_enabled = _env_flag("LOCAL_RUNTIME_SELFTEST", True)
+        selftest_enabled = _env_flag("LOCAL_RUNTIME_SELFTEST", False)
         strict_selftest = _env_flag("LOCAL_RUNTIME_SELFTEST_STRICT", False)
         if selftest_enabled:
             try:
@@ -709,7 +709,7 @@ async def audio_speech(request: Request) -> JSONResponse:
     )
     return JSONResponse(
         {"message": "Text-to-speech is not enabled in this build of the local runtime."},
-        status_code=200,
+        status_code=503,
     )
 
 
