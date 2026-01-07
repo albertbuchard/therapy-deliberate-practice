@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { GatewayLaunchButton } from "./components/GatewayLaunchButton";
+import { useGatewayBoot } from "./hooks/useGatewayBoot";
+import type { GatewayBootState } from "./hooks/useGatewayBoot";
 
 type ModelSummary = {
   id: string;
@@ -138,12 +141,12 @@ export const App = () => {
   const [autoScroll, setAutoScroll] = useState(true);
   const [simpleSteps, setSimpleSteps] = useState({
     copiedUrl: false,
-    openedAccount: false,
     openedSettings: false
   });
   const [quickTests, setQuickTests] = useState<QuickTestsState>(initialQuickTestsState);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
+  const bootLogRef = useRef({ readyRunId: 0, errorRunId: 0 });
   const baseUrl = connectionInfo?.base_url ?? `http://127.0.0.1:${port}`;
   const llmUrl = connectionInfo?.llm_url ?? baseUrl;
   const sttUrl = connectionInfo?.stt_url ?? baseUrl;
@@ -152,13 +155,13 @@ export const App = () => {
   const sttExample =
     connectionInfo?.endpoints.stt_example ?? `${baseUrl}/v1/audio/transcriptions`;
   const settingsUrl = "https://therapy-deliberate-practice.com/settings";
-  const createAccountUrl = "https://therapy-deliberate-practice.com/login";
+  const helpUrl = "https://therapy-deliberate-practice.com/help";
   const isMac = /(Mac|iPhone|iPad|iPod)/i.test(navigator.userAgent);
 
-  const logEvent = (message: string) => {
+  const logEvent = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev, `[UI ${timestamp}] ${message}`]);
-  };
+  }, []);
 
   const refreshStatus = async () => {
     const result = await invoke<{ status: string }>("gateway_status");
@@ -404,6 +407,27 @@ export const App = () => {
     await refreshLogs();
   };
 
+  const boot = useGatewayBoot({
+    healthUrl,
+    onReady: async () => {
+      await refreshStatus();
+      await refreshConnectionInfo();
+      await refreshModels();
+      await refreshLogs();
+    }
+  });
+
+  useEffect(() => {
+    if (boot.state.phase === "error" && boot.state.error && bootLogRef.current.errorRunId !== boot.state.runId) {
+      bootLogRef.current.errorRunId = boot.state.runId;
+      logEvent(`Gateway launch failed: ${boot.state.error}`);
+    }
+    if (boot.state.phase === "ready" && bootLogRef.current.readyRunId !== boot.state.runId) {
+      bootLogRef.current.readyRunId = boot.state.runId;
+      logEvent("Gateway health checks passed.");
+    }
+  }, [boot.state.phase, boot.state.error, boot.state.runId, logEvent]);
+
   useEffect(() => {
     refreshStatus();
     refreshLogs();
@@ -463,6 +487,11 @@ export const App = () => {
     logEvent(`Selected ${isMac ? "MLX" : "non-MLX"} defaults based on platform.`);
   }, [models, llmOptions, sttOptions, isMac, defaults.llm, defaults.stt]);
 
+  const gatewayReady = status === "running" || boot.state.phase === "ready";
+  const heroBootState: GatewayBootState =
+    gatewayReady && boot.state.phase !== "ready" ? { ...boot.state, phase: "ready" as const } : boot.state;
+  const heroProgress = gatewayReady ? 1 : boot.derived.progress;
+  const heroElapsedMs = gatewayReady ? boot.derived.maxWaitMs : boot.derived.elapsedMs;
   const isGatewayRunning = status === "running";
   const portValue = Number(portInput);
   const portValid = Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535;
@@ -477,21 +506,37 @@ export const App = () => {
   const defaultsComplete = Boolean(defaults.llm && defaults.stt);
   const canSave = defaultsComplete;
   const isSaved = saveState === "saved";
-  const simpleStep1Complete = isGatewayRunning;
+  const simpleStep1Complete = gatewayReady;
   const simpleStep2Complete = simpleSteps.copiedUrl;
-  const simpleStep3Complete = simpleSteps.openedAccount;
-  const simpleStep4Complete = simpleSteps.openedSettings;
-  const simpleActiveStep =
-    simpleStep4Complete
-      ? 4
-      : simpleStep3Complete
-        ? 3
-        : simpleStep2Complete
-          ? 2
-          : 1;
+  const simpleStep3Complete = simpleSteps.openedSettings;
+  const simpleActiveStep = !simpleStep1Complete ? 1 : !simpleStep2Complete ? 2 : 3;
   const moduleNotFound = logs.some((line) =>
     line.includes("ModuleNotFoundError: No module named 'local_runtime'")
   );
+
+  const handleLaunchStart = useCallback(() => {
+    if (!canStartGateway) {
+      logEvent("Launch blocked until doctor issues are resolved.");
+      return;
+    }
+    logEvent("Launching local gateway via hero CTA.");
+    boot.start();
+  }, [boot.start, canStartGateway, logEvent]);
+
+  const handleLaunchCancel = useCallback(() => {
+    logEvent("Stopping local gateway launch.");
+    boot.cancel();
+  }, [boot.cancel, logEvent]);
+
+  const handleLaunchReset = useCallback(() => {
+    boot.reset();
+  }, [boot.reset]);
+
+  const handleReadyLaunchClick = useCallback(async () => {
+    const normalized = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+    logEvent(`Opening local gateway UI at ${normalized}`);
+    await openUrl(normalized);
+  }, [baseUrl, logEvent]);
 
   let activeStep = 1;
   if (isGatewayRunning) activeStep = 2;
@@ -569,15 +614,28 @@ export const App = () => {
             <div className="simple-step-content">
               <div className="simple-step-title">Launch local server</div>
               <div className="simple-step-description">
-                {doctorBlocking ? doctorBlocking.details : "Start the gateway and let it spin up in the background."}
+                {doctorBlocking ? doctorBlocking.details : "Start the gateway and let the health checks finish in the background."}
               </div>
-              <button
-                className="btn primary"
-                onClick={startGateway}
-                disabled={!canStartGateway || isGatewayRunning}
-              >
-                {isGatewayRunning ? "Gateway running" : "Launch local server"}
-              </button>
+              <GatewayLaunchButton
+                boot={heroBootState}
+                progress={heroProgress}
+                elapsedMs={heroElapsedMs}
+                maxWaitMs={boot.derived.maxWaitMs}
+                onStart={handleLaunchStart}
+                onCancel={handleLaunchCancel}
+                onReset={handleLaunchReset}
+                disabled={!canStartGateway}
+                disabledReason={doctorBlocking ? doctorBlocking.details : undefined}
+                onReadyClick={handleReadyLaunchClick}
+              />
+              {doctorBlocking ? (
+                <div className="inline-row">
+                  <div className="helper-text">Resolve the doctor issue above and retry.</div>
+                  <button className="btn ghost" onClick={runDoctor}>
+                    Run doctor
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
           <div className={`simple-step ${simpleStep2Complete ? "complete" : ""} ${simpleActiveStep === 2 ? "active" : ""}`}>
@@ -593,58 +651,46 @@ export const App = () => {
                   await copyText(baseUrl);
                   setSimpleSteps((prev) => ({ ...prev, copiedUrl: true }));
                 }}
-                disabled={!isGatewayRunning}
+                disabled={!gatewayReady}
               >
-                {simpleStep2Complete ? "Copied" : "Copy local URL"}
+                {simpleStep2Complete ? "Copied" : "Copy gateway URL"}
               </button>
             </div>
           </div>
           <div className={`simple-step ${simpleStep3Complete ? "complete" : ""} ${simpleActiveStep === 3 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep3Complete ? "✓" : "3"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Create your Therapy account</div>
-              <div className="simple-step-description">
-                Open the Therapy website to sign up or log in.
-              </div>
-              <button
-                className="btn"
-                onClick={() => {
-                  openUrl(createAccountUrl);
-                  setSimpleSteps((prev) => ({ ...prev, openedAccount: true }));
-                  logEvent("Opened Therapy account page.");
-                }}
-              >
-                {simpleStep3Complete ? "Account opened" : "Open Therapy login"}
-              </button>
-            </div>
-          </div>
-          <div className={`simple-step ${simpleStep4Complete ? "complete" : ""} ${simpleActiveStep === 4 ? "active" : ""}`}>
-            <div className="simple-step-index">{simpleStep4Complete ? "✓" : "4"}</div>
-            <div className="simple-step-content">
               <div className="simple-step-title">Paste the URL in Settings</div>
               <div className="simple-step-description">
                 We will open settings and copy the URL for you.
               </div>
-              <button
-                className="btn"
-                onClick={async () => {
-                  await copyText(baseUrl);
-                  openUrl(settingsUrl);
-                  setSimpleSteps((prev) => ({ ...prev, openedSettings: true }));
-                  logEvent("Opened Therapy settings and copied URL.");
-                }}
-              >
-                {simpleStep4Complete ? "Settings opened" : "Open settings + copy URL"}
-              </button>
+              <div className="button-row">
+                <button
+                  className="btn primary"
+                  onClick={async () => {
+                    await copyText(baseUrl);
+                    await openUrl(settingsUrl);
+                    setSimpleSteps((prev) => ({ ...prev, openedSettings: true }));
+                    logEvent("Opened Therapy settings and copied URL.");
+                  }}
+                  disabled={!gatewayReady}
+                  title={!gatewayReady ? "Start the gateway first." : undefined}
+                >
+                  {simpleStep3Complete ? "Settings opened" : "Next: Open Settings"}
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={async () => {
+                    await openUrl(helpUrl);
+                    logEvent("Opened help center.");
+                  }}
+                >
+                  Help
+                </button>
+              </div>
             </div>
           </div>
         </div>
-        {startError ? (
-          <div className="error-banner">
-            <div>Gateway failed to start.</div>
-            <div className="helper-text">{startError}</div>
-          </div>
-        ) : null}
         </div>
       </main>
 

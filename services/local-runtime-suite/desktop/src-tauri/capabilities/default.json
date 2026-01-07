@@ -9,8 +9,14 @@
       "allow": [
         {
           "url": "https://therapy-deliberate-practice.com/settings"
+        },
+        {
+          "url": "https://therapy-deliberate-practice.com/help"
         }
       ]
+    },
+    {
+      "identifier": "opener:allow-default-urls"
     },
     {
       "identifier": "shell:allow-spawn",

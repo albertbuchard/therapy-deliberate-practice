@@ -627,6 +627,9 @@ def _parse_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+DEFAULT_ALLOWED_ORIGINS = ["https://therapy-deliberate-practice.com"]
+
+
 def _resolve_cors_settings() -> tuple[list[str], str | None]:
     """
     Allow localhost/127.0.0.1 origins by default while enabling overrides via env.
@@ -638,8 +641,8 @@ def _resolve_cors_settings() -> tuple[list[str], str | None]:
         if "*" in origins:
             return ["*"], None
         return origins, None
-    # Allow any localhost / 127.0.0.1 origin + port (dev server, desktop wrapper, etc).
-    return [], r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    # Default: explicitly allow the Therapy web app plus any localhost / 127.0.0.1 origin + port.
+    return DEFAULT_ALLOWED_ORIGINS, r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
 
 
 cors_origins, cors_regex = _resolve_cors_settings()
