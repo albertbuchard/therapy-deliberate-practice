@@ -65,10 +65,21 @@ jobs:
         run: pip install -e services/local-runtime-suite/python
       - name: Generate model catalog
         run: python services/local-runtime-suite/tools/gen_models_json.py
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.os, 'macos')
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+      - name: List codesigning identities
+        if: startsWith(matrix.os, 'macos')
+        run: security find-identity -v -p codesigning
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # IMPORTANT: overrides tauri.conf.json > bundle > macOS > signingIdentity
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           projectPath: services/local-runtime-suite/desktop
           tagName: ${{ inputs.tag || github.ref_name }}
