@@ -40,7 +40,11 @@ export const mimeTypeToFilename = (mimeType?: string) => {
 };
 
 const createFile = (bytes: Uint8Array, filename: string, mimeType: string) => {
-  const blob = new Blob([bytes], { type: mimeType });
+  const arrayBuffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  ) as ArrayBuffer;
+  const blob = new Blob([arrayBuffer], { type: mimeType });
   if (typeof File !== "undefined") {
     return new File([blob], filename, { type: mimeType });
   }
@@ -74,6 +78,7 @@ export const transcribeWithOpenAI = async (
     const response = await openai.audio.transcriptions.create({
       file,
       model,
+      stream: false,
       ...(input.opts?.prompt &&
       (model === "gpt-4o-mini-transcribe" || model === "gpt-4o-transcribe")
         ? { prompt: input.opts.prompt }
@@ -82,14 +87,12 @@ export const transcribeWithOpenAI = async (
       ...(isDiarize && responseFormat === "diarized_json"
         ? {
             chunking_strategy: input.opts?.chunkingStrategy ?? "auto",
-            extra_body: {
-              ...(input.opts?.knownSpeakerNames
-                ? { known_speaker_names: input.opts.knownSpeakerNames }
-                : {}),
-              ...(input.opts?.knownSpeakerReferences
-                ? { known_speaker_references: input.opts.knownSpeakerReferences }
-                : {})
-            }
+            ...(input.opts?.knownSpeakerNames
+              ? { known_speaker_names: input.opts.knownSpeakerNames }
+              : {}),
+            ...(input.opts?.knownSpeakerReferences
+              ? { known_speaker_references: input.opts.knownSpeakerReferences }
+              : {})
           }
         : {})
     });

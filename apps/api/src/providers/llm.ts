@@ -11,42 +11,6 @@ import { deliberatePracticeTaskV2Schema, evaluationResultSchema, llmParseSchema 
 import { createStructuredResponse } from "./openaiResponses";
 import { OPENAI_LLM_MODEL } from "./models";
 import { BaseLlmProvider } from "./base";
-import { localSuiteHealthCheck, localSuiteStructuredResponse } from "./localSuite";
-
-class LocalMlxLlmProviderImpl extends BaseLlmProvider {
-  constructor(private baseUrl: string, logger?: LogFn) {
-    super("local", undefined, logger);
-  }
-
-  healthCheck() {
-    return localSuiteHealthCheck(this.baseUrl);
-  }
-
-  protected async doEvaluateDeliberatePractice(input: EvaluationInput) {
-    const systemPrompt =
-      "You are an evaluator for psychotherapy deliberate practice tasks. Return strict JSON only that matches EvaluationResult with criterion_scores.";
-    const result = await localSuiteStructuredResponse<EvaluationResult>({
-      baseUrl: this.baseUrl,
-      temperature: 0.2,
-      instructions: systemPrompt,
-      input: JSON.stringify(input),
-      schemaName: "EvaluationResult",
-      schema: evaluationResultSchema
-    });
-    return { value: result.value, requestId: result.responseId };
-  }
-
-  protected async doParseExercise(_input: { sourceText: string; parseMode?: ParseMode }) {
-    throw new Error("Local LLM does not support task parsing.");
-  }
-
-  protected async doTranslateTask(_input: {
-    source: DeliberatePracticeTaskV2;
-    targetLanguage: string;
-  }) {
-    throw new Error("Local LLM does not support task translation.");
-  }
-}
 
 class OpenAILlmProviderImpl extends BaseLlmProvider {
   constructor(private apiKey: string, logger?: LogFn) {
@@ -287,9 +251,6 @@ Translation rules:
     return { value: result.value, requestId: result.responseId };
   }
 }
-
-export const LocalMlxLlmProvider = (baseUrl: string, logger?: LogFn): LlmProvider =>
-  new LocalMlxLlmProviderImpl(baseUrl, logger);
 
 export const OpenAILlmProvider = (
   { apiKey }: { apiKey: string },

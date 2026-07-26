@@ -2,6 +2,14 @@ import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import type { EvaluationResult } from "@deliberate/shared";
 
 type RecordingState = "idle" | "recording" | "processing" | "ready";
+type ScoreTrust = "cloud_trusted" | "local_unverified";
+
+type AttemptHistoryEntry = {
+  transcript?: string;
+  evaluation?: EvaluationResult;
+  attemptId?: string;
+  scoreTrust?: ScoreTrust;
+};
 
 type PracticeState = {
   sessionId?: string;
@@ -20,11 +28,9 @@ type PracticeState = {
   audioMime?: string;
   transcript?: string;
   evaluation?: EvaluationResult;
+  scoreTrust?: ScoreTrust;
   patientReaction?: EvaluationResult["patient_reaction"];
-  attemptHistory: Record<
-    string,
-    { transcript?: string; evaluation?: EvaluationResult; attemptId?: string }
-  >;
+  attemptHistory: Record<string, AttemptHistoryEntry>;
   ui: {
     expandedCriteria: string[];
     lastScores: Record<string, number>;
@@ -57,6 +63,7 @@ const practiceSlice = createSlice({
       state.audioMime = undefined;
       state.transcript = undefined;
       state.evaluation = undefined;
+      state.scoreTrust = undefined;
       state.patientReaction = undefined;
       state.attemptHistory = {};
     },
@@ -71,6 +78,7 @@ const practiceSlice = createSlice({
       state.currentAttemptId = undefined;
       state.transcript = undefined;
       state.evaluation = undefined;
+      state.scoreTrust = undefined;
       state.patientReaction = undefined;
       state.attemptHistory = {};
     },
@@ -82,11 +90,13 @@ const practiceSlice = createSlice({
         const attempt = state.attemptHistory[activeItemId];
         state.transcript = attempt.transcript;
         state.evaluation = attempt.evaluation;
+        state.scoreTrust = attempt.scoreTrust;
         state.currentAttemptId = attempt.attemptId;
         state.patientReaction = attempt.evaluation?.patient_reaction;
       } else {
         state.transcript = undefined;
         state.evaluation = undefined;
+        state.scoreTrust = undefined;
         state.currentAttemptId = undefined;
         state.patientReaction = undefined;
       }
@@ -116,7 +126,7 @@ const practiceSlice = createSlice({
     setSessionAttempts(
       state,
       action: PayloadAction<
-        Record<string, { transcript?: string; evaluation?: EvaluationResult; attemptId?: string }>
+        Record<string, AttemptHistoryEntry>
       >
     ) {
       state.attemptHistory = action.payload;
@@ -124,6 +134,7 @@ const practiceSlice = createSlice({
         const attempt = state.attemptHistory[state.currentSessionItemId];
         state.transcript = attempt.transcript;
         state.evaluation = attempt.evaluation;
+        state.scoreTrust = attempt.scoreTrust;
         state.currentAttemptId = attempt.attemptId;
         state.patientReaction = attempt.evaluation?.patient_reaction;
       }
@@ -135,16 +146,19 @@ const practiceSlice = createSlice({
         transcript?: string;
         evaluation?: EvaluationResult;
         attemptId?: string;
+        scoreTrust?: ScoreTrust;
       }>
     ) {
       state.attemptHistory[action.payload.sessionItemId] = {
         transcript: action.payload.transcript,
         evaluation: action.payload.evaluation,
-        attemptId: action.payload.attemptId
+        attemptId: action.payload.attemptId,
+        scoreTrust: action.payload.scoreTrust
       };
       if (state.currentSessionItemId === action.payload.sessionItemId) {
         state.transcript = action.payload.transcript;
         state.evaluation = action.payload.evaluation;
+        state.scoreTrust = action.payload.scoreTrust;
         state.currentAttemptId = action.payload.attemptId;
         state.patientReaction = action.payload.evaluation?.patient_reaction;
         if (action.payload.evaluation) {

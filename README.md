@@ -1,387 +1,238 @@
 # Therapy Deliberate Practice Studio
 
-Production-grade monorepo for a psychotherapy deliberate-practice platform.
+Therapy Deliberate Practice Studio helps psychotherapy trainees practise specific communication skills, record or type a response, and review structured feedback. The repository also contains an optional desktop Local Runtime Suite for running speech and language models on the learner's computer.
 
-## Structure
+## What is in this repository
 
+```text
+apps/
+  web/                    React learner and administration interface
+  api/                    Shared Hono API, provider, and persistence code
+  worker/                 Cloudflare Worker, D1 migrations, and R2 integration
+packages/
+  shared/                 Shared application types and utilities
+services/
+  local-runtime-suite/    FastAPI gateway, model adapters, and Tauri desktop app
+infra/                    Local development resources
 ```
-/apps
-  /web
-  /api
-  /worker
-/packages
-  /shared
-/services
-  /local-stt
-  /local-llm
-/infra
+
+The production web path uses a Cloudflare Worker with D1 and R2. The desktop app starts a loopback-only FastAPI gateway. When local AI is selected, the browser calls that gateway directly; a hosted Worker cannot reach a learner's `127.0.0.1`.
+
+## Requirements
+
+- Node.js 24 LTS
+- npm 11
+- Python 3.12 and `uv` for Local Runtime development
+- Rust stable and the Tauri platform prerequisites for desktop development
+- Wrangler for Cloudflare Worker development
+- A Supabase project for authentication
+- A Cloudflare account for production D1, R2, and Worker resources
+
+The root `package.json` pins the supported Node.js and npm ranges.
+
+## First local setup
+
+Install the JavaScript dependencies:
+
+```bash
+npm ci
 ```
 
-## Prerequisites
+Copy the environment example:
 
-- Node 20
-- npm 10+
-- Wrangler (`npm install -g wrangler`)
-- A Supabase project (Google + GitHub OAuth enabled)
-- Cloudflare account (for D1 + Worker deploys)
-
-## Environment setup
-
-### Local `.env` (API + shared defaults)
-
-Copy the root env file and fill in the required values for local API dev (`apps/api` uses `DB_PATH`).
-
-```
+```bash
 cp .env.example .env
 ```
 
-Add/confirm the following variables in the root `.env`:
+Set the values required by the surface you are running. Keep all secret values out of source control.
 
-```
-AI_MODE=local_prefer
-OPENAI_API_KEY=sk-...
-OPENAI_KEY_ENCRYPTION_SECRET=your-32+char-secret
-SUPABASE_JWT_SECRET=your-supabase-jwt-secret
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-LOCAL_STT_URL=http://localhost:7001
-LOCAL_LLM_URL=http://localhost:7002
-LOCAL_LLM_MODEL=mlx-community/Mistral-7B-Instruct-v0.2
-DB_PATH=./infra/local.db
-ENV=development
-BYPASS_ADMIN_AUTH=true
-DEV_ADMIN_TOKEN=local-admin-token
-```
+For the web client, create `apps/web/.env`:
 
-### Web env (`apps/web/.env`)
-
-Create a Vite env file for the frontend:
-
-```
-cd apps/web
-cat <<'ENV' > .env
+```dotenv
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
-ENV
 ```
 
-## Real Time Mode (Hard Practice) + cached TTS setup
+The Vite variables are public browser configuration. Never put service-role keys or other secrets in a `VITE_` variable.
 
-Follow these steps to enable patient-audio TTS caching (R2) and the Real Time Mode flow.
+## Run the web application
 
-1. **Create the R2 bucket.**
+For the Worker-backed application:
 
-   Create an R2 bucket in Cloudflare named `deliberate-practice-audio` (or your preferred name).
-
-2. **Configure R2 for the runtime you are using.**
-
-   - **Worker runtime (Cloudflare):** use the native R2 binding in `apps/worker/wrangler.jsonc`.
-     This repo already expects:
-
-     ```
-     r2_buckets = [{ bucket_name = "deliberate-practice-audio", binding = "deliberate_practice_audio" }]
-     vars.R2_BUCKET = "deliberate-practice-audio"
-     ```
-
-     No `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, or `R2_S3_ENDPOINT` are required
-     for the Worker.
-
-   - **Node runtime (apps/api dev server):** configure the S3-compatible R2 client in the root `.env`:
-
-     ```
-     R2_ACCOUNT_ID=your-account-id
-     R2_ACCESS_KEY_ID=your-access-key
-     R2_SECRET_ACCESS_KEY=your-secret-key
-     R2_BUCKET=deliberate-practice-audio
-     R2_PUBLIC_BASE_URL= # optional
-     R2_S3_ENDPOINT= # optional, defaults to https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
-     ```
-
-3. **Apply the new `tts_assets` migration.**
-
-   - For D1 (local):
-
-     ```
-     npm run migrate:local -w apps/worker
-     ```
-
-   - For D1 (remote):
-
-     ```
-     npm run migrate:remote -w apps/worker
-     ```
-
-   - For the local SQLite API DB (Node dev server):
-
-     ```
-     sqlite3 apps/api/infra/local.db < apps/worker/migrations/0002_add_tts_assets.sql
-     ```
-
-4. **Ensure OpenAI TTS can run.**
-
-   Set `OPENAI_API_KEY` in the root `.env` (or as a Worker secret) so the API can call
-   `POST /v1/audio/speech` via the provider layer.
-
-5. **Start the API and web apps.**
-
-   ```
-   npm run dev -w apps/api
-   npm run dev -w apps/web
-   ```
-
-6. **Open a Practice session and enable Real Time Mode.**
-
-   - Go to `/practice/:taskId` in the web app.
-   - Toggle **Real Time Mode**.
-   - The app calls `POST /api/v1/practice/patient-audio/prefetch`, which:
-     - Finds the patient text (Phase 1 uses `task_examples.patient_text` for the selected example).
-     - Generates or reuses cached audio in R2.
-   - Once audio is ready, the patient audio plays first; recording unlocks when playback ends.
-
-7. **Verify audio is cached.**
-
-   - First request: `tts_assets.status` goes `generating → ready` and the audio file is written to R2.
-   - Subsequent requests for the same text/model/voice/format reuse the existing `cache_key`.
-   - Audio is served via `GET /api/v1/tts/:cacheKey` (auth required) with long-lived cache headers.
-
-### Worker env (Cloudflare)
-
-In `apps/worker/wrangler.jsonc`, define non-secret vars, bind the D1 database, and bind R2:
-
-- `AI_MODE`
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-- `SUPABASE_JWT_SECRET`
-- `LOCAL_STT_URL`
-- `LOCAL_LLM_URL`
-- `LOCAL_LLM_MODEL`
-- `R2_BUCKET` (matches the R2 bucket name)
-
-Ensure the `r2_buckets` binding is present:
-
-```
-r2_buckets = [{ bucket_name = "deliberate-practice-audio", binding = "deliberate_practice_audio" }]
-```
-
-Use Wrangler secrets for sensitive values:
-
-```
-cd apps/worker
-wrangler secret put OPENAI_API_KEY
-wrangler secret put OPENAI_KEY_ENCRYPTION_SECRET
-wrangler secret put SUPABASE_JWT_SECRET
-```
-
-## Supabase configuration
-
-1. In Supabase → **Authentication** → **Providers**, enable **Google** and **GitHub**.
-2. Configure OAuth redirect URLs:
-   - `http://localhost:5173/login`
-   - `https://your-production-domain.com/login`
-3. Grab the **Project URL** and **Anon public key** for `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
-4. Grab the **JWT secret** (Project Settings → API → JWT Secret) for `SUPABASE_JWT_SECRET`.
-
-## D1 setup & migrations
-
-Wrangler now manages tracked D1 migrations from `apps/worker/migrations`. Migrations are applied
-in filename order and tracked by Wrangler, so the commands below are safe to run repeatedly.
-
-### Create the database
-
-```
-wrangler d1 create deliberate_practice
-```
-
-Copy the resulting `database_id` into `apps/worker/wrangler.jsonc` under the `DB` binding.
-
-### Local D1 (development)
-
-```
-npm run migrate:local -w apps/worker
-```
-
-Optional seed (idempotent):
-
-```
-wrangler d1 execute DB --file=apps/worker/seed.sql --local
-```
-
-### Remote D1 (production)
-
-```
-npm run migrate:remote -w apps/worker
-```
-
-> Migrations run before deploy in CI via `npm run deploy:ci -w apps/worker`.
-
-### CI deploy command sequence (Cloudflare)
-
-```
-npm ci
-npm run build -w apps/web
-npm run deploy:ci -w apps/worker
-```
-
-### Adding a new migration
-
-1. Add a new SQL file under `apps/worker/migrations/` with the next numeric prefix
-   (e.g. `0004_add_feature.sql`).
-2. Commit the file. The next `migrate:*` run will apply it once, in order.
-
-### Local SQLite for `apps/api`
-
-For the Node dev server (`apps/api`), initialize the SQLite database:
-
-```
-rm -f apps/api/infra/local.db
-sqlite3 apps/api/infra/local.db < apps/worker/migrations/0001_init_v2.sql
-sqlite3 apps/api/infra/local.db < apps/api/infra/seed.sql
-```
-
-### Seeding & migrations summary
-
-Local SQLite (API dev):
-
-```
-rm -f apps/api/infra/local.db
-sqlite3 apps/api/infra/local.db < apps/worker/migrations/0001_init_v2.sql
-sqlite3 apps/api/infra/local.db < apps/api/infra/seed.sql
-```
-
-Local D1:
-
-```
-npm run migrate:local -w apps/worker
-wrangler d1 execute DB --local --file=./seed.sql
-```
-
-Remote D1:
-
-```
-npm run migrate:remote -w apps/worker
-wrangler d1 execute DB --remote --file=./seed.sql
-```
-
-## Running locally
-
-### Web + API (node)
-
-```
-npm install
-npm run dev -w apps/web
-npm run dev -w apps/api
-```
-
-### Full-stack Worker (serves web + API)
-
-Build the frontend first so the Worker can serve static assets:
-
-```
-npm run build -w apps/web
-cd apps/worker
+```bash
 npm run dev
 ```
 
-### Local inference services (optional)
+This starts the Worker development server and the Vite web server. You can also start them separately:
 
-```
-docker compose -f infra/docker-compose.yml up
-```
-
-## Debugging practice runs
-
-Use request tracing to follow a single practice session end-to-end.
-
-### Tail logs (Cloudflare Worker)
-
-```
-cd apps/worker
-wrangler tail
+```bash
+npm run dev:worker
+npm run dev:web
 ```
 
-Look for `request.start`, `practice.run.start`, `stt.transcribe.ok`, `llm.evaluate.ok`, and `practice.run.ok`
-events. Each log line includes a `requestId` that matches the `x-request-id` response header and the
-`requestId` field in the JSON response body.
+The Node and SQLite API adapter remains available for focused local development:
 
-### Typical failure modes
+```bash
+npm run dev:api
+```
 
-- **input**: audio missing/too small or invalid payload. UI shows the error and requestId.
-- **stt**: provider unavailable or transcription failure. Check `stt.select.*` and `stt.transcribe.*` logs.
-- **scoring**: LLM provider failures or invalid JSON output. Check `llm.evaluate.*` logs.
-- **db**: attempt write failures. Check `db.attempt.insert.*` logs.
+## Use local models
 
-### Manual test checklist
+The supported learner flow uses one local gateway for speech recognition and language evaluation.
 
-- Local mode (Node dev server): start a practice run and confirm transcript + scoring.
-- Worker mode (wrangler dev / production): confirm logs appear in `wrangler tail`.
-- With/without OpenAI key: ensure missing key surfaces a clear `scoring` error.
-- Local endpoints configured vs not configured: confirm provider selection and fallback logs.
+1. Start the Local Runtime Suite from its desktop application or run the development gateway:
 
-## Deployment (Worker)
-
-1. Build the web app:
+   ```bash
+   npm run dev:local
    ```
-   npm run build -w apps/web
-   ```
-2. Deploy the Worker:
-   ```
-   cd apps/worker
-   wrangler deploy
-   ```
-3. Ensure Worker secrets/vars are set (see Environment setup section).
 
-## Configuration reference
+2. Open the desktop application and wait until the gateway is ready.
+3. Copy the local URL and pairing key shown by the desktop application.
+4. Open Settings in the Therapy web application.
+5. Select local AI, paste both values, and test the connection.
+6. Load compatible speech and language models before starting practice.
 
-- `AI_MODE` = `local_prefer` | `openai_only` | `local_only`
+The pairing key is stored in the browser for that exact loopback origin. The browser sends it only to the local gateway as a bearer credential. It is not sent to the hosted API, included in a URL, or written to ordinary application logs.
+
+The default gateway origin is `http://127.0.0.1:8484`. Protected gateway routes require the pairing key. The public health route reveals only basic product status.
+
+See [services/local-runtime-suite/README.md](services/local-runtime-suite/README.md) for model support, gateway development, and packaging details.
+
+## Local-model support
+
+The generated catalog in `apps/web/public/local-suite/models.json` is the source shown by the web and desktop interfaces.
+
+| Model                                  | Purpose             | Packaged platforms                                       |
+| -------------------------------------- | ------------------- | -------------------------------------------------------- |
+| Qwen3 4B Instruct MLX                  | Language evaluation | Apple-silicon macOS                                      |
+| Qwen3 4B Instruct through Transformers | Language evaluation | Apple-silicon macOS, Windows x64, Linux x64              |
+| Parakeet MLX                           | Speech recognition  | Apple-silicon macOS                                      |
+| Faster Whisper                         | Speech recognition  | Apple-silicon macOS, Intel macOS, Windows x64, Linux x64 |
+
+Intel macOS does not advertise a packaged language model because PyTorch 2.13 has no Python 3.12 Intel-macOS wheel. The desktop interface filters the catalog by the detected platform instead of offering a model that cannot load.
+
+## Configure authentication
+
+In Supabase:
+
+1. Enable the required Google and GitHub authentication providers.
+2. Add `http://localhost:5173/login` for local development.
+3. Add the production `/login` URL for the deployed application.
+4. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_JWT_SECRET` for the relevant runtime.
+
+The anonymous key is browser-visible by design. The JWT secret is sensitive and must remain a server-side secret.
+
+## Configure text-to-speech and R2
+
+Real Time Mode generates or reuses patient audio and stores it in R2.
+
+The Worker uses the `deliberate_practice_audio` R2 binding declared in `apps/worker/wrangler.jsonc`. Set `R2_BUCKET` to the bound bucket name. The Worker does not need S3-compatible R2 access keys.
+
+The Node adapter uses the S3-compatible variables in `.env`:
+
+```dotenv
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET=deliberate-practice-audio
+R2_PUBLIC_BASE_URL=
+R2_S3_ENDPOINT=
+```
+
+Set `OPENAI_API_KEY` when hosted text-to-speech or hosted evaluation is required. The Worker value must be a Wrangler secret.
+
+## Database migrations
+
+Cloudflare tracks D1 migrations in `apps/worker/migrations`.
+
+Apply local D1 migrations:
+
+```bash
+npm run migrate:local -w apps/worker
+```
+
+Apply remote D1 migrations only when you are deliberately changing the configured production database:
+
+```bash
+npm run migrate:remote -w apps/worker
+```
+
+Initialize the local SQLite database from the same schema:
+
+```bash
+sqlite3 apps/api/infra/local.db < apps/worker/migrations/0001_init_v2.sql
+sqlite3 apps/api/infra/local.db < apps/api/infra/seed.sql
+```
+
+Apply the text-to-speech asset migration when the local database does not yet contain it:
+
+```bash
+sqlite3 apps/api/infra/local.db < apps/worker/migrations/0002_add_tts_assets.sql
+```
+
+## Administration
+
+Local administration can use the development bypass only when `ENV=development`:
+
+```dotenv
+ENV=development
+BYPASS_ADMIN_AUTH=true
+DEV_ADMIN_TOKEN=choose-a-local-token
+```
+
+Store the token in browser local storage for local testing:
+
+```js
+localStorage.setItem("devAdminToken", "<DEV_ADMIN_TOKEN>");
+```
+
+Production administration uses Cloudflare Access plus `ADMIN_EMAILS`, `ADMIN_GROUPS`, and `CF_ACCESS_AUD`. Keep the development bypass disabled in production.
+
+## Validate a change
+
+Run the bounded repository checks:
+
+```bash
+npm run lint
+npm test
+npm run build
+npm run audit:production
+```
+
+The continuous-integration workflow also checks Python formatting and tests, the generated model catalog, Rust formatting and tests, workflow syntax, and desktop release metadata.
+
+Desktop package builds are manual and build-only. They do not create or update a GitHub Release. See [services/local-runtime-suite/desktop/README.md](services/local-runtime-suite/desktop/README.md) for the release boundary.
+
+## Deployment boundary
+
+Building and testing this repository does not deploy the Worker or publish a desktop release.
+
+The Worker deployment command is:
+
+```bash
+npm run deploy:prod
+```
+
+Run it only with explicit deployment authorization and the intended Cloudflare account selected.
+
+Desktop publication uses a separate manual workflow that validates the selected version tag and matching native build, signatures, notarization, and an explicit `PUBLISH` confirmation before it can create a draft release. GitHub environment protection is a repository setting, not something workflow YAML can establish. Treat publication as disabled until administrators independently verify required reviewers, no-bypass rules, version-tag restrictions, and environment-scoped credentials for both desktop release environments. Even after that setup, a human must inspect and publish any draft separately.
+
+## Environment reference
+
+Common server-side variables are:
+
 - `OPENAI_API_KEY`
-- `OPENAI_KEY_ENCRYPTION_SECRET` (required; encrypts user keys at rest)
+- `OPENAI_KEY_ENCRYPTION_SECRET`
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
-- `SUPABASE_JWT_SECRET` (required for Supabase JWT verification)
-- `ADMIN_EMAILS` (comma-separated allowlist for admin access)
-- `ADMIN_GROUPS` (optional comma-separated Cloudflare Access group IDs)
-- `CF_ACCESS_AUD` (Cloudflare Access application audience)
-- `BYPASS_ADMIN_AUTH` (set to `true` only for local development)
-- `DEV_ADMIN_TOKEN` (dev-only token used with `x-dev-admin-token`)
-- `ENV` (set to `development` to enable dev-only auth bypass)
-- `LOCAL_STT_URL`
-- `LOCAL_LLM_URL`
-- `LOCAL_LLM_MODEL`
-- `DB_PATH` (Node-only SQLite path for `apps/api` dev server)
-- `VITE_SUPABASE_URL` (web)
-- `VITE_SUPABASE_ANON_KEY` (web)
+- `SUPABASE_JWT_SECRET`
+- `R2_BUCKET`
+- `R2_PUBLIC_BASE_URL`
+- `ADMIN_EMAILS`
+- `ADMIN_GROUPS`
+- `CF_ACCESS_AUD`
+- `ENV`
+- `BYPASS_ADMIN_AUTH`
+- `DEV_ADMIN_TOKEN`
 
-## Admin library (authoring/import)
-
-### Cloudflare Access setup (production)
-
-1. In the Cloudflare dashboard, go to **Zero Trust** → **Access** → **Applications** and select **Add an application**.
-2. Choose **Self-hosted**.
-3. Set the **Application name** (e.g., `therapy-deliberate-practice-admin`) and enter the **Domain** that serves the Worker (e.g., `app.yourdomain.com`).
-4. Under **Session Duration**, choose an appropriate timeout for admins (e.g., 8h).
-5. Add an **Access policy**:
-   1. Policy name: `Admins`.
-   2. Action: **Allow**.
-   3. Include rules:
-      - **Emails** → enter each admin email (for `ADMIN_EMAILS`), **or**
-      - **Access Groups** → select the group(s) you want to allow (for `ADMIN_GROUPS`).
-6. Add a **Deny** policy below the Allow policy to block everyone else (default deny).
-7. In the application **Self-hosted** settings, enable **Path rules** and add:
-   - `/admin/*`
-   - `/api/v1/admin/*`
-8. Save the application.
-9. Copy the **Audience (AUD)** from the application settings and set it as `CF_ACCESS_AUD` in Worker variables.
-10. In the Cloudflare dashboard, go to **Workers & Pages** → your Worker → **Settings** → **Variables** and set:
-    - `ADMIN_EMAILS` (comma-separated list of allowed emails), and/or
-    - `ADMIN_GROUPS` (comma-separated Access group IDs)
-    - `CF_ACCESS_AUD` (Access application audience)
-11. Deploy the Worker and verify that:
-    - Visiting `/admin/library` prompts for Access login.
-    - `/api/v1/admin/whoami` returns `isAuthenticated: true` and `isAdmin: true` for an allowed user.
-
-### Local development
-
-1. Set `ENV=development` and `BYPASS_ADMIN_AUTH=true` for the API/Worker.
-2. Set `DEV_ADMIN_TOKEN` in the API/Worker environment.
-3. In the browser console, run `localStorage.setItem("devAdminToken", "<DEV_ADMIN_TOKEN>")`.
-4. Visit `/admin/library` to parse, edit, and import exercises.
+`AI_MODE`, `LOCAL_STT_URL`, `LOCAL_LLM_URL`, and `LOCAL_LLM_MODEL` remain for the Node adapter and compatibility tests. The production learner flow does not expect a hosted Worker to call those loopback URLs. Users configure the browser-to-gateway connection in Therapy Settings.

@@ -168,6 +168,9 @@ export const getOrCreateTtsAsset = async (
     const head = await storage.headObject(env.r2Bucket, r2Key);
     if (head.exists) {
       const inserted = await ensureReadyFromHead(head);
+      if (!inserted) {
+        throw new Error("TTS asset head reported ready but no database asset was created.");
+      }
       return { status: "ready", asset: inserted, cacheKey, audioUrl };
     }
     try {

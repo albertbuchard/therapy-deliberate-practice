@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeliberatePracticeTaskV2 } from "@deliberate/shared";
 import { deliberatePracticeTaskV2Schema } from "@deliberate/shared";
 import { useTranslation } from "react-i18next";
@@ -17,11 +17,11 @@ export const ImportTaskDialog = ({ open, isImporting, onClose, onImport }: Impor
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     setJsonValue("");
     setError(null);
     onClose();
-  };
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -36,7 +36,7 @@ export const ImportTaskDialog = ({ open, isImporting, onClose, onImport }: Impor
       if (event.key === "Tab") {
         const focusable = Array.from(
           containerRef.current?.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])'
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
           ) ?? []
         );
         if (!focusable.length) return;
@@ -53,7 +53,7 @@ export const ImportTaskDialog = ({ open, isImporting, onClose, onImport }: Impor
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [open]);
+  }, [handleClose, open]);
 
   if (!open) return null;
 

@@ -4,8 +4,7 @@ const getWebCrypto = async () => {
   if (globalThis.crypto?.subtle) {
     return globalThis.crypto;
   }
-  const { webcrypto } = await import("node:crypto");
-  return webcrypto as Crypto;
+  throw new Error("Web Crypto is unavailable in this runtime.");
 };
 
 const base64Encode = (buffer: ArrayBuffer) => {

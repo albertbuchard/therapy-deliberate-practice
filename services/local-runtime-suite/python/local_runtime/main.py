@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
+import secrets
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Callable
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from local_runtime.api.openai_compat import (
     format_audio_transcription_response,
@@ -22,10 +24,10 @@ from local_runtime.api.openai_compat import (
 from local_runtime.core.config import RuntimeConfig
 from local_runtime.core.doctor import run_doctor
 from local_runtime.core.errors import ModelNotFoundError
+from local_runtime.core.load_manager import ModelLoadManager
 from local_runtime.core.loader import LoadedModel, load_models
 from local_runtime.core.logging import configure_logging, get_recent_logs, pop_log_context, push_log_context
 from local_runtime.core.readiness import ReadinessTracker
-from local_runtime.core.load_manager import ModelLoadManager
 from local_runtime.core.registry import ModelRegistry
 from local_runtime.core.selector import SelectionStrategy, detect_platform, is_platform_supported
 from local_runtime.core.selftest import run_startup_self_test
@@ -40,480 +42,6 @@ from local_runtime.helpers.structured_enforcer import (
 from local_runtime.runtime_types import RunContext, RunRequest
 
 LOGGER = configure_logging()
-HOME_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Local Runtime Gateway</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: radial-gradient(circle at top, #101828 0%, #05060a 60%, #030303 100%);
-      color: #f7f7f8;
-    }
-    .page {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 32px 24px 80px;
-    }
-    .hero {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 24px;
-      margin-bottom: 32px;
-    }
-    .hero h1 {
-      font-size: 2.6rem;
-      margin: 0;
-    }
-    .hero p {
-      margin: 4px 0 0;
-      color: #cbd5f5;
-      max-width: 640px;
-    }
-    .hero-meta {
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .hero-meta span {
-      display: block;
-    }
-    .chip {
-      background: rgba(255, 255, 255, 0.08);
-      padding: 8px 14px;
-      border-radius: 999px;
-      font-size: 0.9rem;
-      color: #e3e8ff;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 24px;
-      margin-bottom: 32px;
-    }
-    .card {
-      background: rgba(15, 23, 42, 0.85);
-      border: 1px solid rgba(226, 232, 255, 0.08);
-      border-radius: 20px;
-      padding: 24px;
-      box-shadow: 0 20px 60px rgba(15, 23, 42, 0.6);
-      backdrop-filter: blur(6px);
-    }
-    .card h2 {
-      margin: 0 0 8px;
-      font-size: 1.3rem;
-    }
-    .card p {
-      margin: 0 0 16px;
-      color: #94a3b8;
-    }
-    label {
-      display: block;
-      font-size: 0.9rem;
-      margin-bottom: 6px;
-      color: #c3d3ff;
-    }
-    .inline-toggle {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.9rem;
-      margin: 8px 0;
-      color: #c3d3ff;
-    }
-    input[type="text"],
-    input[type="number"],
-    textarea,
-    select {
-      width: 100%;
-      border-radius: 12px;
-      border: 1px solid rgba(226, 232, 255, 0.2);
-      background: rgba(15, 18, 30, 0.9);
-      color: #f2f2f7;
-      padding: 10px 14px;
-      font-size: 1rem;
-      margin-bottom: 12px;
-      font-family: inherit;
-    }
-    textarea {
-      min-height: 110px;
-      resize: vertical;
-    }
-    button {
-      border: none;
-      border-radius: 999px;
-      padding: 10px 20px;
-      background: linear-gradient(120deg, #6366f1, #8b5cf6);
-      color: white;
-      font-size: 1rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform 120ms ease, box-shadow 120ms ease;
-    }
-    button:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 10px 30px rgba(99, 102, 241, 0.35);
-    }
-    .output {
-      background: rgba(5, 8, 20, 0.85);
-      border-radius: 14px;
-      padding: 12px;
-      min-height: 120px;
-      overflow: auto;
-      border: 1px solid rgba(99, 102, 241, 0.2);
-    }
-    .logs {
-      max-height: 320px;
-      overflow: auto;
-      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-      background: rgba(2, 6, 23, 0.9);
-      border-radius: 16px;
-      padding: 16px;
-      border: 1px solid rgba(99, 102, 241, 0.24);
-    }
-    .logs pre {
-      margin: 0;
-      color: #cbd5ff;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    audio {
-      width: 100%;
-      margin-top: 8px;
-    }
-    @media (max-width: 640px) {
-      .hero h1 { font-size: 2rem; }
-      .page { padding: 24px 16px 60px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <header class="hero">
-      <div>
-        <h1>Local Runtime Gateway</h1>
-        <p>Exercise the Responses, Speech, and Transcription pipelines without leaving your browser. Every action proxies the same OpenAI-compatible APIs exposed to the desktop app.</p>
-      </div>
-      <div class="hero-meta">
-        <div class="chip">
-          <span style="font-size:0.8rem; text-transform:uppercase; letter-spacing:0.08em;">Platform</span>
-          <span id="platform-label">detecting…</span>
-        </div>
-        <div class="chip">
-          <span style="font-size:0.8rem; text-transform:uppercase; letter-spacing:0.08em;">Default Models</span>
-          <span id="defaults-summary">pending…</span>
-        </div>
-      </div>
-    </header>
-
-    <section class="grid">
-      <article class="card">
-        <h2>Responses API</h2>
-        <p>Send a JSON Responses request and inspect the payload returned by the server.</p>
-        <form id="responses-form">
-          <label for="responses-model">Model Override</label>
-          <input id="responses-model" type="text" placeholder="leave blank for default">
-          <label for="responses-system">System Prompt</label>
-          <input id="responses-system" type="text" placeholder="You are a helpful therapist...">
-          <label for="responses-input">User Message</label>
-          <textarea id="responses-input" placeholder="Describe your current mood..."></textarea>
-          <button type="submit">Call /v1/responses</button>
-        </form>
-        <pre id="responses-output" class="output">// responses output</pre>
-      </article>
-
-      <article class="card">
-        <h2>Structured Output Test</h2>
-        <p>Exercise <code>text.format.type = "json_schema"</code> with strict validation enforced in the gateway.</p>
-        <form id="structured-form">
-          <label for="structured-model">Model Override</label>
-          <input id="structured-model" type="text" placeholder="leave blank for default">
-          <label for="structured-schema-name">Schema Name</label>
-          <input id="structured-schema-name" type="text" value="StructuredOutput">
-          <label for="structured-schema">JSON Schema</label>
-          <textarea id="structured-schema" rows="6" placeholder='{"type":"object","properties":{"summary":{"type":"string"}}}'></textarea>
-          <label class="inline-toggle">
-            <input id="structured-strict" type="checkbox" checked>
-            Strict mode (additional properties blocked)
-          </label>
-          <label for="structured-input">User Message</label>
-          <textarea id="structured-input" placeholder="Ask the model for a JSON-only reply..."></textarea>
-          <button type="submit">Run Structured Test</button>
-        </form>
-        <pre id="structured-output" class="output">// structured output</pre>
-      </article>
-
-      <article class="card">
-        <h2>Speech API</h2>
-        <p>Generate audio using the unified Chatterbox TTS backend with CFG + exaggeration controls.</p>
-        <form id="speech-form">
-          <label for="speech-model">Model Override</label>
-          <input id="speech-model" type="text" placeholder="auto">
-          <label for="speech-language">Language / Lang Code</label>
-          <input id="speech-language" type="text" placeholder="en / fr / zh">
-          <label for="speech-audio-prompt">Audio Prompt Path (optional)</label>
-          <input id="speech-audio-prompt" type="text" placeholder="/path/to/reference.wav">
-          <label for="speech-text">Narration Text</label>
-          <textarea id="speech-text" placeholder="Share a short calming message."></textarea>
-          <div style="display:flex; gap:12px;">
-            <div style="flex:1;">
-              <label for="speech-cfg">CFG Weight</label>
-              <input id="speech-cfg" type="number" value="0.5" step="0.1">
-            </div>
-            <div style="flex:1;">
-              <label for="speech-exaggeration">Exaggeration</label>
-              <input id="speech-exaggeration" type="number" value="0" step="0.5">
-            </div>
-          </div>
-          <button type="submit">Call /v1/audio/speech</button>
-        </form>
-        <div id="speech-output" class="output">// speech status</div>
-        <audio id="speech-audio" controls></audio>
-      </article>
-
-      <article class="card">
-        <h2>Transcriptions API</h2>
-        <p>Upload a short WAV/MP3 and watch the transcription come back in OpenAI format.</p>
-        <form id="transcribe-form" enctype="multipart/form-data">
-          <label for="transcribe-model">Model Override</label>
-          <input id="transcribe-model" type="text" placeholder="auto">
-          <label for="transcribe-language">Language Hint</label>
-          <input id="transcribe-language" type="text" placeholder="fr / en / auto">
-          <label for="transcribe-file">Audio File</label>
-          <input id="transcribe-file" type="file" accept="audio/*">
-          <button type="submit">Call /v1/audio/transcriptions</button>
-        </form>
-        <pre id="transcribe-output" class="output">// transcription output</pre>
-      </article>
-    </section>
-
-    <section class="card">
-      <h2 style="margin-top:0;">Live Logs</h2>
-      <p style="color:#94a3b8; margin-top:0;">Latest structured log events streamed from the runtime (auto-refresh every 3s).</p>
-      <div class="logs"><pre id="log-stream">waiting for events…</pre></div>
-    </section>
-  </div>
-
-  <script>
-    const pretty = (value) => {
-      if (value === undefined || value === null) return "";
-      if (typeof value === "string") {
-        try { return JSON.stringify(JSON.parse(value), null, 2); }
-        catch { return value; }
-      }
-      return JSON.stringify(value, null, 2);
-    };
-    const defaultStructuredSchema = {
-      type: "object",
-      properties: {
-        summary: { type: "string" },
-        mood: { type: "string" }
-      }
-    };
-    const structuredSchemaEl = document.getElementById("structured-schema");
-    if (structuredSchemaEl) {
-      structuredSchemaEl.value = JSON.stringify(defaultStructuredSchema, null, 2);
-    }
-
-    async function fetchHealth() {
-      try {
-        const res = await fetch("/health");
-        if (!res.ok) return;
-        const data = await res.json();
-        document.getElementById("platform-label").textContent = data.platform_id || "unknown";
-        const defaults = data.defaults || {};
-        const summary = Object.entries(defaults).map(([key, value]) => key + ": " + value).join(" • ") || "auto-select";
-        document.getElementById("defaults-summary").textContent = summary;
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    async function refreshLogs() {
-      try {
-        const res = await fetch("/logs?limit=120");
-        if (!res.ok) return;
-        const data = await res.json();
-        const lines = (data.logs || []).map((entry) => JSON.stringify(entry));
-        document.getElementById("log-stream").textContent = lines.join("\\n");
-      } catch (err) {
-        document.getElementById("log-stream").textContent = "Failed to load logs: " + err.message;
-      }
-    }
-
-    document.getElementById("responses-form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const model = document.getElementById("responses-model").value.trim();
-      const systemPrompt = document.getElementById("responses-system").value.trim();
-      const userInput = document.getElementById("responses-input").value.trim();
-      if (!userInput) {
-        document.getElementById("responses-output").textContent = "Enter a prompt first.";
-        return;
-      }
-      const messages = [];
-      if (systemPrompt) {
-        messages.push({ role: "system", content: systemPrompt });
-      }
-      messages.push({ role: "user", content: userInput });
-      const payload = { messages, stream: false };
-      if (model) payload.model = model;
-      try {
-        const res = await fetch("/v1/responses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const body = await res.json();
-        if (!res.ok) {
-          document.getElementById("responses-output").textContent = pretty(body);
-          return;
-        }
-        document.getElementById("responses-output").textContent = pretty(body);
-      } catch (err) {
-        document.getElementById("responses-output").textContent = err.message;
-      }
-    });
-
-    document.getElementById("structured-form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const model = document.getElementById("structured-model").value.trim();
-      const schemaName = document.getElementById("structured-schema-name").value.trim() || "StructuredOutput";
-      const schemaText = document.getElementById("structured-schema").value.trim();
-      const strict = document.getElementById("structured-strict").checked;
-      const userInput = document.getElementById("structured-input").value.trim();
-      const outputEl = document.getElementById("structured-output");
-      if (!userInput) {
-        outputEl.textContent = "Enter a prompt first.";
-        return;
-      }
-      let schema;
-      try {
-        schema = JSON.parse(schemaText);
-      } catch (err) {
-        outputEl.textContent = "Schema must be valid JSON: " + err.message;
-        return;
-      }
-      const payload = {
-        input: userInput,
-        stream: false,
-        text: {
-          format: {
-            type: "json_schema",
-            name: schemaName,
-            strict: strict,
-            schema,
-          },
-        },
-      };
-      if (model) payload.model = model;
-      outputEl.textContent = "Calling /v1/responses…";
-      try {
-        const res = await fetch("/v1/responses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const body = await res.json();
-        outputEl.textContent = pretty(body);
-      } catch (err) {
-        outputEl.textContent = err.message;
-      }
-    });
-
-    document.getElementById("speech-form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const model = document.getElementById("speech-model").value.trim();
-      const language = document.getElementById("speech-language").value.trim();
-      const audioPrompt = document.getElementById("speech-audio-prompt").value.trim();
-      const text = document.getElementById("speech-text").value.trim();
-      const cfg = parseFloat(document.getElementById("speech-cfg").value || "0.5");
-      const exaggeration = parseFloat(document.getElementById("speech-exaggeration").value || "0");
-      if (!text) {
-        document.getElementById("speech-output").textContent = "Provide text to synthesize.";
-        return;
-      }
-      const payload = {
-        input: text,
-        stream: false,
-        cfg_weight: cfg,
-        exaggeration,
-      };
-      if (language) payload.language = language;
-      if (audioPrompt) payload.audio_prompt_path = audioPrompt;
-      if (model) payload.model = model;
-      document.getElementById("speech-output").textContent = "Generating audio…";
-      document.getElementById("speech-audio").removeAttribute("src");
-      try {
-        const res = await fetch("/v1/audio/speech", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const err = await res.json();
-          document.getElementById("speech-output").textContent = pretty(err);
-          return;
-        }
-        const arrayBuf = await res.arrayBuffer();
-        const blob = new Blob([arrayBuf], { type: res.headers.get("content-type") || "audio/wav" });
-        const url = URL.createObjectURL(blob);
-        const audio = document.getElementById("speech-audio");
-        audio.src = url;
-        audio.load();
-        document.getElementById("speech-output").textContent = "Ready. Hit play to listen.";
-      } catch (err) {
-        document.getElementById("speech-output").textContent = err.message;
-      }
-    });
-
-    document.getElementById("transcribe-form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const file = document.getElementById("transcribe-file").files[0];
-      if (!file) {
-        document.getElementById("transcribe-output").textContent = "Pick an audio file first.";
-        return;
-      }
-      const formData = new FormData();
-      formData.append("file", file, file.name);
-      const model = document.getElementById("transcribe-model").value.trim();
-      const language = document.getElementById("transcribe-language").value.trim();
-      if (model) formData.append("model", model);
-      if (language) formData.append("language", language);
-      formData.append("response_format", "json");
-      formData.append("stream", "false");
-      document.getElementById("transcribe-output").textContent = "Transcribing…";
-      try {
-        const res = await fetch("/v1/audio/transcriptions", {
-          method: "POST",
-          body: formData,
-        });
-        const body = await res.json();
-        if (!res.ok) {
-          document.getElementById("transcribe-output").textContent = pretty(body);
-          return;
-        }
-        document.getElementById("transcribe-output").textContent = pretty(body);
-      } catch (err) {
-        document.getElementById("transcribe-output").textContent = err.message;
-      }
-    });
-
-    fetchHealth();
-    refreshLogs();
-    setInterval(refreshLogs, 3000);
-  </script>
-</body>
-</html>
-"""
 
 
 @asynccontextmanager
@@ -579,17 +107,20 @@ async def lifespan(app: FastAPI):
         readiness.mark_phase("startup_hooks", "ok")
 
         preload_all = _env_flag("LOCAL_RUNTIME_PRELOAD_ALL", False)
+        preload_defaults = _env_flag("LOCAL_RUNTIME_PRELOAD_DEFAULTS", False)
         if preload_all:
             targets = [model.spec.id for model in registry.list_models()]
-        else:
+        elif preload_defaults:
             targets = list(dict.fromkeys(defaults.values()))
+        else:
+            targets = []
         if targets:
             job = load_manager.create_job(targets)
             await load_manager.wait_for_job(job.id)
             readiness.loaded_models = sorted(registry.model_instances.keys())
             readiness.mark_phase("preload", "ok", detail=f"job_id={job.id} status={job.status}")
         else:
-            readiness.mark_phase("preload", "ok", detail="no targets")
+            readiness.mark_phase("preload", "skipped", detail="models load on demand")
 
         selftest_enabled = _env_flag("LOCAL_RUNTIME_SELFTEST", False)
         strict_selftest = _env_flag("LOCAL_RUNTIME_SELFTEST_STRICT", False)
@@ -618,7 +149,10 @@ async def lifespan(app: FastAPI):
             await http_client.aclose()
 
 
-app = FastAPI(title="Local Runtime Gateway", version="0.2.0", lifespan=lifespan)
+GATEWAY_SERVICE_ID = "therapy-local-runtime"
+GATEWAY_PROTOCOL_VERSION = "1"
+
+app = FastAPI(title="Local Runtime Gateway", version="0.3.0", lifespan=lifespan)
 
 
 def _parse_csv(value: str | None) -> list[str]:
@@ -628,6 +162,7 @@ def _parse_csv(value: str | None) -> list[str]:
 
 
 DEFAULT_ALLOWED_ORIGINS = ["https://therapy-deliberate-practice.com"]
+LOCAL_ORIGIN_PATTERN = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 
 
 def _resolve_cors_settings() -> tuple[list[str], str | None]:
@@ -639,10 +174,9 @@ def _resolve_cors_settings() -> tuple[list[str], str | None]:
     if raw:
         origins = _parse_csv(raw)
         if "*" in origins:
-            return ["*"], None
+            raise RuntimeError("LOCAL_RUNTIME_ALLOW_ORIGINS must contain exact trusted origins, not '*'")
         return origins, None
-    # Default: explicitly allow the Therapy web app plus any localhost / 127.0.0.1 origin + port.
-    return DEFAULT_ALLOWED_ORIGINS, r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    return DEFAULT_ALLOWED_ORIGINS, LOCAL_ORIGIN_PATTERN
 
 
 cors_origins, cors_regex = _resolve_cors_settings()
@@ -650,9 +184,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins or [],
     allow_origin_regex=cors_regex,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     allow_credentials=False,
+    allow_private_network=True,
+    max_age=600,
 )
 
 
@@ -688,9 +224,65 @@ def _ctx_factory(request_id: str, endpoint: str | None = None, model_id: str | N
     return _build_context(request_id, endpoint=endpoint, model_id=model_id)
 
 
+def _is_loopback_host(host_header: str | None) -> bool:
+    if not host_header:
+        return False
+    value = host_header.strip().lower()
+    if value == "[::1]" or value.startswith("[::1]:"):
+        return True
+    hostname = value.rsplit(":", 1)[0] if ":" in value else value
+    return hostname in {"127.0.0.1", "localhost"}
+
+
+def _is_allowed_origin(origin: str | None) -> bool:
+    if not origin:
+        return True
+    if origin in cors_origins:
+        return True
+    return bool(cors_regex and re.fullmatch(cors_regex, origin))
+
+
+def _requires_access_token(path: str) -> bool:
+    return path.startswith(("/v1/", "/logs", "/doctor", "/load_models", "/health/details", "/runtime/config"))
+
+
+def _access_denied(status_code: int, message: str) -> JSONResponse:
+    headers = {"Cache-Control": "no-store"}
+    if status_code == 401:
+        headers["WWW-Authenticate"] = "Bearer"
+    return JSONResponse({"error": {"message": message}}, status_code=status_code, headers=headers)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home_page() -> HTMLResponse:
-    return HTMLResponse(HOME_HTML)
+    return HTMLResponse(
+        """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Therapy Local Runtime</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center;
+        background: #0b1120; color: #e2e8f0; }
+      main { max-width: 40rem; margin: 1.5rem; padding: 2rem; border-radius: 1rem;
+        border: 1px solid #334155; background: #0f172a; }
+      h1 { margin-top: 0; }
+      p { line-height: 1.6; color: #cbd5e1; }
+      .status { color: #5eead4; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="status">Local gateway is running</p>
+      <h1>Therapy Local Runtime</h1>
+      <p>Use the desktop application to manage models, diagnostics, and your private pairing key.</p>
+      <p>To connect the Therapy website, open Therapy Settings and paste the local URL and pairing key shown in the desktop application.</p>
+    </main>
+  </body>
+</html>"""
+    )
 
 
 @app.middleware("http")
@@ -701,17 +293,56 @@ async def request_context_middleware(request: Request, call_next: Callable):
     start = time.perf_counter()
     logger = getattr(app.state, "logger", LOGGER)
     try:
-        response = await call_next(request)
+        origin = request.headers.get("origin")
+        if not _is_loopback_host(request.headers.get("host")):
+            response = _access_denied(403, "The local gateway accepts loopback Host values only.")
+        elif not _is_allowed_origin(origin):
+            response = _access_denied(403, "This browser origin is not allowed to use the local gateway.")
+        elif request.method == "OPTIONS":
+            response = await call_next(request)
+        elif _requires_access_token(request.url.path):
+            authorization = request.headers.get("authorization", "")
+            scheme, _, supplied_token = authorization.partition(" ")
+            expected_token = getattr(getattr(app.state, "config", None), "access_token", "")
+            if (
+                scheme.lower() != "bearer"
+                or not supplied_token
+                or not expected_token
+                or not secrets.compare_digest(supplied_token, expected_token)
+            ):
+                response = _access_denied(401, "A valid local pairing key is required.")
+            else:
+                response = await call_next(request)
+        else:
+            response = await call_next(request)
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         logger.info(
             "request.complete",
-            extra={"request_id": request_id, "endpoint": str(request.url.path), "status": response.status_code, "duration_ms": duration_ms},
+            extra={
+                "request_id": request_id,
+                "endpoint": str(request.url.path),
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+            },
         )
         response.headers["x-request-id"] = request_id
+        response.headers["Cache-Control"] = "no-store"
+        if origin and _is_allowed_origin(origin) and "access-control-allow-origin" not in response.headers:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers.append("Vary", "Origin")
+        if (
+            origin
+            and _is_allowed_origin(origin)
+            and request.headers.get("access-control-request-private-network", "").lower() == "true"
+        ):
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
         return response
     except Exception:
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        logger.exception("request.error", extra={"request_id": request_id, "endpoint": str(request.url.path), "duration_ms": duration_ms})
+        logger.exception(
+            "request.error",
+            extra={"request_id": request_id, "endpoint": str(request.url.path), "duration_ms": duration_ms},
+        )
         raise
     finally:
         pop_log_context(token)
@@ -719,7 +350,20 @@ async def request_context_middleware(request: Request, call_next: Callable):
 
 @app.get("/health")
 async def health() -> JSONResponse:
+    return JSONResponse(
+        {
+            "service": GATEWAY_SERVICE_ID,
+            "protocol_version": GATEWAY_PROTOCOL_VERSION,
+            "status": app.state.readiness.status,
+        }
+    )
+
+
+@app.get("/health/details")
+async def health_details() -> JSONResponse:
     data = app.state.readiness.as_payload()
+    data["service"] = GATEWAY_SERVICE_ID
+    data["protocol_version"] = GATEWAY_PROTOCOL_VERSION
     workers = [worker.__dict__ for worker in app.state.supervisor.status()]
     data["workers"] = workers
     return JSONResponse(data)
@@ -743,6 +387,64 @@ async def list_models() -> JSONResponse:
     return JSONResponse(payload)
 
 
+@app.post("/runtime/config")
+async def update_runtime_config(request: Request) -> JSONResponse:
+    registry: ModelRegistry = app.state.registry
+    config: RuntimeConfig = app.state.config
+    readiness: ReadinessTracker = app.state.readiness
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Configuration must be valid JSON") from exc
+
+    raw_defaults = payload.get("default_models")
+    if not isinstance(raw_defaults, dict):
+        raise HTTPException(status_code=400, detail="default_models must be an object")
+    allowed_endpoints = {"responses", "audio.transcriptions"}
+    if set(raw_defaults) != allowed_endpoints:
+        raise HTTPException(
+            status_code=400,
+            detail="Choose exactly one responses model and one audio.transcriptions model",
+        )
+    defaults: dict[str, str] = {}
+    for endpoint in sorted(allowed_endpoints):
+        model_id = raw_defaults.get(endpoint)
+        if not isinstance(model_id, str) or not model_id:
+            raise HTTPException(status_code=400, detail=f"Missing model for {endpoint}")
+        loaded_model = registry.get_loaded(model_id)
+        if (
+            not loaded_model
+            or loaded_model.spec.api.endpoint != endpoint
+            or not is_platform_supported(loaded_model.spec, registry.platform_id)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_id}' is not compatible with {endpoint} on this platform",
+            )
+        defaults[endpoint] = model_id
+
+    port = payload.get("port", config.port)
+    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+        raise HTTPException(status_code=400, detail="port must be an integer from 1024 to 65535")
+    prefer_local = payload.get("prefer_local", config.prefer_local)
+    if not isinstance(prefer_local, bool):
+        raise HTTPException(status_code=400, detail="prefer_local must be a boolean")
+
+    config.port = port
+    config.default_models = defaults
+    config.prefer_local = prefer_local
+    config.save()
+    registry.set_defaults(defaults)
+    readiness.defaults = defaults
+    return JSONResponse(
+        {
+            "port": config.port,
+            "default_models": defaults,
+            "prefer_local": config.prefer_local,
+        }
+    )
+
+
 @app.post("/load_models")
 async def trigger_model_load(request: Request) -> JSONResponse:
     load_manager: ModelLoadManager = app.state.load_manager
@@ -750,7 +452,7 @@ async def trigger_model_load(request: Request) -> JSONResponse:
     logger = getattr(app.state, "logger", LOGGER)
     try:
         payload = await request.json()
-    except Exception:
+    except ValueError:
         payload = {}
     requested_models = payload.get("models")
     scope = str(payload.get("scope") or "selected").lower()
@@ -767,7 +469,9 @@ async def trigger_model_load(request: Request) -> JSONResponse:
         if scope == "all":
             targets = [loaded.spec.id for loaded in registry.list_models()]
         elif scope == "selected":
-            targets = [model_id for model_id in dict.fromkeys(registry.selected_defaults.values()) if model_id]
+            targets = [
+                model_id for model_id in dict.fromkeys(registry.selected_defaults.values()) if model_id
+            ]
         else:
             raise HTTPException(status_code=400, detail="scope must be 'selected' or 'all'")
     filtered: list[str] = []
@@ -825,7 +529,9 @@ async def responses(request: Request) -> Response:
         return format_error(str(exc), err_type="invalid_request_error", status_code=400)
     start = time.perf_counter()
     if structured_config:
-        enforcer = StructuredOutputEnforcer(selected=selected, ctx=ctx, config=structured_config, request_id=request_id)
+        enforcer = StructuredOutputEnforcer(
+            selected=selected, ctx=ctx, config=structured_config, request_id=request_id
+        )
         try:
             structured_result = await enforcer.run(payload)
         except StructuredOutputFailure as exc:
@@ -835,19 +541,31 @@ async def responses(request: Request) -> Response:
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         app.state.logger.info(
             "responses.run",
-            extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms, "structured": True, "attempts": structured_result.attempts},
+            extra={
+                "request_id": request_id,
+                "model_id": model_id,
+                "duration_ms": duration_ms,
+                "structured": True,
+                "attempts": structured_result.attempts,
+            },
         )
         if stream:
             return StreamingResponse(
-                format_responses_stream(stream_validated_json(model_id, structured_result.canonical_text, request_id=request_id)),
+                format_responses_stream(
+                    stream_validated_json(model_id, structured_result.canonical_text, request_id=request_id)
+                ),
                 media_type="text/event-stream",
             )
-        payload_out = format_responses_create(structured_result.canonical_text, model_id, request_id=request_id)
+        payload_out = format_responses_create(
+            structured_result.canonical_text, model_id, request_id=request_id
+        )
         return JSONResponse(payload_out)
     run_request = RunRequest(endpoint="responses", model=model_id, json=payload, stream=stream)
     result = await selected.module.run(run_request, ctx)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info("responses.run", extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms})
+    app.state.logger.info(
+        "responses.run", extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms}
+    )
     if stream:
         return StreamingResponse(format_responses_stream(result), media_type="text/event-stream")
     payload_out = format_responses_create(result, model_id, request_id=request_id)
@@ -893,7 +611,10 @@ async def audio_transcriptions(request: Request) -> Response:
     start = time.perf_counter()
     result = await selected.module.run(run_request, ctx)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info("audio.transcriptions.run", extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms})
+    app.state.logger.info(
+        "audio.transcriptions.run",
+        extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+    )
     return format_audio_transcription_response(result, response_format, stream)
 
 
@@ -923,7 +644,10 @@ async def audio_translations(request: Request) -> Response:
     start = time.perf_counter()
     result = await selected.module.run(run_request, ctx)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info("audio.translations.run", extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms})
+    app.state.logger.info(
+        "audio.translations.run",
+        extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+    )
     return format_audio_transcription_response(result, response_format, stream)
 
 
@@ -934,6 +658,7 @@ async def doctor() -> JSONResponse:
 
 def main() -> None:
     import argparse
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description="Local runtime gateway")
@@ -942,6 +667,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config_path = Path(args.config) if args.config else None
+    if config_path is not None:
+        os.environ["LOCAL_RUNTIME_CONFIG"] = str(config_path)
     config = RuntimeConfig.load(config_path)
     if args.port is not None:
         config.port = args.port

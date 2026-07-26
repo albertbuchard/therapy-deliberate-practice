@@ -62,10 +62,7 @@ export const AppShell = () => {
       if (handledAuthSignatureRef.current === signature) return;
       handledAuthSignatureRef.current = signature;
 
-      const errorMessage = urlError || hashError;
-      if (errorMessage) {
-        window.localStorage.setItem("authError", errorMessage);
-      }
+      let errorMessage = urlError || hashError;
 
       try {
         if (code) {
@@ -79,25 +76,28 @@ export const AppShell = () => {
           }
         }
         await supabase.auth.getSession();
-      } finally {
-        const returnToFromUrl = url.searchParams.get("returnTo");
-        const storedReturnTo = window.localStorage.getItem("authReturnTo");
+      } catch (error) {
+        errorMessage =
+          error instanceof Error ? error.message : "Authentication callback failed.";
+      }
 
-        const safeReturnTo = (value: string | null) => {
-          if (!value || !value.startsWith("/")) return null;
-          if (value === "/login") return "/";
-          return value;
-        };
+      const returnToFromUrl = url.searchParams.get("returnTo");
+      const storedReturnTo = window.localStorage.getItem("authReturnTo");
 
-        const returnTo = safeReturnTo(returnToFromUrl) ?? safeReturnTo(storedReturnTo) ?? "/";
+      const safeReturnTo = (value: string | null) => {
+        if (!value || !value.startsWith("/")) return null;
+        if (value === "/login") return "/";
+        return value;
+      };
 
-        window.localStorage.removeItem("authReturnTo");
+      const returnTo = safeReturnTo(returnToFromUrl) ?? safeReturnTo(storedReturnTo) ?? "/";
 
-        if (errorMessage) {
-          navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`, { replace: true });
-          return;
-        }
+      window.localStorage.removeItem("authReturnTo");
 
+      if (errorMessage) {
+        window.localStorage.setItem("authError", errorMessage);
+        navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`, { replace: true });
+      } else {
         navigate(returnTo, { replace: true });
       }
     };

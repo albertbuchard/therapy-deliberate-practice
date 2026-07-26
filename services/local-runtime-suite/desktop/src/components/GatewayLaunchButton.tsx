@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import type { GatewayBootState } from "../hooks/useGatewayBoot";
+import { useMemo } from "react";
+import {
+  gatewayBootActivityMessage,
+  type GatewayBootState
+} from "../hooks/useGatewayBoot";
 
 type Props = {
   boot: GatewayBootState;
-  progress: number;
-  elapsedMs: number;
-  maxWaitMs: number;
   onStart: () => void;
   onCancel: () => void;
   onReset: () => void;
@@ -13,17 +13,6 @@ type Props = {
   disabledReason?: string;
   onReadyClick?: () => void;
 };
-
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function formatDuration(ms: number) {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
 
 function CheckIcon() {
   return (
@@ -42,32 +31,8 @@ function Spinner() {
   );
 }
 
-function ProgressRing({ value }: { value: number }) {
-  const normalized = clamp01(value);
-  const radius = 9;
-  const circumference = 2 * Math.PI * radius;
-  const dash = circumference * normalized;
-  const gap = circumference - dash;
-
-  return (
-    <svg className="launch-ring" width={22} height={22} viewBox="0 0 22 22" aria-hidden="true">
-      <circle className="launch-ring-track" cx="11" cy="11" r={radius} />
-      <circle
-        className="launch-ring-fill"
-        cx="11"
-        cy="11"
-        r={radius}
-        strokeDasharray={`${dash} ${gap}`}
-      />
-    </svg>
-  );
-}
-
 export function GatewayLaunchButton({
   boot,
-  progress,
-  elapsedMs,
-  maxWaitMs,
   onStart,
   onCancel,
   onReset,
@@ -75,42 +40,11 @@ export function GatewayLaunchButton({
   disabledReason,
   onReadyClick
 }: Props) {
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (boot.phase !== "booting" && boot.phase !== "polling") return;
-    const id = window.setInterval(() => setTick((value) => value + 1), 250);
-    return () => window.clearInterval(id);
-  }, [boot.phase]);
-
-  const elapsed = boot.startedAtMs ? Math.max(0, Date.now() - boot.startedAtMs) : elapsedMs;
-  const pct = clamp01(progress);
   const isBusy = boot.phase === "booting" || boot.phase === "polling";
   const isReady = boot.phase === "ready";
   const isDisabled = Boolean(disabled) && !isBusy && !isReady;
 
-  const messages = useMemo(
-    () => [
-      "Starting the gateway…",
-      "Checking your environment…",
-      "Loading model catalog…",
-      "Allocating memory…",
-      "Loading models (first run can take 5–10 minutes)…",
-      "Warming up inference…",
-      "Running health checks…",
-      "Almost ready…"
-    ],
-    []
-  );
-
-  const activeMessage = useMemo(() => {
-    if (boot.phase === "ready") return "Gateway ready.";
-    if (boot.phase === "error") return "Startup failed.";
-    if (boot.phase === "cancelled") return "Startup cancelled.";
-    if (boot.phase === "idle") return "Launch local server.";
-    const idx = Math.floor((elapsed + tick * 250) / 6500) % messages.length;
-    return messages[idx];
-  }, [boot.phase, elapsed, messages, tick]);
+  const activeMessage = useMemo(() => gatewayBootActivityMessage(boot), [boot]);
 
   const subtitle = useMemo(() => {
     if (isDisabled && disabledReason) return disabledReason;
@@ -194,9 +128,13 @@ export function GatewayLaunchButton({
 
             {isBusy && (
               <span className="launch-btn__meta">
-                <ProgressRing value={pct} />
+                <Spinner />
                 <span>
-                  {formatDuration(elapsed)} / {formatDuration(maxWaitMs)}
+                  {boot.phase === "booting"
+                    ? "Process launch in progress"
+                    : boot.attempts === 0
+                      ? "Health check pending"
+                      : `${boot.attempts} health ${boot.attempts === 1 ? "check" : "checks"} completed`}
                 </span>
               </span>
             )}

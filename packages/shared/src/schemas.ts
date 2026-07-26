@@ -35,6 +35,7 @@ export const taskExampleSchema = z.object({
   language: z.string().optional(),
   meta: z
     .record(
+      z.string(),
       z.union([z.string(), z.number(), z.boolean(), z.null()])
     )
     .nullable()
@@ -237,6 +238,7 @@ export const practiceRunInputSchema = z
 export const practiceRunResponseSchema = z.object({
   requestId: z.string(),
   attemptId: z.string().optional(),
+  score_trust: z.enum(["cloud_trusted", "local_unverified"]).optional(),
   next_recommended_difficulty: z.number().optional(),
   transcript: z
     .object({
@@ -270,7 +272,7 @@ export const practiceRunResponseSchema = z.object({
     .optional(),
   debug: z
     .object({
-      timings: z.record(z.number()),
+      timings: z.record(z.string(), z.number()),
       selectedProviders: z.object({
         stt: z.object({
           kind: z.enum(["local", "openai"]),

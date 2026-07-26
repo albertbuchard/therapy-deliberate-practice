@@ -10,6 +10,15 @@ import {
 } from "../store/api";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { hydrateSettings, setHasOpenAiKey } from "../store/settingsSlice";
+import {
+  checkLocalRuntimeHealth,
+  getLocalRuntimeDetails,
+  isLocalRuntimePairingError,
+  loadLocalRuntimePairingKey,
+  localRuntimeResponseError,
+  resolveLocalRuntimeGatewayOrigin,
+  saveLocalRuntimePairingKey
+} from "../localRuntime/client";
 
 type DiagnosticStatus = "idle" | "running" | "ok" | "error";
 
@@ -43,16 +52,6 @@ const normalizeUrlValue = (value?: string | null) => {
 };
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, "");
-
-const extractOrigin = (value?: string | null) => {
-  const normalized = normalizeUrlValue(value);
-  if (!normalized) return null;
-  try {
-    return new URL(normalized).origin;
-  } catch {
-    return null;
-  }
-};
 
 const hasApiPath = (value: string) => {
   try {
@@ -152,6 +151,9 @@ export const SettingsPage = () => {
   const [localSttUrl, setLocalSttUrl] = useState("");
   const [localLlmUrl, setLocalLlmUrl] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [localPairingKey, setLocalPairingKey] = useState("");
+  const [showLocalPairingKey, setShowLocalPairingKey] = useState(false);
+  const [localPairingStatus, setLocalPairingStatus] = useState<string | null>(null);
   const [storeAudio, setStoreAudio] = useState(settings.privacy.storeAudio);
   const [diagnostics, setDiagnostics] = useState<LocalRuntimeDiagnostics>(() => createEmptyDiagnostics());
   const [openAiKey, setOpenAiKey] = useState("");
@@ -164,11 +166,22 @@ export const SettingsPage = () => {
   const normalizedBaseUrl = normalizeUrlValue(localAiBaseUrl);
   const normalizedLlmUrl = normalizeUrlValue(localLlmUrl);
   const normalizedSttUrl = normalizeUrlValue(localSttUrl);
-  const derivedHealthBase = normalizedBaseUrl ?? extractOrigin(localLlmUrl) ?? extractOrigin(localSttUrl);
-  const responsesBaseCandidate = normalizedLlmUrl ?? derivedHealthBase;
-  const sttBaseCandidate = normalizedSttUrl ?? derivedHealthBase;
+  let gatewayOrigin: string | null = null;
+  try {
+    gatewayOrigin = resolveLocalRuntimeGatewayOrigin({
+      baseUrl: normalizedBaseUrl,
+      sttUrl: normalizedSttUrl,
+      llmUrl: normalizedLlmUrl
+    });
+  } catch {
+    gatewayOrigin = null;
+  }
+  const responsesBaseCandidate = gatewayOrigin;
+  const sttBaseCandidate = gatewayOrigin;
   const hasLocalOverrides = Boolean(normalizedLlmUrl || normalizedSttUrl);
-  const diagnosticsAvailable = Boolean(derivedHealthBase || normalizedLlmUrl || normalizedSttUrl);
+  const diagnosticsAvailable = Boolean(
+    gatewayOrigin && localPairingKey.trim()
+  );
   const diagnosticsBusy = Object.values(diagnostics).some((check) => check.status === "running");
   const statusBadgeClasses: Record<DiagnosticStatus, string> = {
     idle: "bg-slate-800/70 text-slate-300",
@@ -241,24 +254,56 @@ export const SettingsPage = () => {
     }
   }, [localModeEnabled]);
 
+  useEffect(() => {
+    if (!gatewayOrigin) {
+      setLocalPairingKey("");
+      return;
+    }
+    try {
+      setLocalPairingKey(loadLocalRuntimePairingKey(gatewayOrigin));
+    } catch {
+      setLocalPairingKey("");
+    }
+  }, [gatewayOrigin]);
+
   const handleSaveSettings = async () => {
     setSaveStatus(null);
+    setLocalPairingStatus(null);
     try {
-      const trimmedBase = localAiBaseUrl.trim();
-      const trimmedLlm = localLlmUrl.trim();
-      const trimmedStt = localSttUrl.trim();
-      const hasOverrides = Boolean(trimmedLlm || trimmedStt);
+      const hasLocalUrl = Boolean(
+        localAiBaseUrl.trim() || localSttUrl.trim() || localLlmUrl.trim()
+      );
+      const resolvedGatewayOrigin = hasLocalUrl
+        ? resolveLocalRuntimeGatewayOrigin({
+            baseUrl: localAiBaseUrl,
+            sttUrl: localSttUrl,
+            llmUrl: localLlmUrl
+          })
+        : null;
+      if (localModeEnabled) {
+        if (!resolvedGatewayOrigin) {
+          throw new Error(t("settings.localPairing.missingUrl"));
+        }
+        saveLocalRuntimePairingKey(resolvedGatewayOrigin, localPairingKey);
+      }
       const result = await saveSettings({
         aiMode,
-        localAiBaseUrl: !hasOverrides && trimmedBase ? trimmedBase : null,
-        localSttUrl: hasOverrides ? (trimmedStt ? trimmedStt : null) : null,
-        localLlmUrl: hasOverrides ? (trimmedLlm ? trimmedLlm : null) : null,
+        localAiBaseUrl: resolvedGatewayOrigin,
+        localSttUrl: null,
+        localLlmUrl: null,
         storeAudio
       }).unwrap();
       dispatch(hydrateSettings(result));
+      setLocalAiBaseUrl(resolvedGatewayOrigin ?? "");
+      setLocalSttUrl("");
+      setLocalLlmUrl("");
+      setShowAdvanced(false);
       setSaveStatus(t("settings.status.saved"));
+      if (localModeEnabled) {
+        setLocalPairingStatus(t("settings.localPairing.saved"));
+      }
     } catch (error) {
-      setSaveStatus(t("settings.status.saveError"));
+      setSaveStatus(error instanceof Error ? error.message : t("settings.status.saveError"));
     }
   };
 
@@ -274,7 +319,7 @@ export const SettingsPage = () => {
       dispatch(setHasOpenAiKey(result.hasOpenAiKey));
       setOpenAiKey("");
       setKeyStatus(t("settings.openAi.keyStatus.saved"));
-    } catch (error) {
+    } catch {
       setKeyStatus(t("settings.openAi.keyStatus.saveError"));
     }
   };
@@ -289,7 +334,7 @@ export const SettingsPage = () => {
       const result = await deleteKey().unwrap();
       dispatch(setHasOpenAiKey(result.hasOpenAiKey));
       setKeyStatus(t("settings.openAi.keyStatus.removed"));
-    } catch (error) {
+    } catch {
       setKeyStatus(t("settings.openAi.keyStatus.removeError"));
     }
   };
@@ -310,7 +355,7 @@ export const SettingsPage = () => {
       } else {
         setValidationStatus(result.error ?? t("settings.openAi.validateStatus.invalidFallback"));
       }
-    } catch (error) {
+    } catch {
       setValidationStatus(t("settings.openAi.validateStatus.error"));
     }
   };
@@ -327,42 +372,23 @@ export const SettingsPage = () => {
   };
 
   const runHealthCheck = async () => {
-    if (!derivedHealthBase) {
+    if (!gatewayOrigin) {
       updateDiagnostic("health", { status: "error", detail: t("settings.localDiagnostics.messages.missingBase") });
       return;
     }
     updateDiagnostic("health", { status: "running", detail: undefined });
     try {
-      const url = resolveApiUrl(null, derivedHealthBase, "/health");
-      const response = await fetch(url);
-      const contentType = response.headers.get("content-type") ?? "";
-      let payload: Record<string, unknown> | string | null = null;
-      if (contentType.includes("application/json")) {
-        payload = (await response.json()) as Record<string, unknown>;
-      } else {
-        payload = await response.text();
-      }
-      if (!response.ok) {
-        const detail =
-          typeof payload === "string"
-            ? payload || response.statusText
-            : ((payload as { detail?: string })?.detail ?? response.statusText);
-        throw new Error(detail);
-      }
-      const record = (payload as {
-        status?: string;
-        platform_id?: string;
-        defaults?: Record<string, string>;
-      }) ?? { status: response.status };
+      const health = await checkLocalRuntimeHealth(gatewayOrigin);
+      const details = localPairingKey.trim()
+        ? await getLocalRuntimeDetails(gatewayOrigin, localPairingKey.trim())
+        : null;
       const summary: string[] = [];
-      if (record.status) {
-        summary.push(`${t("settings.localDiagnostics.healthSummary.status")}: ${record.status}`);
+      summary.push(`${t("settings.localDiagnostics.healthSummary.status")}: ${health.status}`);
+      if (details?.platform_id) {
+        summary.push(`${t("settings.localDiagnostics.healthSummary.platform")}: ${details.platform_id}`);
       }
-      if (record.platform_id) {
-        summary.push(`${t("settings.localDiagnostics.healthSummary.platform")}: ${record.platform_id}`);
-      }
-      if (record.defaults && typeof record.defaults === "object") {
-        const defaultsList = Object.entries(record.defaults)
+      if (details?.defaults && typeof details.defaults === "object") {
+        const defaultsList = Object.entries(details.defaults)
           .map(([endpoint, model]) => `${endpoint}→${model}`)
           .join(", ");
         if (defaultsList) {
@@ -374,7 +400,11 @@ export const SettingsPage = () => {
         detail: summary.join(" • ") || t("settings.localDiagnostics.messages.healthOk")
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = isLocalRuntimePairingError(error)
+        ? t("settings.localPairing.pairAgain")
+        : error instanceof Error
+          ? error.message
+          : String(error);
       updateDiagnostic("health", {
         status: "error",
         detail: t("settings.localDiagnostics.messages.healthError", { error: message })
@@ -383,7 +413,7 @@ export const SettingsPage = () => {
   };
 
   const runResponsesCheck = async () => {
-    if (!responsesBaseCandidate) {
+    if (!responsesBaseCandidate || !localPairingKey.trim()) {
       updateDiagnostic("responses", {
         status: "error",
         detail: t("settings.localDiagnostics.messages.missingResponsesUrl")
@@ -392,7 +422,7 @@ export const SettingsPage = () => {
     }
     updateDiagnostic("responses", { status: "running", detail: undefined });
     try {
-      const url = resolveApiUrl(normalizedLlmUrl, derivedHealthBase, "/v1/responses");
+      const url = resolveApiUrl(null, gatewayOrigin, "/v1/responses");
       const payload = {
         stream: false,
         messages: [
@@ -402,20 +432,25 @@ export const SettingsPage = () => {
       };
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Authorization": `Bearer ${localPairingKey.trim()}`,
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify(payload)
       });
       const contentType = response.headers.get("content-type") ?? "";
       const isJson = contentType.includes("application/json");
       const body = isJson ? await response.json() : await response.text();
       if (!response.ok) {
-        const message =
-          typeof body === "string"
-            ? body || response.statusText
-            : (body as { error?: string; message?: string }).error ??
-              (body as { message?: string }).message ??
-              response.statusText;
-        throw new Error(message);
+        throw await localRuntimeResponseError(
+          new Response(
+            typeof body === "string" ? body : JSON.stringify(body),
+            {
+              status: response.status,
+              headers: { "Content-Type": contentType }
+            }
+          )
+        );
       }
       const detail =
         (isJson ? summarizeResponsesPayload(body) : null) ??
@@ -423,7 +458,11 @@ export const SettingsPage = () => {
         t("settings.localDiagnostics.messages.responsesOk");
       updateDiagnostic("responses", { status: "ok", detail });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = isLocalRuntimePairingError(error)
+        ? t("settings.localPairing.pairAgain")
+        : error instanceof Error
+          ? error.message
+          : String(error);
       updateDiagnostic("responses", {
         status: "error",
         detail: t("settings.localDiagnostics.messages.responsesError", { error: message })
@@ -432,7 +471,7 @@ export const SettingsPage = () => {
   };
 
   const runSttCheck = async () => {
-    if (!sttBaseCandidate) {
+    if (!sttBaseCandidate || !localPairingKey.trim()) {
       updateDiagnostic("stt", {
         status: "error",
         detail: t("settings.localDiagnostics.messages.missingSttUrl")
@@ -441,7 +480,7 @@ export const SettingsPage = () => {
     }
     updateDiagnostic("stt", { status: "running", detail: undefined });
     try {
-      const url = resolveApiUrl(normalizedSttUrl, derivedHealthBase, "/v1/audio/transcriptions");
+      const url = resolveApiUrl(null, gatewayOrigin, "/v1/audio/transcriptions");
       const fileBlob = createSampleAudioFile();
       const formData = new FormData();
       const fallbackName = "diagnostic.wav";
@@ -452,26 +491,35 @@ export const SettingsPage = () => {
       formData.append("stream", "false");
       const response = await fetch(url, {
         method: "POST",
+        headers: {
+          "Authorization": `Bearer ${localPairingKey.trim()}`
+        },
         body: formData
       });
       const contentType = response.headers.get("content-type") ?? "";
       const isJson = contentType.includes("application/json");
       const body = isJson ? await response.json() : await response.text();
       if (!response.ok) {
-        const message =
-          typeof body === "string"
-            ? body || response.statusText
-            : (body as { error?: string; detail?: string }).error ??
-              (body as { detail?: string }).detail ??
-              response.statusText;
-        throw new Error(message);
+        throw await localRuntimeResponseError(
+          new Response(
+            typeof body === "string" ? body : JSON.stringify(body),
+            {
+              status: response.status,
+              headers: { "Content-Type": contentType }
+            }
+          )
+        );
       }
       const detail =
         (isJson ? summarizeTranscriptionPayload(body) : typeof body === "string" ? truncate(body) : null) ??
         t("settings.localDiagnostics.messages.sttOk");
       updateDiagnostic("stt", { status: "ok", detail });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = isLocalRuntimePairingError(error)
+        ? t("settings.localPairing.pairAgain")
+        : error instanceof Error
+          ? error.message
+          : String(error);
       updateDiagnostic("stt", {
         status: "error",
         detail: t("settings.localDiagnostics.messages.sttError", { error: message })
@@ -499,7 +547,7 @@ export const SettingsPage = () => {
       description: t("settings.localDiagnostics.checks.health.description"),
       actionLabel: t("settings.localDiagnostics.actions.health"),
       onClick: runHealthCheck,
-      enabled: Boolean(derivedHealthBase)
+      enabled: Boolean(gatewayOrigin)
     },
     {
       key: "responses",
@@ -507,7 +555,7 @@ export const SettingsPage = () => {
       description: t("settings.localDiagnostics.checks.responses.description"),
       actionLabel: t("settings.localDiagnostics.actions.responses"),
       onClick: runResponsesCheck,
-      enabled: Boolean(responsesBaseCandidate)
+      enabled: Boolean(responsesBaseCandidate && localPairingKey.trim())
     },
     {
       key: "stt",
@@ -515,7 +563,7 @@ export const SettingsPage = () => {
       description: t("settings.localDiagnostics.checks.stt.description"),
       actionLabel: t("settings.localDiagnostics.actions.stt"),
       onClick: runSttCheck,
-      enabled: Boolean(sttBaseCandidate)
+      enabled: Boolean(sttBaseCandidate && localPairingKey.trim())
     }
   ];
 
@@ -561,6 +609,41 @@ export const SettingsPage = () => {
             </div>
             <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4 text-xs text-slate-300">
               {t("settings.localAiBase.callout")}
+            </div>
+            <div className="space-y-3 rounded-2xl border border-teal-400/20 bg-teal-400/5 p-4">
+              <label htmlFor="local-pairing-key" className="text-sm font-semibold">
+                {t("settings.localPairing.label")}
+              </label>
+              <p className="text-xs text-slate-400">{t("settings.localPairing.helper")}</p>
+              <div className="flex flex-col gap-3 md:flex-row">
+                <input
+                  id="local-pairing-key"
+                  className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-2 font-mono text-sm text-slate-100"
+                  type={showLocalPairingKey ? "text" : "password"}
+                  value={localPairingKey}
+                  onChange={(event) => {
+                    setLocalPairingKey(event.target.value);
+                    setLocalPairingStatus(null);
+                  }}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={t("settings.localPairing.placeholder")}
+                />
+                <button
+                  type="button"
+                  className="rounded-full border border-white/10 px-4 py-2 text-xs text-slate-200"
+                  onClick={() => setShowLocalPairingKey((value) => !value)}
+                  aria-pressed={showLocalPairingKey}
+                >
+                  {showLocalPairingKey
+                    ? t("settings.localPairing.hide")
+                    : t("settings.localPairing.reveal")}
+                </button>
+              </div>
+              <p className="text-xs text-slate-500">{t("settings.localPairing.security")}</p>
+              {localPairingStatus ? (
+                <p className="text-xs text-emerald-200">{localPairingStatus}</p>
+              ) : null}
             </div>
             <button
               className="text-left text-xs font-semibold text-teal-200 underline decoration-dashed"

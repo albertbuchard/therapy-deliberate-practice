@@ -78,7 +78,7 @@ export const HelpLayout = () => {
     return helpPages.filter((page) =>
       `${page.title} ${page.description}`.toLowerCase().includes(normalized)
     );
-  }, [query]);
+  }, [helpPages, query]);
 
   useEffect(() => {
     setIsDrawerOpen(false);

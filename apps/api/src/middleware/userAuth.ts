@@ -5,11 +5,9 @@ import type { RuntimeEnv } from "../env";
 import { users, userSettings } from "../db/schema";
 import { logServerError } from "../utils/logger";
 import { DEFAULT_LOCAL_BASE_URL } from "../providers/config";
+import type { ApiHonoEnv, UserIdentity } from "../httpTypes";
 
-export type UserIdentity = {
-  id: string;
-  email: string | null;
-};
+export type { UserIdentity } from "../httpTypes";
 
 const ensureUserRecords = async (db: ApiDatabase, identity: UserIdentity) => {
   const now = Date.now();
@@ -56,7 +54,10 @@ const ensureUserRecords = async (db: ApiDatabase, identity: UserIdentity) => {
     .onConflictDoNothing();
 };
 
-export const createUserAuth = (env: RuntimeEnv, db: ApiDatabase): MiddlewareHandler => {
+export const createUserAuth = (
+  env: RuntimeEnv,
+  db: ApiDatabase
+): MiddlewareHandler<ApiHonoEnv> => {
   return async (c, next) => {
     const authHeader = c.req.header("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {

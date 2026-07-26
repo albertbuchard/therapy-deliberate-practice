@@ -91,6 +91,7 @@ const minigamesSlice = createSlice({
         transcript?: string;
         evaluation?: EvaluationResult;
         clientPenalty?: number;
+        scoreTrust?: "cloud_trusted" | "local_unverified";
       }>
     ) {
       state.results.push({
@@ -103,7 +104,8 @@ const minigamesSlice = createSlice({
         created_at: Date.now(),
         transcript: action.payload.transcript,
         evaluation: action.payload.evaluation,
-        client_penalty: action.payload.clientPenalty
+        client_penalty: action.payload.clientPenalty,
+        score_trust: action.payload.scoreTrust ?? "cloud_trusted"
       });
       const round = state.rounds.find((entry) => entry.id === action.payload.roundId);
       if (round) {

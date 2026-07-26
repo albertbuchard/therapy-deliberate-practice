@@ -33,7 +33,10 @@ const buildTaskFilters = (query: LeaderboardQuery) => {
   }
   if (query.tags.length > 0) {
     const tagFilters = query.tags.map((tag) => like(tasks.tags, `%"${tag}"%`));
-    filters.push(or(...tagFilters));
+    const tagFilter = or(...tagFilters);
+    if (tagFilter) {
+      filters.push(tagFilter);
+    }
   }
   return filters;
 };
@@ -71,6 +74,7 @@ export const fetchLeaderboardEntries = async (
 
   const attemptFilters = [
     inArray(attempts.task_id, taskIds),
+    eq(attempts.score_trust, "cloud_trusted"),
     isNotNull(attempts.completed_at),
     isNotNull(attempts.overall_score)
   ];
@@ -104,6 +108,7 @@ export const fetchLeaderboardEntries = async (
         eq(attempts.completed_at, latestAttemptCompletedAt)
       )
     )
+    .where(eq(attempts.score_trust, "cloud_trusted"))
     .groupBy(attempts.user_id, attempts.task_id, latestAttemptCompletedAt)
     .as("latest_attempts");
 
@@ -152,6 +157,7 @@ export const fetchUserProfileStats = async (
   const attemptFilters = [
     eq(attempts.user_id, userId),
     inArray(attempts.task_id, taskIds),
+    eq(attempts.score_trust, "cloud_trusted"),
     isNotNull(attempts.completed_at),
     isNotNull(attempts.overall_score)
   ];
@@ -182,7 +188,9 @@ export const fetchUserProfileStats = async (
         eq(attempts.completed_at, latestAttemptCompletedAt)
       )
     )
-    .where(eq(attempts.user_id, userId))
+    .where(
+      and(eq(attempts.user_id, userId), eq(attempts.score_trust, "cloud_trusted"))
+    )
     .groupBy(attempts.task_id, latestAttemptCompletedAt)
     .as("latest_attempts");
 

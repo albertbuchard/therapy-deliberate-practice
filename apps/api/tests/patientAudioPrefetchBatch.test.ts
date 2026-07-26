@@ -42,6 +42,8 @@ const setupDb = () => {
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT 'Player',
+      bio TEXT,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE user_settings (
@@ -116,7 +118,13 @@ test("prefetch batch returns ready items for patient audio", async () => {
   const app = createApiApp({ env, db, tts: { storage } });
   const userId = "user-1";
 
-  await db.insert(users).values({ id: userId, email: "user@example.com", created_at: Date.now() });
+  await db.insert(users).values({
+    id: userId,
+    email: "user@example.com",
+    display_name: "User",
+    bio: null,
+    created_at: Date.now()
+  });
   await db.insert(userSettings).values({
     user_id: userId,
     ai_mode: "openai_only",
@@ -193,7 +201,13 @@ test("prefetch batch relies on server OpenAI key", async () => {
   const app = createApiApp({ env, db, tts: { storage } });
   const userId = "user-1";
 
-  await db.insert(users).values({ id: userId, email: "user@example.com", created_at: Date.now() });
+  await db.insert(users).values({
+    id: userId,
+    email: "user@example.com",
+    display_name: "User",
+    bio: null,
+    created_at: Date.now()
+  });
   await db.insert(userSettings).values({
     user_id: userId,
     ai_mode: "openai_only",

@@ -22,4 +22,5 @@ infra/local.db
 **/.venv*/
 **/*.egg-info
 **/.runtime-cache
+**/test-results
 services/local-runtime-suite/desktop/src-tauri/resources/local-runtime-python

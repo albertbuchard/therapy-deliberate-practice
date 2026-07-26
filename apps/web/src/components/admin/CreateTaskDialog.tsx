@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Label, Select, Textarea } from "./AdminUi";
 
@@ -53,17 +53,17 @@ export const CreateTaskDialog = ({
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const reset = () => {
+  const reset = useCallback(() => {
     setPayload(emptyPayload());
     setJsonValue("");
     setError(null);
     setMode("blank");
-  };
+  }, []);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     reset();
     onClose();
-  };
+  }, [onClose, reset]);
 
   useEffect(() => {
     if (!open) return;
@@ -78,7 +78,7 @@ export const CreateTaskDialog = ({
       if (event.key === "Tab") {
         const focusable = Array.from(
           containerRef.current?.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])'
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
           ) ?? []
         );
         if (!focusable.length) return;
@@ -95,7 +95,7 @@ export const CreateTaskDialog = ({
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [open]);
+  }, [handleClose, open]);
 
   if (!open) return null;
 

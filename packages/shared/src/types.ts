@@ -152,6 +152,7 @@ export type PracticeRunScoring = {
 export type PracticeRunResponse = {
   requestId: string;
   attemptId?: string;
+  score_trust?: "cloud_trusted" | "local_unverified";
   next_recommended_difficulty?: number;
   transcript?: PracticeRunTranscript;
   scoring?: PracticeRunScoring;

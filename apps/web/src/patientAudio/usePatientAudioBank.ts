@@ -109,7 +109,7 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
   }
 
   const bank = bankRef.current;
-  const [version, setVersion] = useState(0);
+  const [, setVersion] = useState(0);
 
   useEffect(() => bank.subscribe(() => setVersion((prev) => prev + 1)), [bank]);
 
@@ -202,11 +202,11 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
     [bank]
   );
 
-  const progress = useMemo(() => {
-    const entries = bank.getEntries();
-    const ready = entries.filter((entry) => entry.status === "ready").length;
-    return { ready, total: entries.length };
-  }, [bank, version]);
+  const entries = bank.getEntries();
+  const progress = {
+    ready: entries.filter((entry) => entry.status === "ready").length,
+    total: entries.length
+  };
 
   return {
     bank,

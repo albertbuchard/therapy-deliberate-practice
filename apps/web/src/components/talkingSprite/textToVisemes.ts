@@ -53,7 +53,7 @@ export const textToVisemeTimeline = (text: string, opts: Options = {}): Timeline
       continue;
     }
 
-    let key: VisemeKey | null = null;
+    let key: VisemeKey;
 
     if (pair === "th") {
       key = "TH";

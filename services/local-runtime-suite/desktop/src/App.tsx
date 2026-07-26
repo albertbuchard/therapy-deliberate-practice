@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayLaunchButton } from "./components/GatewayLaunchButton";
@@ -10,7 +10,38 @@ type ModelSummary = {
   metadata: {
     display: { title: string };
     api: { endpoint: string };
+    compat?: { platforms?: string[] };
   };
+};
+
+type ModelLoadStatus = {
+  model_id: string;
+  status: "pending" | "loading" | "loaded" | "skipped" | "error";
+  started_at: number | null;
+  finished_at: number | null;
+  duration_ms: number | null;
+  error: string | null;
+};
+
+type ModelLoadJob = {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  models: ModelLoadStatus[];
+};
+
+type ModelLoadView = {
+  phase: "idle" | "starting" | "running" | "completed" | "failed" | "timed_out";
+  job?: ModelLoadJob;
+  error?: string;
+};
+
+type GatewayRuntimeState = {
+  platform_id: string | null;
+  defaults: Record<string, string>;
+  loaded_models: string[];
 };
 
 type DoctorCheck = {
@@ -55,6 +86,11 @@ type GatewayConfig = {
   port: number;
   default_models: Record<string, string>;
   prefer_local: boolean;
+};
+
+type PairingToken = {
+  token: string;
+  masked: string;
 };
 
 const initialQuickTestsState: QuickTestsState = {
@@ -111,6 +147,29 @@ const describeQuickTestStatus = (status: QuickTestStatus) => {
   }
 };
 
+const describeModelLoadPhase = (phase: ModelLoadView["phase"]) => {
+  switch (phase) {
+    case "starting":
+      return "Starting…";
+    case "running":
+      return "Downloading / loading";
+    case "completed":
+      return "Ready";
+    case "failed":
+      return "Needs attention";
+    case "timed_out":
+      return "Still not ready";
+    default:
+      return "Not loaded";
+  }
+};
+
+const formatModelDuration = (durationMs: number | null) => {
+  if (durationMs === null) return "";
+  if (durationMs < 1_000) return `${Math.round(durationMs)} ms`;
+  return `${(durationMs / 1_000).toFixed(1)} s`;
+};
+
 const formatErrorMessage = (error: unknown) => {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "Request timed out.";
@@ -137,16 +196,26 @@ export const App = () => {
   const [port, setPort] = useState(8484);
   const [portInput, setPortInput] = useState("8484");
   const [portSaveState, setPortSaveState] = useState<SaveState>("idle");
+  const [portSaveError, setPortSaveError] = useState<string | null>(null);
   const [connectionInfo, setConnectionInfo] = useState<GatewayConnectionInfo | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [simpleSteps, setSimpleSteps] = useState({
     copiedUrl: false,
+    copiedKey: false,
     openedSettings: false
   });
+  const [pairing, setPairing] = useState<PairingToken | null>(null);
+  const [showPairingKey, setShowPairingKey] = useState(false);
+  const [pairingKeyState, setPairingKeyState] = useState<SaveState>("idle");
   const [quickTests, setQuickTests] = useState<QuickTestsState>(initialQuickTestsState);
+  const [runtimeState, setRuntimeState] = useState<GatewayRuntimeState | null>(null);
+  const [modelLoad, setModelLoad] = useState<ModelLoadView>({ phase: "idle" });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
+  const advancedDrawerRef = useRef<HTMLElement | null>(null);
+  const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
   const bootLogRef = useRef({ readyRunId: 0, errorRunId: 0 });
+  const modelLoadRunRef = useRef(0);
   const baseUrl = connectionInfo?.base_url ?? `http://127.0.0.1:${port}`;
   const llmUrl = connectionInfo?.llm_url ?? baseUrl;
   const sttUrl = connectionInfo?.stt_url ?? baseUrl;
@@ -166,12 +235,157 @@ export const App = () => {
   const refreshStatus = async () => {
     const result = await invoke<{ status: string }>("gateway_status");
     setStatus(result.status);
+    return result.status;
   };
 
-  const refreshModels = async () => {
+  const waitForGatewayReady = async (maxWaitMs = 10 * 60_000) => {
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      const nextStatus = await refreshStatus();
+      if (nextStatus === "running") return;
+      if (nextStatus === "stopped") {
+        throw new Error("The gateway process stopped before its health check became ready.");
+      }
+      await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 1_000));
+    }
+    throw new Error("Timed out waiting for the gateway health check.");
+  };
+
+  const refreshModels = useCallback(async () => {
     logEvent("Refreshing model catalog from gateway.");
     const result = await invoke<{ data: ModelSummary[] }>("gateway_models");
     setModels(result.data ?? []);
+  }, [logEvent]);
+
+  const refreshRuntimeState = useCallback(async () => {
+    const result = await invoke<GatewayRuntimeState>("gateway_runtime_state");
+    setRuntimeState(result);
+    if (result.defaults.responses || result.defaults["audio.transcriptions"]) {
+      setDefaults((current) => ({
+        llm: current.llm || result.defaults.responses || "",
+        stt: current.stt || result.defaults["audio.transcriptions"] || ""
+      }));
+    }
+    return result;
+  }, []);
+
+  const trackModelLoadJob = async (
+    jobId: string,
+    initialJob: ModelLoadJob,
+    runId: number
+  ) => {
+    let job = initialJob;
+    setModelLoad({ phase: job.status === "pending" ? "starting" : "running", job });
+    const deadline = Date.now() + 15 * 60_000;
+
+    while (job.status === "pending" || job.status === "running") {
+      if (runId !== modelLoadRunRef.current) return;
+      if (Date.now() >= deadline) {
+        setModelLoad({
+          phase: "timed_out",
+          job,
+          error:
+            "The desktop app stopped waiting after 15 minutes, but the gateway load job is still running. Check its current status instead of starting a duplicate job."
+        });
+        logEvent("Desktop polling paused after 15 minutes; the gateway load job continues.");
+        return;
+      }
+      await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 1_000));
+      job = await invoke<ModelLoadJob>("gateway_model_load_status", {
+        payload: { job_id: jobId }
+      });
+      setModelLoad({ phase: job.status === "completed" ? "completed" : job.status, job });
+    }
+
+    await refreshRuntimeState();
+    if (job.status === "completed") {
+      setModelLoad({ phase: "completed", job });
+      setSaveState("saved");
+      logEvent("Selected models are downloaded and loaded.");
+    } else {
+      const failedModels = job.models
+        .filter((model) => model.status === "error")
+        .map((model) => `${model.model_id}: ${model.error || "load failed"}`)
+        .join(" · ");
+      setModelLoad({
+        phase: "failed",
+        job,
+        error: failedModels || "One or more selected models could not be loaded."
+      });
+      logEvent(`Model load failed: ${failedModels || "unknown model error"}`);
+    }
+    await refreshLogs();
+  };
+
+  const loadSelectedModels = async () => {
+    const selectedModels = [...new Set([defaults.llm, defaults.stt].filter(Boolean))];
+    if (status !== "running") {
+      setModelLoad({ phase: "failed", error: "Start the gateway before loading models." });
+      return;
+    }
+    if (!selectedModels.length) {
+      setModelLoad({ phase: "failed", error: "Choose an LLM and a speech model first." });
+      return;
+    }
+
+    const runId = ++modelLoadRunRef.current;
+    let activeJob: ModelLoadJob | undefined;
+    setModelLoad({ phase: "starting" });
+    logEvent(`Starting model load for ${selectedModels.length} selected model(s).`);
+    try {
+      await invoke("save_gateway_config", {
+        payload: {
+          port,
+          default_models: {
+            responses: defaults.llm,
+            "audio.transcriptions": defaults.stt
+          },
+          prefer_local: preferLocal
+        }
+      });
+      const created = await invoke<{ job_id: string; status: ModelLoadJob }>(
+        "gateway_load_models",
+        { payload: { models: selectedModels } }
+      );
+      activeJob = created.status;
+      await trackModelLoadJob(created.job_id, created.status, runId);
+    } catch (error) {
+      if (runId !== modelLoadRunRef.current) return;
+      const message = formatErrorMessage(error);
+      setModelLoad(
+        activeJob
+          ? {
+              phase: "timed_out",
+              job: activeJob,
+              error: `The status connection was interrupted, but the gateway job may still be running: ${message}`
+            }
+          : { phase: "failed", error: message }
+      );
+      logEvent(`Unable to load selected models: ${message}`);
+    }
+  };
+
+  const resumeModelLoadStatus = async () => {
+    const existingJob = modelLoad.job;
+    if (!existingJob) return;
+    const runId = ++modelLoadRunRef.current;
+    setModelLoad({ phase: "running", job: existingJob });
+    logEvent(`Checking model-load job ${existingJob.id}.`);
+    try {
+      const latest = await invoke<ModelLoadJob>("gateway_model_load_status", {
+        payload: { job_id: existingJob.id }
+      });
+      await trackModelLoadJob(existingJob.id, latest, runId);
+    } catch (error) {
+      if (runId !== modelLoadRunRef.current) return;
+      const message = formatErrorMessage(error);
+      setModelLoad({
+        phase: "timed_out",
+        job: existingJob,
+        error: `The status connection was interrupted again: ${message}`
+      });
+      logEvent(`Unable to resume model-load status: ${message}`);
+    }
   };
 
   const refreshLogs = async () => {
@@ -189,6 +403,11 @@ export const App = () => {
     setPort(result.port);
     setPortInput(String(result.port));
   };
+
+  const refreshPairingToken = useCallback(async () => {
+    const result = await invoke<PairingToken>("gateway_pairing_token");
+    setPairing(result);
+  }, []);
 
   const refreshConfig = async () => {
     const result = await invoke<GatewayConfig>("gateway_config");
@@ -217,6 +436,9 @@ export const App = () => {
       });
       setSaveState("saved");
       await refreshConnectionInfo();
+      if (status === "running") {
+        await refreshRuntimeState();
+      }
       await refreshLogs();
     } catch (error) {
       console.error("Failed to save preferences", error);
@@ -228,9 +450,25 @@ export const App = () => {
   const savePort = async () => {
     const parsed = Number(portInput);
     if (!Number.isInteger(parsed)) return;
+    const restartRequired = (status === "running" || status === "starting") && parsed !== port;
+    let configSaved = false;
+    let previousGatewayStopped = false;
     setPortSaveState("saving");
+    setPortSaveError(null);
     try {
-      logEvent(`Saving gateway port to ${parsed}.`);
+      if (restartRequired) {
+        logEvent(`Stopping the gateway before changing its port to ${parsed}.`);
+        resetBoot();
+        modelLoadRunRef.current += 1;
+        setModelLoad({ phase: "idle" });
+        setRuntimeState(null);
+        setQuickTests(initialQuickTestsState);
+        await invoke("stop_gateway");
+        previousGatewayStopped = true;
+        setStatus("stopped");
+      }
+
+      logEvent(`Saving gateway port ${parsed}.`);
       await invoke("save_gateway_config", {
         payload: {
           port: parsed,
@@ -241,30 +479,56 @@ export const App = () => {
           prefer_local: preferLocal
         }
       });
+      configSaved = true;
       setPort(parsed);
+      if (restartRequired) {
+        logEvent(`Starting the gateway on port ${parsed}.`);
+        const started = await invoke<{ status: string }>("start_gateway");
+        setStatus(started.status);
+        await waitForGatewayReady();
+      }
       setPortSaveState("saved");
-      await refreshConnectionInfo();
-      await refreshLogs();
     } catch (error) {
       console.error("Failed to save port", error);
       setPortSaveState("error");
-      logEvent("Failed to save gateway port.");
+      const details = formatErrorMessage(error);
+      let recovery = "";
+      if (previousGatewayStopped && !configSaved) {
+        try {
+          logEvent("Port save failed; restarting the previous gateway configuration.");
+          const restored = await invoke<{ status: string }>("start_gateway");
+          setStatus(restored.status);
+          await waitForGatewayReady();
+          recovery = " The previous gateway configuration was restarted.";
+        } catch (restartError) {
+          recovery = ` The previous gateway also could not be restarted: ${formatErrorMessage(restartError)}`;
+        }
+      }
+      const message =
+        configSaved && restartRequired
+          ? `Port ${parsed} was saved, but the gateway could not restart: ${details}`
+          : `The gateway port was not applied: ${details}${recovery}`;
+      setPortSaveError(message);
+      logEvent(message);
+    } finally {
+      await Promise.allSettled([refreshStatus(), refreshConnectionInfo(), refreshLogs()]);
     }
   };
 
-  const runDoctor = async () => {
+  const runDoctor = useCallback(async () => {
     logEvent("Running preflight doctor checks.");
     const result = await invoke<{ checks: DoctorCheck[] }>("gateway_doctor");
     setDoctorChecks(result.checks ?? []);
     await refreshLogs();
-  };
+  }, [logEvent]);
 
   const startGateway = async () => {
     setStartError(null);
     try {
       logEvent("Starting local gateway.");
-      await invoke("start_gateway");
-      await refreshStatus();
+      const started = await invoke<{ status: string }>("start_gateway");
+      setStatus(started.status);
+      await waitForGatewayReady();
       await refreshLogs();
     } catch (error) {
       const message =
@@ -275,13 +539,40 @@ export const App = () => {
             : JSON.stringify(error);
       setStartError(message);
       logEvent(`Gateway failed to start: ${message}`);
+    } finally {
+      await Promise.allSettled([refreshStatus(), refreshLogs()]);
     }
   };
 
-  const restartGateway = async () => {
-    logEvent("Restarting local gateway.");
+  const stopGateway = async () => {
+    resetBoot();
+    modelLoadRunRef.current += 1;
     await invoke("stop_gateway");
-    await startGateway();
+    setRuntimeState(null);
+    setModelLoad({ phase: "idle" });
+    setQuickTests(initialQuickTestsState);
+    await refreshStatus();
+    logEvent("Stopped local gateway.");
+  };
+
+  const rotatePairingToken = async () => {
+    const confirmed = window.confirm(
+      "Rotate the pairing key? The Therapy website will disconnect until you paste the new key. The gateway will restart if it is running."
+    );
+    if (!confirmed) return;
+    setPairingKeyState("saving");
+    try {
+      const result = await invoke<PairingToken>("rotate_gateway_pairing_token");
+      setPairing(result);
+      setShowPairingKey(false);
+      setSimpleSteps((previous) => ({ ...previous, copiedKey: false }));
+      await Promise.allSettled([refreshStatus(), refreshLogs()]);
+      setPairingKeyState("saved");
+      logEvent("Rotated the local pairing key.");
+    } catch (error) {
+      setPairingKeyState("error");
+      logEvent(`Pairing key rotation failed: ${formatErrorMessage(error)}`);
+    }
   };
 
   const copyText = async (value: string) => {
@@ -289,7 +580,7 @@ export const App = () => {
     logEvent("Copied text to clipboard.");
   };
 
-  const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = 20000) => {
+  const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = 120_000) => {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -302,6 +593,31 @@ export const App = () => {
   const runQuickTests = async () => {
     if (status !== "running") {
       const message = "Gateway is not running. Start it before running tests.";
+      logEvent(message);
+      setQuickTests({
+        status: "error",
+        llm: { status: "error", error: message },
+        stt: { status: "error", error: message },
+        finishedAt: new Date().toISOString()
+      });
+      return;
+    }
+    const selected = [...new Set([defaults.llm, defaults.stt].filter(Boolean))];
+    const loaded = new Set(runtimeState?.loaded_models ?? []);
+    if (!selected.length || !selected.every((modelId) => loaded.has(modelId))) {
+      const message =
+        "The selected models are not loaded yet. Download and load them before running tests.";
+      logEvent(message);
+      setQuickTests({
+        status: "error",
+        llm: { status: "error", error: message },
+        stt: { status: "error", error: message },
+        finishedAt: new Date().toISOString()
+      });
+      return;
+    }
+    if (!pairing?.token) {
+      const message = "Pairing key is unavailable. Reopen the desktop app and try again.";
       logEvent(message);
       setQuickTests({
         status: "error",
@@ -329,6 +645,7 @@ export const App = () => {
         {
           method: "POST",
           headers: {
+            "Authorization": `Bearer ${pairing.token}`,
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
@@ -337,7 +654,7 @@ export const App = () => {
             temperature: 0
           })
         },
-        20000
+        120_000
       );
       const durationMs = Math.round(performance.now() - llmStart);
       if (!response.ok) {
@@ -373,9 +690,12 @@ export const App = () => {
         `${baseUrl}/v1/audio/transcriptions`,
         {
           method: "POST",
+          headers: {
+            "Authorization": `Bearer ${pairing.token}`
+          },
           body: formData
         },
-        20000
+        120_000
       );
       const durationMs = Math.round(performance.now() - sttStart);
       if (!response.ok) {
@@ -383,10 +703,14 @@ export const App = () => {
       }
       const data = await response.json();
       const text = typeof data?.text === "string" ? data.text : undefined;
-      if (!text) {
+      if (text === undefined) {
         throw new Error("STT response missing text.");
       }
-      sttResult = { status: "ok", durationMs, preview: text.trim() };
+      sttResult = {
+        status: "ok",
+        durationMs,
+        preview: text.trim() || "Engine responded correctly to silent audio."
+      };
       logEvent(`STT test ok (${durationMs} ms)`);
     } catch (error) {
       const durationMs = Math.round(performance.now() - sttStart);
@@ -413,9 +737,11 @@ export const App = () => {
       await refreshStatus();
       await refreshConnectionInfo();
       await refreshModels();
+      await refreshRuntimeState();
       await refreshLogs();
     }
   });
+  const { start: startBoot, cancel: cancelBoot, reset: resetBoot } = boot;
 
   useEffect(() => {
     if (boot.state.phase === "error" && boot.state.error && bootLogRef.current.errorRunId !== boot.state.runId) {
@@ -433,13 +759,16 @@ export const App = () => {
     refreshLogs();
     refreshConnectionInfo();
     refreshConfig();
+    refreshPairingToken();
     runDoctor();
-  }, []);
+  }, [refreshPairingToken, runDoctor]);
 
   useEffect(() => {
     if (status !== "running") return;
-    refreshModels();
-  }, [status]);
+    void Promise.all([refreshModels(), refreshRuntimeState()]).catch((error) => {
+      logEvent(`Unable to refresh runtime state: ${formatErrorMessage(error)}`);
+    });
+  }, [logEvent, refreshModels, refreshRuntimeState, status]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -449,11 +778,22 @@ export const App = () => {
   }, []);
 
   useEffect(() => {
+    if (status !== "starting") return;
+    const interval = window.setInterval(() => {
+      void refreshStatus().catch((error) => {
+        logEvent(`Unable to refresh gateway readiness: ${formatErrorMessage(error)}`);
+      });
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [logEvent, status]);
+
+  useEffect(() => {
     setSaveState("idle");
   }, [defaults.llm, defaults.stt, preferLocal]);
 
   useEffect(() => {
     setPortSaveState("idle");
+    setPortSaveError(null);
   }, [portInput]);
 
   useEffect(() => {
@@ -469,47 +809,156 @@ export const App = () => {
     };
   }, [showAdvanced]);
 
-  const llmOptions = models.filter((model) => model.metadata.api.endpoint === "responses");
-  const sttOptions = models.filter((model) =>
-    ["audio.transcriptions", "audio.translations"].includes(model.metadata.api.endpoint)
+  useEffect(() => {
+    if (!showAdvanced) return;
+    const drawer = advancedDrawerRef.current;
+    if (!drawer) return;
+    drawer.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShowAdvanced(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        drawer.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      window.requestAnimationFrame(() => drawerReturnFocusRef.current?.focus());
+    };
+  }, [showAdvanced]);
+
+  useEffect(
+    () => () => {
+      modelLoadRunRef.current += 1;
+    },
+    []
+  );
+
+  const runtimePlatformId = runtimeState?.platform_id ?? null;
+  const supportsRuntimePlatform = useCallback(
+    (model: ModelSummary) =>
+      !runtimePlatformId ||
+      !model.metadata.compat?.platforms?.length ||
+      model.metadata.compat.platforms.includes(runtimePlatformId),
+    [runtimePlatformId]
+  );
+  const llmOptions = useMemo(
+    () =>
+      models.filter(
+        (model) =>
+          model.metadata.api.endpoint === "responses" && supportsRuntimePlatform(model)
+      ),
+    [models, supportsRuntimePlatform]
+  );
+  const sttOptions = useMemo(
+    () =>
+      models.filter((model) =>
+        ["audio.transcriptions", "audio.translations"].includes(model.metadata.api.endpoint) &&
+        supportsRuntimePlatform(model)
+      ),
+    [models, supportsRuntimePlatform]
   );
 
   useEffect(() => {
     if (!models.length) return;
-    if (defaults.llm && defaults.stt) return;
-    const pickModel = (options: ModelSummary[], preferredId: string) =>
-      options.find((model) => model.id === preferredId)?.id ?? options[0]?.id ?? "";
+    const pickModel = (options: ModelSummary[], currentId: string, preferredId: string) =>
+      options.find((model) => model.id === currentId)?.id ??
+      options.find((model) => model.id === preferredId)?.id ??
+      options[0]?.id ??
+      "";
     const nextDefaults = {
-      llm: defaults.llm || pickModel(llmOptions, isMac ? "local//llm/qwen3-mlx" : "local//llm/qwen3-hf"),
-      stt: defaults.stt || pickModel(sttOptions, isMac ? "local//stt/parakeet-mlx" : "local//stt/faster-whisper")
+      llm: pickModel(
+        llmOptions,
+        defaults.llm,
+        runtimeState?.defaults.responses ??
+          (isMac ? "local//llm/qwen3-mlx" : "local//llm/qwen3-hf")
+      ),
+      stt: pickModel(
+        sttOptions,
+        defaults.stt,
+        runtimeState?.defaults["audio.transcriptions"] ??
+          (isMac ? "local//stt/parakeet-mlx" : "local//stt/faster-whisper")
+      )
     };
-    setDefaults(nextDefaults);
-    logEvent(`Selected ${isMac ? "MLX" : "non-MLX"} defaults based on platform.`);
-  }, [models, llmOptions, sttOptions, isMac, defaults.llm, defaults.stt]);
+    if (nextDefaults.llm !== defaults.llm || nextDefaults.stt !== defaults.stt) {
+      setDefaults(nextDefaults);
+      logEvent(
+        `Selected compatible defaults for ${runtimePlatformId ?? "the detected platform"}.`
+      );
+    }
+  }, [
+    defaults.llm,
+    defaults.stt,
+    isMac,
+    llmOptions,
+    logEvent,
+    models.length,
+    runtimePlatformId,
+    runtimeState?.defaults,
+    sttOptions
+  ]);
 
   const gatewayReady = status === "running" || boot.state.phase === "ready";
   const heroBootState: GatewayBootState =
     gatewayReady && boot.state.phase !== "ready" ? { ...boot.state, phase: "ready" as const } : boot.state;
-  const heroProgress = gatewayReady ? 1 : boot.derived.progress;
-  const heroElapsedMs = gatewayReady ? boot.derived.maxWaitMs : boot.derived.elapsedMs;
   const isGatewayRunning = status === "running";
+  const isGatewayActive = status === "running" || status === "starting";
   const portValue = Number(portInput);
   const portValid = Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535;
   const portDirty = portValue !== port;
   const doctorBlocking = doctorChecks.find(
     (check) => check.status === "error" && ["local_runtime import", "Python executable"].includes(check.title)
   );
-  const canStartGateway = !doctorBlocking;
+  const canStartGateway = !doctorBlocking && !isGatewayActive;
   const canLoadModels = isGatewayRunning;
   const hasModels = models.length > 0;
   const canChooseDefaults = hasModels;
   const defaultsComplete = Boolean(defaults.llm && defaults.stt);
-  const canSave = defaultsComplete;
+  const selectedModelIds = [...new Set([defaults.llm, defaults.stt].filter(Boolean))];
+  const runtimeLoadedModels = new Set(runtimeState?.loaded_models ?? []);
+  const selectedModelsLoaded =
+    selectedModelIds.length > 0 &&
+    selectedModelIds.every((modelId) => runtimeLoadedModels.has(modelId));
+  const modelLoadBusy =
+    modelLoad.phase === "starting" ||
+    modelLoad.phase === "running" ||
+    modelLoad.phase === "timed_out";
+  const canSave = defaultsComplete && selectedModelsLoaded;
   const isSaved = saveState === "saved";
   const simpleStep1Complete = gatewayReady;
-  const simpleStep2Complete = simpleSteps.copiedUrl;
-  const simpleStep3Complete = simpleSteps.openedSettings;
-  const simpleActiveStep = !simpleStep1Complete ? 1 : !simpleStep2Complete ? 2 : 3;
+  const simpleStep2Complete = selectedModelsLoaded;
+  const simpleStep3Complete = simpleSteps.copiedUrl && simpleSteps.copiedKey;
+  const simpleStep4Complete = simpleSteps.openedSettings;
+  const simpleActiveStep = !simpleStep1Complete
+    ? 1
+    : !simpleStep2Complete
+      ? 2
+      : !simpleStep3Complete
+        ? 3
+        : 4;
   const moduleNotFound = logs.some((line) =>
     line.includes("ModuleNotFoundError: No module named 'local_runtime'")
   );
@@ -520,29 +969,39 @@ export const App = () => {
       return;
     }
     logEvent("Launching local gateway via hero CTA.");
-    boot.start();
-  }, [boot.start, canStartGateway, logEvent]);
+    startBoot();
+  }, [canStartGateway, logEvent, startBoot]);
 
   const handleLaunchCancel = useCallback(() => {
     logEvent("Stopping local gateway launch.");
-    boot.cancel();
-  }, [boot.cancel, logEvent]);
+    cancelBoot();
+  }, [cancelBoot, logEvent]);
 
   const handleLaunchReset = useCallback(() => {
-    boot.reset();
-  }, [boot.reset]);
+    resetBoot();
+  }, [resetBoot]);
 
-  const handleReadyLaunchClick = useCallback(async () => {
-    const normalized = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-    logEvent(`Opening local gateway UI at ${normalized}`);
-    await openUrl(normalized);
-  }, [baseUrl, logEvent]);
+  const openAdvanced = useCallback(() => {
+    logEvent("Opened advanced connection controls.");
+    drawerReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setShowAdvanced(true);
+  }, [logEvent]);
+
+  const closeAdvanced = useCallback(() => {
+    setShowAdvanced(false);
+  }, []);
+
+  const handleReadyLaunchClick = useCallback(() => {
+    openAdvanced();
+  }, [openAdvanced]);
 
   let activeStep = 1;
   if (isGatewayRunning) activeStep = 2;
   if (hasModels) activeStep = 3;
   if (defaultsComplete) activeStep = 4;
-  if (isSaved) activeStep = 5;
+  if (selectedModelsLoaded) activeStep = 5;
+  if (isSaved) activeStep = 6;
 
   const step1Description = doctorBlocking
     ? `Blocked: ${doctorBlocking.details}`
@@ -557,8 +1016,8 @@ export const App = () => {
     },
     {
       id: 2,
-      title: "Load/refresh models",
-      description: "Pull the latest model catalog from the running gateway.",
+      title: "Discover available models",
+      description: "Read the compatible model catalog from the running gateway.",
       complete: hasModels
     },
     {
@@ -569,6 +1028,12 @@ export const App = () => {
     },
     {
       id: 4,
+      title: "Download and load models",
+      description: "Prepare the selected local models and show their actual progress.",
+      complete: selectedModelsLoaded
+    },
+    {
+      id: 5,
       title: "Save preferences",
       description: "Persist your default selections and routing preference.",
       complete: isSaved
@@ -577,33 +1042,106 @@ export const App = () => {
 
   if (isSaved) {
     steps.push({
-      id: 5,
+      id: 6,
       title: "Configure Therapy Settings",
       description: "Open the settings page to connect your saved preferences.",
       complete: false
     });
   }
 
+  const loadJobModelIds = new Set(modelLoad.job?.models.map((model) => model.model_id) ?? []);
+  const loadJobMatchesSelection =
+    selectedModelIds.length === loadJobModelIds.size &&
+    selectedModelIds.every((modelId) => loadJobModelIds.has(modelId));
+  const effectiveModelLoadPhase: ModelLoadView["phase"] = selectedModelsLoaded
+    ? "completed"
+    : modelLoad.phase === "completed" && !loadJobMatchesSelection
+      ? "idle"
+      : modelLoad.phase;
+  const modelTitleById = new Map(
+    models.map((model) => [model.id, model.metadata.display.title] as const)
+  );
+  const modelLoadProgress = (
+    <div className="model-load-panel" aria-live="polite">
+      <div className="model-load-summary">
+        <span
+          className={`badge ${selectedModelsLoaded ? "badge-success" : ""}`}
+        >
+          {describeModelLoadPhase(effectiveModelLoadPhase)}
+        </span>
+        {runtimePlatformId ? (
+          <span className="mono">Platform: {runtimePlatformId}</span>
+        ) : null}
+      </div>
+      {loadJobMatchesSelection
+        ? modelLoad.job?.models.map((model) => (
+        <div className="model-load-row" key={model.model_id}>
+          <div>
+            <div className="text-sm">
+              {modelTitleById.get(model.model_id) ?? model.model_id}
+            </div>
+            {model.error ? <div className="error-text">{model.error}</div> : null}
+          </div>
+          <div className="model-load-row-status">
+            <span className={`model-status model-status-${model.status}`}>
+              {model.status}
+            </span>
+            {model.duration_ms !== null ? (
+              <span className="mono">{formatModelDuration(model.duration_ms)}</span>
+            ) : null}
+          </div>
+        </div>
+          ))
+        : null}
+      {modelLoad.error && (!modelLoad.job || loadJobMatchesSelection) ? (
+        <div className="error-text">{modelLoad.error}</div>
+      ) : null}
+      {effectiveModelLoadPhase === "timed_out" && loadJobMatchesSelection ? (
+        <div className="button-row">
+          <button
+            className="btn"
+            onClick={resumeModelLoadStatus}
+            disabled={status !== "running"}
+          >
+            Check current load status
+          </button>
+        </div>
+      ) : null}
+      {modelLoadBusy ? (
+        <div className="helper-text">
+          The first run may download model files. Keep the desktop app open; later starts reuse
+          the local cache.
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="app-shell">
       <div
         className={`drawer-scrim ${showAdvanced ? "open" : ""}`}
-        onClick={() => setShowAdvanced(false)}
+        onClick={closeAdvanced}
+        aria-hidden="true"
       />
-      <main className={`container simple-content ${showAdvanced ? "blurred" : ""}`}>
+      <main
+        className={`container simple-content ${showAdvanced ? "blurred" : ""}`}
+        aria-hidden={showAdvanced}
+        inert={showAdvanced ? true : undefined}
+      >
         <div className="panel hero">
         <div className="hero-glow" />
         <div className="hero-header">
           <div>
             <div className="kicker">Local Runtime</div>
-            <div className="title">Launch in four effortless steps</div>
+            <div className="title">Connect in four guided steps</div>
             <div className="hero-subtitle">
-              We auto-select {isMac ? "MLX" : "non-MLX"} defaults for your machine and keep the rest tucked away.
+              Compatible models are selected for {runtimePlatformId ?? "your machine"}, with
+              download progress and connection details in one place.
             </div>
           </div>
           <div className="hero-actions">
             <span className="badge">Status: {status}</span>
-            <button className="btn ghost" onClick={() => setShowAdvanced(true)}>
+            <button className="btn ghost" onClick={openAdvanced}>
               Advanced controls
             </button>
           </div>
@@ -618,9 +1156,6 @@ export const App = () => {
               </div>
               <GatewayLaunchButton
                 boot={heroBootState}
-                progress={heroProgress}
-                elapsedMs={heroElapsedMs}
-                maxWaitMs={boot.derived.maxWaitMs}
                 onStart={handleLaunchStart}
                 onCancel={handleLaunchCancel}
                 onReset={handleLaunchReset}
@@ -641,42 +1176,129 @@ export const App = () => {
           <div className={`simple-step ${simpleStep2Complete ? "complete" : ""} ${simpleActiveStep === 2 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep2Complete ? "✓" : "2"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Copy your local URL</div>
+              <div className="simple-step-title">Prepare your local models</div>
               <div className="simple-step-description">
-                Use this base URL in Therapy Settings: <span className="mono">{baseUrl}</span>
+                Choose one language model and one speech model. The first download can take a few
+                minutes; progress remains visible here.
               </div>
-              <button
-                className="btn"
-                onClick={async () => {
-                  await copyText(baseUrl);
-                  setSimpleSteps((prev) => ({ ...prev, copiedUrl: true }));
-                }}
-                disabled={!gatewayReady}
-              >
-                {simpleStep2Complete ? "Copied" : "Copy gateway URL"}
-              </button>
+              <div className="grid">
+                <div>
+                  <div className="label">Language model</div>
+                  <select
+                    className="select"
+                    value={defaults.llm}
+                    onChange={(event) =>
+                      setDefaults((previous) => ({ ...previous, llm: event.target.value }))
+                    }
+                    disabled={!canChooseDefaults || modelLoadBusy}
+                  >
+                    <option value="">Select language model</option>
+                    {llmOptions.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.metadata.display.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div className="label">Speech model</div>
+                  <select
+                    className="select"
+                    value={defaults.stt}
+                    onChange={(event) =>
+                      setDefaults((previous) => ({ ...previous, stt: event.target.value }))
+                    }
+                    disabled={!canChooseDefaults || modelLoadBusy}
+                  >
+                    <option value="">Select speech model</option>
+                    {sttOptions.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.metadata.display.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="button-row">
+                <button
+                  className="btn primary"
+                  onClick={loadSelectedModels}
+                  disabled={!defaultsComplete || modelLoadBusy || !gatewayReady}
+                >
+                  {modelLoadBusy
+                    ? modelLoad.phase === "timed_out"
+                      ? "Load continues in gateway"
+                      : "Preparing models…"
+                    : selectedModelsLoaded
+                      ? "Reload selected models"
+                      : "Download & load selected models"}
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={refreshModels}
+                  disabled={!gatewayReady || modelLoadBusy}
+                >
+                  Refresh catalog
+                </button>
+              </div>
+              {modelLoadProgress}
             </div>
           </div>
           <div className={`simple-step ${simpleStep3Complete ? "complete" : ""} ${simpleActiveStep === 3 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep3Complete ? "✓" : "3"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Paste the URL in Settings</div>
+              <div className="simple-step-title">Copy your connection details</div>
               <div className="simple-step-description">
-                We will open settings and copy the URL for you.
+                Therapy Settings needs both values. Your pairing key stays on this computer.
+              </div>
+              <div className="connection-summary">
+                <span className="mono">{baseUrl}</span>
+                <span className="mono pairing-value">{pairing?.masked ?? "Creating pairing key…"}</span>
+              </div>
+              <div className="button-row">
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    await copyText(baseUrl);
+                    setSimpleSteps((prev) => ({ ...prev, copiedUrl: true }));
+                  }}
+                  disabled={!selectedModelsLoaded}
+                >
+                  {simpleSteps.copiedUrl ? "URL copied" : "Copy gateway URL"}
+                </button>
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    if (!pairing?.token) return;
+                    await copyText(pairing.token);
+                    setSimpleSteps((prev) => ({ ...prev, copiedKey: true }));
+                  }}
+                  disabled={!selectedModelsLoaded || !pairing?.token}
+                >
+                  {simpleSteps.copiedKey ? "Pairing key copied" : "Copy pairing key"}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className={`simple-step ${simpleStep4Complete ? "complete" : ""} ${simpleActiveStep === 4 ? "active" : ""}`}>
+            <div className="simple-step-index">{simpleStep4Complete ? "✓" : "4"}</div>
+            <div className="simple-step-content">
+              <div className="simple-step-title">Open Therapy Settings</div>
+              <div className="simple-step-description">
+                Paste the local URL and pairing key into their labeled fields, then test the connection.
               </div>
               <div className="button-row">
                 <button
                   className="btn primary"
                   onClick={async () => {
-                    await copyText(baseUrl);
                     await openUrl(settingsUrl);
                     setSimpleSteps((prev) => ({ ...prev, openedSettings: true }));
-                    logEvent("Opened Therapy settings and copied URL.");
+                    logEvent("Opened Therapy settings.");
                   }}
-                  disabled={!gatewayReady}
-                  title={!gatewayReady ? "Start the gateway first." : undefined}
+                  disabled={!simpleStep3Complete}
+                  title={!simpleStep3Complete ? "Copy both connection values first." : undefined}
                 >
-                  {simpleStep3Complete ? "Settings opened" : "Next: Open Settings"}
+                  {simpleStep4Complete ? "Settings opened" : "Next: Open Settings"}
                 </button>
                 <button
                   className="btn ghost"
@@ -694,15 +1316,24 @@ export const App = () => {
         </div>
       </main>
 
-      <aside className={`advanced-drawer ${showAdvanced ? "open" : ""}`}>
+      <aside
+        ref={advancedDrawerRef}
+        className={`advanced-drawer ${showAdvanced ? "open" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="advanced-drawer-title"
+        aria-hidden={!showAdvanced}
+        inert={!showAdvanced ? true : undefined}
+        tabIndex={-1}
+      >
         <div className="drawer-header">
           <div>
             <div className="kicker">Advanced</div>
-            <div className="title">Local Runtime controls</div>
+            <div className="title" id="advanced-drawer-title">Local Runtime controls</div>
           </div>
           <div className="hero-actions">
             <span className="badge">Status: {status}</span>
-            <button className="btn ghost" onClick={() => setShowAdvanced(false)}>
+            <button className="btn ghost" onClick={closeAdvanced}>
               Close
             </button>
           </div>
@@ -752,11 +1383,59 @@ export const App = () => {
                   </button>
                 </div>
               </div>
+              <div className="connection-row">
+                <div className="label">Pairing key</div>
+                <div className="pill-row">
+                  <div
+                    className="pill pairing-value"
+                    title={showPairingKey ? pairing?.token : pairing?.masked}
+                  >
+                    {showPairingKey
+                      ? pairing?.token ?? "Creating pairing key…"
+                      : pairing?.masked ?? "Creating pairing key…"}
+                  </div>
+                  <button
+                    className="icon-btn"
+                    onClick={() => setShowPairingKey((visible) => !visible)}
+                    aria-pressed={showPairingKey}
+                    disabled={!pairing}
+                  >
+                    {showPairingKey ? "Hide" : "Reveal"}
+                  </button>
+                  <button
+                    className="icon-btn"
+                    onClick={() => pairing?.token && copyText(pairing.token)}
+                    disabled={!pairing?.token}
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div className="helper-text">
+                  Keep this key private. It authorizes browser requests to models on this computer.
+                </div>
+                <div className="button-row">
+                  <button
+                    className="btn ghost"
+                    onClick={rotatePairingToken}
+                    disabled={pairingKeyState === "saving"}
+                  >
+                    {pairingKeyState === "saving" ? "Rotating…" : "Rotate pairing key"}
+                  </button>
+                  {pairingKeyState === "saved" ? (
+                    <span className="success-text">New key created. Update Therapy Settings.</span>
+                  ) : null}
+                  {pairingKeyState === "error" ? (
+                    <span className="error-text">Could not rotate the key.</span>
+                  ) : null}
+                </div>
+              </div>
             </div>
             <div className="helper-row">
               <div>
                 <div className="helper-title">Where do I paste these?</div>
-                <div className="helper-text">Open Therapy Settings and paste the Base URL.</div>
+                <div className="helper-text">
+                  Open Therapy Settings and paste the Base URL and pairing key.
+                </div>
               </div>
               <button className="btn" onClick={() => openUrl(settingsUrl)}>
                 Open Therapy Settings
@@ -769,9 +1448,20 @@ export const App = () => {
               <button
                 className="btn"
                 onClick={runQuickTests}
-                disabled={quickTests.status === "running" || status !== "running"}
+                disabled={
+                  quickTests.status === "running" ||
+                  status !== "running" ||
+                  !selectedModelsLoaded
+                }
+                title={
+                  !selectedModelsLoaded
+                    ? "Download and load the selected models first."
+                    : undefined
+                }
               >
-                {quickTests.status === "running" ? "Running tests..." : "Run LLM + STT Test"}
+                {quickTests.status === "running"
+                  ? "Running tests..."
+                  : "Run LLM + speech test"}
               </button>
               <button className="btn" onClick={() => copyText(llmExample)}>
                 Copy example LLM endpoint
@@ -846,21 +1536,18 @@ export const App = () => {
                   Use 8484
                 </button>
                 {portSaveState === "error" ? (
-                  <span className="error-text">Port save failed. Try again.</span>
+                  <span className="error-text">{portSaveError ?? "Port save failed. Try again."}</span>
                 ) : null}
                 {portSaveState === "saved" ? (
                   <span className="success-text">Port saved.</span>
                 ) : null}
               </div>
             </div>
-            {portDirty && isGatewayRunning ? (
+            {portDirty && isGatewayActive ? (
               <div className="warning-banner">
                 <div>
-                  Port changed. Restart the gateway to apply the new port.
+                  Saving this change will restart the gateway automatically on the new port.
                 </div>
-                <button className="btn" onClick={restartGateway}>
-                  Restart gateway
-                </button>
               </div>
             ) : null}
           </div>
@@ -871,7 +1558,7 @@ export const App = () => {
                 <div className="kicker">Setup Wizard</div>
                 <div className="title">Get ready in minutes</div>
               </div>
-              <span className="badge">Step {activeStep} of {isSaved ? 5 : 4}</span>
+              <span className="badge">Step {activeStep} of {isSaved ? 6 : 5}</span>
             </div>
 
             <ol className="stepper">
@@ -896,7 +1583,11 @@ export const App = () => {
                   <div className="step-title">Start the gateway</div>
                 </div>
                 <span className={`badge ${isGatewayRunning ? "badge-success" : ""}`}>
-                  {isGatewayRunning ? "Gateway running" : "Gateway stopped"}
+                  {isGatewayRunning
+                    ? "Gateway ready"
+                    : isGatewayActive
+                      ? "Gateway starting"
+                      : "Gateway stopped"}
                 </span>
               </div>
               <p className="step-description">
@@ -917,7 +1608,7 @@ export const App = () => {
                 <button className="btn primary" onClick={startGateway} disabled={!canStartGateway}>
                   Start gateway
                 </button>
-                <button className="btn" onClick={() => invoke("stop_gateway").then(refreshStatus)}>
+                <button className="btn" onClick={stopGateway} disabled={!isGatewayActive}>
                   Stop gateway
                 </button>
                 <button className="btn" onClick={runDoctor}>
@@ -936,12 +1627,15 @@ export const App = () => {
               <div className="step-card-header">
                 <div>
                   <div className="label">Step 2</div>
-                  <div className="step-title">Load or refresh models</div>
+                  <div className="step-title">Discover compatible models</div>
                 </div>
-                <span className="badge">{hasModels ? `${models.length} models loaded` : "No models yet"}</span>
+                <span className="badge">
+                  {hasModels ? `${llmOptions.length + sttOptions.length} models available` : "No catalog yet"}
+                </span>
               </div>
               <p className="step-description">
-                Refresh the model list after the gateway starts. This unlocks default selections.
+                Read the catalog and hide models that cannot run on{" "}
+                {runtimePlatformId ?? "this platform"}.
               </p>
               <button className="btn" onClick={refreshModels} disabled={!canLoadModels}>
                 Refresh models
@@ -995,10 +1689,49 @@ export const App = () => {
               </div>
             </div>
 
-            <div className={`step-card ${canSave ? "" : "is-disabled"}`}>
+            <div className={`step-card ${defaultsComplete ? "" : "is-disabled"}`}>
               <div className="step-card-header">
                 <div>
                   <div className="label">Step 4</div>
+                  <div className="step-title">Download and load selected models</div>
+                </div>
+                <span className={`badge ${selectedModelsLoaded ? "badge-success" : ""}`}>
+                  {describeModelLoadPhase(effectiveModelLoadPhase)}
+                </span>
+              </div>
+              <p className="step-description">
+                Prepare both engines before connecting the Therapy website. Downloads are cached
+                locally, and a failed engine is reported separately.
+              </p>
+              <div className="button-row">
+                <button
+                  className="btn primary"
+                  onClick={loadSelectedModels}
+                  disabled={!defaultsComplete || modelLoadBusy || !isGatewayRunning}
+                >
+                  {modelLoadBusy
+                    ? modelLoad.phase === "timed_out"
+                      ? "Load continues in gateway"
+                      : "Preparing models…"
+                    : selectedModelsLoaded
+                      ? "Reload selected models"
+                      : "Download & load selected models"}
+                </button>
+                <button
+                  className="btn"
+                  onClick={refreshRuntimeState}
+                  disabled={!isGatewayRunning || modelLoadBusy}
+                >
+                  Refresh readiness
+                </button>
+              </div>
+              {modelLoadProgress}
+            </div>
+
+            <div className={`step-card ${canSave ? "" : "is-disabled"}`}>
+              <div className="step-card-header">
+                <div>
+                  <div className="label">Step 5</div>
                   <div className="step-title">Save preferences</div>
                 </div>
                 <span className={`badge ${isSaved ? "badge-success" : ""}`}>
@@ -1038,7 +1771,7 @@ export const App = () => {
               <div className="step-card">
                 <div className="step-card-header">
                   <div>
-                    <div className="label">Step 5</div>
+                    <div className="label">Step 6</div>
                     <div className="step-title">Next: Configure in Therapy Settings</div>
                   </div>
                   <span className="badge">Ready</span>

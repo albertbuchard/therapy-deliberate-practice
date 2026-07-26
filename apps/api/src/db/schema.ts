@@ -149,6 +149,7 @@ export const attempts = sqliteTable(
     evaluation: text("evaluation", { mode: "json" }).notNull(),
     overall_pass: integer("overall_pass", { mode: "boolean" }).notNull(),
     overall_score: real("overall_score").notNull(),
+    score_trust: text("score_trust").notNull().default("local_unverified"),
     model_info: text("model_info", { mode: "json" })
   },
   (table) => ({
@@ -167,6 +168,10 @@ export const attempts = sqliteTable(
     sessionStartedIdx: index("attempts_session_id_started_at_idx").on(
       table.session_id,
       table.started_at
+    ),
+    scoreTrustCompletedIdx: index("attempts_score_trust_completed_at_idx").on(
+      table.score_trust,
+      table.completed_at
     )
   })
 );
@@ -301,7 +306,12 @@ export const minigameRoundResults = sqliteTable(
     created_at: integer("created_at").notNull()
   },
   (table) => ({
-    roundIdx: index("minigame_round_results_round_id_idx").on(table.round_id)
+    roundIdx: index("minigame_round_results_round_id_idx").on(table.round_id),
+    roundPlayerUniqueIdx: uniqueIndex("minigame_round_results_round_player_unique_idx").on(
+      table.round_id,
+      table.player_id
+    ),
+    attemptUniqueIdx: uniqueIndex("minigame_round_results_attempt_unique_idx").on(table.attempt_id)
   })
 );
 

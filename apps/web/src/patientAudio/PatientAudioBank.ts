@@ -244,7 +244,7 @@ export class PatientAudioBank {
         }
 
         await this.waitWithAbort(result.retry_after_ms ?? DEFAULT_RETRY_MS, signal);
-      } catch (error) {
+      } catch {
         if (signal?.aborted) return;
         this.updateEntry(exerciseId, statementId, {
           status: "error",
@@ -313,7 +313,7 @@ export class PatientAudioBank {
         blobUrl,
         error: undefined
       });
-    } catch (error) {
+    } catch {
       if (signal?.aborted) return;
       this.updateEntry(exerciseId, statementId, {
         status: "error",

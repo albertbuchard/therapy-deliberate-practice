@@ -49,6 +49,14 @@ export type UserProfileInput = {
   bio?: string | null;
 };
 
+export type LocalPracticePreparation = {
+  requestId: string;
+  attemptId: string;
+  score_trust: "local_unverified";
+  task: Task;
+  example: TaskExample;
+};
+
 export type PublicProfile = {
   id: string;
   display_name: string;
@@ -92,6 +100,7 @@ export type PracticeSessionAttempt = {
   evaluation: EvaluationResult | null;
   overall_score: number;
   overall_pass: boolean;
+  score_trust: "cloud_trusted" | "local_unverified";
 };
 
 export type MinigameSession = {
@@ -172,6 +181,7 @@ export type MinigameRoundResult = {
   transcript?: string | null;
   evaluation?: EvaluationResult | null;
   client_penalty?: number | null;
+  score_trust: "cloud_trusted" | "local_unverified";
 };
 
 export type LeaderboardEntry = {
@@ -389,6 +399,31 @@ export const api = createApi({
       query: (body) => ({ url: "/practice/run", method: "POST", body }),
       invalidatesTags: ["Attempt"]
     }),
+    prepareLocalPractice: builder.mutation<
+      LocalPracticePreparation,
+      {
+        session_item_id?: string;
+        task_id?: string;
+        example_id?: string;
+        minigame?: { session_id: string; round_id: string; player_id: string };
+      }
+    >({
+      query: (body) => ({ url: "/practice/local/prepare", method: "POST", body })
+    }),
+    commitLocalPractice: builder.mutation<
+      PracticeRunResponse,
+      {
+        attempt_id: string;
+        transcript: { text: string; model: string; duration_ms: number };
+        evaluation: EvaluationResult;
+        llm: { model: string; duration_ms: number };
+        practice_mode?: "standard" | "real_time";
+        turn_context?: PracticeRunInput["turn_context"];
+      }
+    >({
+      query: (body) => ({ url: "/practice/local/commit", method: "POST", body }),
+      invalidatesTags: ["Attempt"]
+    }),
     listMinigameSessions: builder.query<
       { sessions: MinigameSessionSummary[] },
       { status?: "active" | "ended" | "all"; sort?: "newest" | "oldest" | "recently_active" }
@@ -520,6 +555,32 @@ export const api = createApi({
       }),
       invalidatesTags: ["Attempt"]
     }),
+    commitLocalMinigameRound: builder.mutation<
+      PracticeRunResponse,
+      {
+        sessionId: string;
+        roundId: string;
+        player_id: string;
+        attempt_id: string;
+        turn_context?: {
+          patient_cache_key?: string;
+          patient_statement_id?: string;
+          timing?: {
+            response_delay_ms?: number | null;
+            response_duration_ms?: number | null;
+            response_timer_seconds?: number;
+            max_response_duration_seconds?: number;
+          };
+        };
+      }
+    >({
+      query: ({ sessionId, roundId, ...body }) => ({
+        url: `/minigames/sessions/${sessionId}/rounds/${roundId}/commit-local`,
+        method: "POST",
+        body
+      }),
+      invalidatesTags: ["Attempt"]
+    }),
     prefetchPatientAudio: builder.mutation<
       { cache_key: string; status: "ready" | "generating"; audio_url?: string; retry_after_ms?: number },
       { exercise_id: string; practice_mode: "real_time"; statement_id?: string }
@@ -555,6 +616,7 @@ export const api = createApi({
         example_difficulty: number;
         overall_score: number;
         overall_pass: boolean;
+        score_trust: "cloud_trusted" | "local_unverified";
         completed_at: string;
         session_id: string | null;
       }>,
@@ -581,6 +643,8 @@ export const {
   useGetTaskTagsQuery,
   useGetTaskSkillDomainsQuery,
   useGetTaskQuery,
+  usePrepareLocalPracticeMutation,
+  useCommitLocalPracticeMutation,
   useGetTaskExamplesQuery,
   useGetLeaderboardQuery,
   useStartSessionMutation,
@@ -611,6 +675,7 @@ export const {
   useLazyGetMinigameStateQuery,
   useStartMinigameRoundMutation,
   useSubmitMinigameRoundMutation,
+  useCommitLocalMinigameRoundMutation,
   usePrefetchPatientAudioMutation,
   usePrefetchPatientAudioBatchMutation,
   useGetAttemptsQuery

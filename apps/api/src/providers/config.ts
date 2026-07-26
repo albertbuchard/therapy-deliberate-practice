@@ -21,7 +21,7 @@ export type EffectiveAiConfig = {
 };
 
 export type UserSettingsInput = {
-  ai_mode?: ProviderMode | null;
+  ai_mode?: string | null;
   local_base_url?: string | null;
   local_stt_url?: string | null;
   local_llm_url?: string | null;
@@ -69,7 +69,11 @@ export const resolveEffectiveAiConfig = async ({
   settings,
   decryptOpenAiKey
 }: ResolveConfigInput): Promise<EffectiveAiConfig> => {
-  const mode = (settings.ai_mode ?? env.aiMode) as AiMode;
+  const requestedMode = settings.ai_mode ?? env.aiMode;
+  const mode: AiMode =
+    requestedMode === "local_only" || requestedMode === "openai_only"
+      ? requestedMode
+      : "local_prefer";
   const localBaseSetting = normalizeUrl(settings.local_base_url);
   const localSttUrl = normalizeUrl(settings.local_stt_url);
   const localLlmUrl = normalizeUrl(settings.local_llm_url);

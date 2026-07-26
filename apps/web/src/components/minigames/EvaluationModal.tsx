@@ -53,12 +53,12 @@ export const EvaluationModal = ({
   onNextRound,
   onAddPlayer
 }: EvaluationModalProps) => {
-  if (!open || !evaluation) return null;
-  const criterionMap = new Map(criteria.map((criterion) => [criterion.id, criterion]));
-  const { total, delta, tone } = useEvaluationScore(evaluation.criterion_scores, {
+  const { total, delta, tone } = useEvaluationScore(evaluation?.criterion_scores ?? [], {
     previousScore,
     roundScore
   });
+  if (!open || !evaluation) return null;
+  const criterionMap = new Map(criteria.map((criterion) => [criterion.id, criterion]));
 
   return (
     <div

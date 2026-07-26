@@ -92,12 +92,13 @@ export const MinigameSetupModal = ({ open, mode, onClose, onStart }: MinigameSet
         if (!focusable || focusable.length === 0) return;
         const items = Array.from(focusable);
         const currentIndex = items.indexOf(document.activeElement as HTMLElement);
-        let nextIndex = currentIndex;
-        if (event.shiftKey) {
-          nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
-        } else {
-          nextIndex = currentIndex === items.length - 1 ? 0 : currentIndex + 1;
-        }
+        const nextIndex = event.shiftKey
+          ? currentIndex <= 0
+            ? items.length - 1
+            : currentIndex - 1
+          : currentIndex === items.length - 1
+            ? 0
+            : currentIndex + 1;
         items[nextIndex]?.focus();
         event.preventDefault();
       }

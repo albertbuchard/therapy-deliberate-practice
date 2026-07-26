@@ -8,7 +8,7 @@ from typing import Any
 
 try:  # pragma: no cover - import guard exercised in tests
     from jsonschema import Draft7Validator
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     Draft7Validator = None  # type: ignore
 
 THINKING_PATTERN = re.compile(r"<\s*(thinking|think)\s*>(.*?)<\s*/\s*\1\s*>", re.IGNORECASE | re.DOTALL)
@@ -169,7 +169,7 @@ def validate_against_schema(obj: Any, schema: dict) -> list[str]:
             if isinstance(elem, int):
                 path += f"[{elem}]"
             else:
-                path += f"[\"{elem}\"]"
+                path += f'["{elem}"]'
         errors.append(f"{path}: {error.message}")
         if len(errors) >= 25:
             break

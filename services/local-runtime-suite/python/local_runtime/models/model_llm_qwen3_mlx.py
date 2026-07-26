@@ -4,7 +4,8 @@ import asyncio
 import os
 import threading
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from local_runtime.helpers.responses_helpers import new_response
 from local_runtime.runtime_types import RunContext, RunRequest
@@ -13,8 +14,8 @@ SPEC = {
     "id": "local//llm/qwen3-mlx",
     "kind": "llm",
     "display": {
-        "title": "Qwen3 MLX",
-        "description": "Local Qwen3 inference via MLX on Apple Silicon.",
+        "title": "Qwen3 4B Instruct MLX",
+        "description": "Qwen3 4B Instruct 2507, quantized for fast local MLX inference.",
         "tags": ["qwen", "mlx", "local"],
         "icon": "cpu",
     },
@@ -24,7 +25,7 @@ SPEC = {
         "priority": 120,
         "requires_ram_gb": 8,
         "requires_vram_gb": 0,
-        "disk_gb": 6,
+        "disk_gb": 3,
     },
     "api": {
         "endpoint": "responses",
@@ -39,8 +40,8 @@ SPEC = {
     },
     "backend": {
         "provider": "mlx",
-        "model_ref": "Qwen/Qwen3-4B-MLX-4bit",
-        "revision": None,
+        "model_ref": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+        "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
         "device_hint": "metal",
         "extra": {},
     },
@@ -64,15 +65,18 @@ SPEC = {
     "ui_params": [],
     "deps": {
         "python_extras": ["mlx"],
-        "pip": ["mlx-lm>=0.25.2"],
+        "pip": ["mlx-lm==0.31.3"],
         "system": [],
         "notes": "Requires Apple Silicon with MLX support.",
     },
 }
 
-DEFAULT_MAX_TOKENS = int(os.getenv("LOCAL_RUNTIME_QWEN_MAX_TOKENS", SPEC["limits"]["max_output_tokens_default"]))
+DEFAULT_MAX_TOKENS = int(
+    os.getenv("LOCAL_RUNTIME_QWEN_MAX_TOKENS", SPEC["limits"]["max_output_tokens_default"])
+)
 DEFAULT_TEMPERATURE = float(os.getenv("LOCAL_RUNTIME_QWEN_TEMPERATURE", "0.7"))
-DEFAULT_TOP_P = float(os.getenv("LOCAL_RUNTIME_QWEN_TOP_P", "0.9"))
+DEFAULT_TOP_P = float(os.getenv("LOCAL_RUNTIME_QWEN_TOP_P", "0.8"))
+DEFAULT_TOP_K = int(os.getenv("LOCAL_RUNTIME_QWEN_TOP_K", "20"))
 DEFAULT_REPETITION_PENALTY = float(os.getenv("LOCAL_RUNTIME_QWEN_REPETITION_PENALTY", "1.0"))
 
 
@@ -93,7 +97,9 @@ def _prepare_prompt(payload: dict | None, tokenizer: Any | None = None) -> str:
                 if entry.get("type") == "text" and "text" in entry:
                     fragments.append(str(entry["text"]))
                 elif entry.get("content"):
-                    fragments.extend(str(chunk.get("text", "")) for chunk in entry["content"] if isinstance(chunk, dict))
+                    fragments.extend(
+                        str(chunk.get("text", "")) for chunk in entry["content"] if isinstance(chunk, dict)
+                    )
         if fragments:
             return "\n".join(fragments)
     if isinstance(payload.get("input"), str):
@@ -103,21 +109,51 @@ def _prepare_prompt(payload: dict | None, tokenizer: Any | None = None) -> str:
 
 def _generation_params(payload: dict | None) -> dict[str, Any]:
     payload = payload or {}
-    temperature = payload.get("temperature")
-    top_p = payload.get("top_p")
-    repetition_penalty = payload.get("repetition_penalty")
+
+    def _bounded_float(value: Any, default: float, lower: float, upper: float) -> float:
+        try:
+            parsed = float(default if value is None else value)
+        except (TypeError, ValueError):
+            parsed = default
+        return max(lower, min(parsed, upper))
+
+    try:
+        requested_tokens = int(payload.get("max_output_tokens") or DEFAULT_MAX_TOKENS)
+    except (TypeError, ValueError):
+        requested_tokens = DEFAULT_MAX_TOKENS
+    try:
+        requested_top_k = int(payload.get("top_k") or DEFAULT_TOP_K)
+    except (TypeError, ValueError):
+        requested_top_k = DEFAULT_TOP_K
+
     return {
-        "max_tokens": int(payload.get("max_output_tokens") or DEFAULT_MAX_TOKENS),
-        "temperature": float(temperature if temperature is not None else DEFAULT_TEMPERATURE),
-        "top_p": float(top_p if top_p is not None else DEFAULT_TOP_P),
-        "repetition_penalty": float(repetition_penalty if repetition_penalty is not None else DEFAULT_REPETITION_PENALTY),
+        "max_tokens": max(
+            1,
+            min(
+                requested_tokens,
+                int(SPEC["limits"]["max_output_tokens_default"]) * 4,
+            ),
+        ),
+        "temperature": _bounded_float(payload.get("temperature"), DEFAULT_TEMPERATURE, 0.0, 2.0),
+        "top_p": _bounded_float(payload.get("top_p"), DEFAULT_TOP_P, 0.01, 1.0),
+        "top_k": max(1, min(requested_top_k, 100)),
+        "repetition_penalty": _bounded_float(
+            payload.get("repetition_penalty"),
+            DEFAULT_REPETITION_PENALTY,
+            0.1,
+            2.0,
+        ),
     }
 
 
 def _build_sampling_components(params: dict[str, Any]):
     from mlx_lm.sample_utils import make_logits_processors, make_sampler  # type: ignore
 
-    sampler = make_sampler(temp=params["temperature"], top_p=params["top_p"])
+    sampler = make_sampler(
+        temp=params["temperature"],
+        top_p=params["top_p"],
+        top_k=params["top_k"],
+    )
     logits_processors = make_logits_processors(repetition_penalty=params.get("repetition_penalty"))
     return sampler, logits_processors
 
@@ -134,14 +170,15 @@ async def _generate_text(instance: dict, prompt: str, params: dict[str, Any]) ->
         from mlx_lm import generate  # type: ignore
 
         sampler, logits_processors = _build_sampling_components(params)
-        return generate(
-            instance["model"],
-            instance["tokenizer"],
-            prompt=prompt,
-            max_tokens=params["max_tokens"],
-            sampler=sampler,
-            logits_processors=logits_processors,
-        )
+        with instance["lock"]:
+            return generate(
+                instance["model"],
+                instance["tokenizer"],
+                prompt=prompt,
+                max_tokens=params["max_tokens"],
+                sampler=sampler,
+                logits_processors=logits_processors,
+            )
 
     return await asyncio.to_thread(_invoke)
 
@@ -156,22 +193,23 @@ async def _generate_stream(instance: dict, prompt: str, params: dict[str, Any]) 
         try:
             sampler, logits_processors = _build_sampling_components(params)
             prev_text = ""
-            for response in stream_generate(
-                instance["model"],
-                instance["tokenizer"],
-                prompt=prompt,
-                max_tokens=params["max_tokens"],
-                sampler=sampler,
-                logits_processors=logits_processors,
-            ):
-                text = _extract_response_text(response)
-                delta = text
-                if text.startswith(prev_text):
-                    delta = text[len(prev_text) :]
-                prev_text = text
-                if delta:
-                    loop.call_soon_threadsafe(queue.put_nowait, delta)
-        except Exception as exc:  # pragma: no cover - propagate to async loop
+            with instance["lock"]:
+                for response in stream_generate(
+                    instance["model"],
+                    instance["tokenizer"],
+                    prompt=prompt,
+                    max_tokens=params["max_tokens"],
+                    sampler=sampler,
+                    logits_processors=logits_processors,
+                ):
+                    text = _extract_response_text(response)
+                    delta = text
+                    if text.startswith(prev_text):
+                        delta = text[len(prev_text) :]
+                    prev_text = text
+                    if delta:
+                        loop.call_soon_threadsafe(queue.put_nowait, delta)
+        except Exception as exc:  # noqa: BLE001 - propagate arbitrary backend errors to the async caller
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -193,9 +231,19 @@ def load(ctx: RunContext) -> dict[str, Any]:
     except ImportError as exc:
         raise RuntimeError("mlx-lm is required for Qwen3 MLX. Install with `pip install mlx-lm`.") from exc
     model_ref = os.getenv("LOCAL_RUNTIME_QWEN3_MLX_MODEL", SPEC["backend"]["model_ref"])
-    ctx.logger.info("qwen3_mlx.load", extra={"model_id": SPEC["id"], "model_ref": model_ref})
-    model, tokenizer = mlx_load(model_ref)
-    return {"model": model, "tokenizer": tokenizer, "model_ref": model_ref}
+    revision = os.getenv("LOCAL_RUNTIME_QWEN3_MLX_REVISION") or SPEC["backend"]["revision"]
+    ctx.logger.info(
+        "qwen3_mlx.load",
+        extra={"model_id": SPEC["id"], "model_ref": model_ref, "revision": revision},
+    )
+    model, tokenizer = mlx_load(model_ref, revision=revision)
+    return {
+        "model": model,
+        "tokenizer": tokenizer,
+        "model_ref": model_ref,
+        "revision": revision,
+        "lock": threading.Lock(),
+    }
 
 
 def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
@@ -208,23 +256,28 @@ def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
         warmup_params = {
             "max_tokens": 32,
             "temperature": 0.6,
-            "top_p": 0.9,
+            "top_p": DEFAULT_TOP_P,
+            "top_k": DEFAULT_TOP_K,
             "repetition_penalty": DEFAULT_REPETITION_PENALTY,
         }
         sampler, logits_processors = _build_sampling_components(warmup_params)
-        generate(
-            instance["model"],
-            instance["tokenizer"],
-            prompt=prompt,
-            max_tokens=warmup_params["max_tokens"],
-            sampler=sampler,
-            logits_processors=logits_processors,
-        )
+        with instance["lock"]:
+            generate(
+                instance["model"],
+                instance["tokenizer"],
+                prompt=prompt,
+                max_tokens=warmup_params["max_tokens"],
+                sampler=sampler,
+                logits_processors=logits_processors,
+            )
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         ctx.logger.info("qwen3_mlx.warmup.done", extra={"model_id": SPEC["id"], "duration_ms": duration_ms})
     except Exception as exc:
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        ctx.logger.exception("qwen3_mlx.warmup.error", extra={"model_id": SPEC["id"], "error": str(exc), "duration_ms": duration_ms})
+        ctx.logger.exception(
+            "qwen3_mlx.warmup.error",
+            extra={"model_id": SPEC["id"], "error": str(exc), "duration_ms": duration_ms},
+        )
 
 
 async def run(req: RunRequest, ctx: RunContext):
@@ -239,10 +292,8 @@ async def run(req: RunRequest, ctx: RunContext):
         "model_id": model_id,
         "stream": bool(req.stream),
         "prompt_chars": len(prompt),
-        "prompt_preview": prompt[:120],
     }
     ctx.logger.info("qwen3_mlx.run.start", extra=run_meta)
-    ctx.logger.info("qwen3_mlx.run.input", extra={**run_meta, "prompt": prompt})
     start = time.perf_counter()
 
     if req.stream:
@@ -256,27 +307,39 @@ async def run(req: RunRequest, ctx: RunContext):
                     if not chunk:
                         continue
                     accumulated += chunk
-                    yield {"event": "response.output_text.delta", "data": {"id": response["id"], "delta": chunk}}
+                    yield {
+                        "event": "response.output_text.delta",
+                        "data": {"id": response["id"], "delta": chunk},
+                    }
                 response["output_text"] = accumulated
                 response["output"][0]["content"][0]["text"] = accumulated
-                yield {"event": "response.output_text.done", "data": {"id": response["id"], "text": accumulated}}
+                yield {
+                    "event": "response.output_text.done",
+                    "data": {"id": response["id"], "text": accumulated},
+                }
                 yield {"event": "response.completed", "data": response}
             finally:
-                ctx.logger.info("qwen3_mlx.run.output", extra={**run_meta, "text": accumulated})
                 duration_ms = round((time.perf_counter() - start) * 1000, 2)
                 ctx.logger.info(
                     "qwen3_mlx.run.complete",
-                    extra={**run_meta, "duration_ms": duration_ms, "output_chars": len(accumulated), "output_preview": accumulated[:120]},
+                    extra={
+                        **run_meta,
+                        "duration_ms": duration_ms,
+                        "output_chars": len(accumulated),
+                    },
                 )
 
         return generator()
 
     reply = await _generate_text(instance, prompt, params)
-    ctx.logger.info("qwen3_mlx.run.output", extra={**run_meta, "text": reply})
     payload = new_response(model_id, reply, request_id=ctx.request_id)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     ctx.logger.info(
         "qwen3_mlx.run.complete",
-        extra={**run_meta, "duration_ms": duration_ms, "output_chars": len(reply), "output_preview": reply[:120]},
+        extra={
+            **run_meta,
+            "duration_ms": duration_ms,
+            "output_chars": len(reply),
+        },
     )
     return payload

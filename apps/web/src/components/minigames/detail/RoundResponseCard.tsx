@@ -27,6 +27,9 @@ export const RoundResponseCard = ({ round, player, result }: RoundResponseCardPr
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Score</p>
           <p className="mt-1 text-sm text-white">{formatScore(result?.overall_score)}</p>
+          {result?.score_trust === "local_unverified" && (
+            <p className="mt-1 text-[11px] text-amber-200">Local · unverified</p>
+          )}
         </div>
         <div className="text-right">
           <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Status</p>

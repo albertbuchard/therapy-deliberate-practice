@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import tempfile
+import threading
 import time
-import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
 
 from local_runtime.helpers.multipart_helpers import UploadedFile
 from local_runtime.runtime_types import RunContext, RunRequest
@@ -40,7 +44,7 @@ SPEC = {
     "backend": {
         "provider": "mlx",
         "model_ref": "mlx-community/parakeet-tdt-0.6b-v3",
-        "revision": None,
+        "revision": "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
         "device_hint": "metal",
         "extra": {},
     },
@@ -64,14 +68,82 @@ SPEC = {
     "ui_params": [],
     "deps": {
         "python_extras": ["mlx", "stt"],
-        "pip": ["parakeet-mlx>=0.2.0"],
+        "pip": ["parakeet-mlx==0.5.2", "imageio-ffmpeg==0.6.0"],
         "system": [],
-        "notes": "Requires parakeet-mlx for transcription.",
+        "notes": "Includes a platform-specific FFmpeg binary for reliable audio decoding.",
     },
 }
 
 DEFAULT_CHUNK_SECONDS = float(os.getenv("LOCAL_RUNTIME_STT_CHUNK_SEC", "120"))
 DEFAULT_OVERLAP_SECONDS = float(os.getenv("LOCAL_RUNTIME_STT_OVERLAP_SEC", "15"))
+_FFMPEG_PATH_LOCK = threading.Lock()
+
+
+def _resolve_model_path(model_name: str, revision: str, cache_dir: str) -> str:
+    local_path = Path(model_name).expanduser()
+    if local_path.exists():
+        return str(local_path.resolve())
+
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(
+        repo_id=model_name,
+        revision=revision,
+        cache_dir=cache_dir,
+        allow_patterns=["config.json", "model.safetensors"],
+    )
+
+
+def _ensure_ffmpeg_available(cache_dir: str) -> str:
+    existing = shutil.which("ffmpeg")
+    if existing:
+        return existing
+
+    try:
+        import imageio_ffmpeg  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("Parakeet MLX requires the packaged imageio-ffmpeg audio decoder.") from exc
+
+    bundled_executable = Path(imageio_ffmpeg.get_ffmpeg_exe()).resolve()
+    if not bundled_executable.is_file():
+        raise RuntimeError("The packaged FFmpeg audio decoder could not be located.")
+
+    with _FFMPEG_PATH_LOCK:
+        existing = shutil.which("ffmpeg")
+        if existing:
+            return existing
+
+        shim_dir = Path(cache_dir) / "parakeet-ffmpeg"
+        shim_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shim_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        shim_path = shim_dir / shim_name
+        source_size = bundled_executable.stat().st_size
+        shim_is_current = (
+            shim_path.is_file() and not shim_path.is_symlink() and shim_path.stat().st_size == source_size
+        )
+        if not shim_is_current:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{shim_name}-",
+                dir=shim_dir,
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                with bundled_executable.open("rb") as source:
+                    shutil.copyfileobj(source, temporary)
+            try:
+                temporary_path.chmod(0o700)
+                os.replace(temporary_path, shim_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+
+        path_entries = os.environ.get("PATH", "").split(os.pathsep)
+        if str(shim_dir) not in path_entries:
+            os.environ["PATH"] = os.pathsep.join([str(shim_dir), *path_entries])
+        resolved = shutil.which("ffmpeg")
+        if not resolved:
+            raise RuntimeError("The packaged FFmpeg audio decoder could not be activated.")
+        return resolved
 
 
 def load(ctx: RunContext) -> dict[str, Any]:
@@ -82,15 +154,27 @@ def load(ctx: RunContext) -> dict[str, Any]:
             "parakeet-mlx is required for MLX transcription. Install with `pip install parakeet-mlx`."
         ) from exc
     model_name = os.getenv("LOCAL_RUNTIME_STT_MODEL", SPEC["backend"]["model_ref"])
-    ctx.logger.info("parakeet_mlx.load", extra={"model_id": SPEC["id"], "model_ref": model_name})
-    model = from_pretrained(model_name)
+    revision = os.getenv("LOCAL_RUNTIME_STT_REVISION") or SPEC["backend"]["revision"]
+    ffmpeg_path = _ensure_ffmpeg_available(ctx.cache_dir)
+    model_path = _resolve_model_path(model_name, revision, ctx.cache_dir)
+    ctx.logger.info(
+        "parakeet_mlx.load",
+        extra={"model_id": SPEC["id"], "model_ref": model_name, "revision": revision},
+    )
+    model = from_pretrained(model_path)
 
     if os.getenv("LOCAL_RUNTIME_STT_LOCAL_ATTENTION", "0").lower() in {"1", "true", "yes"}:
         encoder = getattr(model, "encoder", None)
         if encoder and hasattr(encoder, "set_attention_model"):
             encoder.set_attention_model("rel_pos_local_attn", (256, 256))
 
-    return {"model": model}
+    return {
+        "model": model,
+        "model_ref": model_name,
+        "revision": revision,
+        "lock": threading.Lock(),
+        "ffmpeg_path": ffmpeg_path,
+    }
 
 
 def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
@@ -110,17 +194,24 @@ def _extract_upload(req: RunRequest) -> UploadedFile:
         content_type = getattr(file_entry, "content_type", "application/octet-stream")
         data = getattr(file_entry, "data", None)
     if not isinstance(data, (bytes, bytearray)):
-        raise ValueError("Invalid audio payload.")
+        raise TypeError("Invalid audio payload.")
     return UploadedFile(filename=filename, content_type=content_type, data=bytes(data))
 
 
 def _write_temp_audio(upload: UploadedFile, cache_dir: str) -> str:
-    suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
-    filename = f"stt_{uuid.uuid4().hex}{suffix}"
-    path = os.path.join(cache_dir, filename)
-    with open(path, "wb") as handle:
+    os.makedirs(cache_dir, exist_ok=True)
+    suffix = os.path.splitext(upload.filename or "")[1].lower()
+    if not suffix or len(suffix) > 8 or not suffix[1:].isalnum():
+        suffix = ".audio"
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        suffix=suffix,
+        prefix="parakeet-mlx-",
+        dir=cache_dir,
+        delete=False,
+    ) as handle:
         handle.write(upload.data)
-    return path
+        return handle.name
 
 
 def _build_decoding_config():
@@ -138,7 +229,9 @@ def _build_decoding_config():
     )
 
 
-def _build_transcribe_kwargs(chunk_duration: float, overlap_duration: float, decoding_config) -> dict[str, Any]:
+def _build_transcribe_kwargs(
+    chunk_duration: float, overlap_duration: float, decoding_config
+) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "chunk_duration": chunk_duration,
         "overlap_duration": overlap_duration,
@@ -148,13 +241,37 @@ def _build_transcribe_kwargs(chunk_duration: float, overlap_duration: float, dec
     return kwargs
 
 
-async def _run_transcribe(model, audio_path: str, chunk_duration: float, overlap_duration: float, decoding_config) -> Any:
+async def _run_transcribe(
+    instance: dict[str, Any],
+    audio_path: str,
+    chunk_duration: float,
+    overlap_duration: float,
+    decoding_config,
+) -> Any:
     kwargs = _build_transcribe_kwargs(chunk_duration, overlap_duration, decoding_config)
 
     def _invoke():
-        return model.transcribe(audio_path, **kwargs)
+        with instance["lock"]:
+            return instance["model"].transcribe(audio_path, **kwargs)
 
     return await asyncio.to_thread(_invoke)
+
+
+def _normalise_transcribe_window(
+    chunk_duration: Any,
+    overlap_duration: Any,
+) -> tuple[float, float]:
+    try:
+        chunk = float(chunk_duration)
+    except (TypeError, ValueError):
+        chunk = DEFAULT_CHUNK_SECONDS
+    try:
+        overlap = float(overlap_duration)
+    except (TypeError, ValueError):
+        overlap = DEFAULT_OVERLAP_SECONDS
+    chunk = max(10.0, min(chunk, 600.0))
+    overlap = max(0.0, min(overlap, min(60.0, chunk / 2)))
+    return chunk, overlap
 
 
 def _parse_result(result) -> tuple[str, list[dict]]:
@@ -163,7 +280,7 @@ def _parse_result(result) -> tuple[str, list[dict]]:
     if hasattr(result, "text"):
         text = str(getattr(result, "text", "") or "")
     if hasattr(result, "sentences"):
-        for idx, sentence in enumerate(getattr(result, "sentences") or []):
+        for idx, sentence in enumerate(result.sentences or []):
             segment_text = str(getattr(sentence, "text", "") or "").strip()
             start = float(getattr(sentence, "start", 0.0))
             end = float(getattr(sentence, "end", start))
@@ -175,17 +292,19 @@ def _parse_result(result) -> tuple[str, list[dict]]:
 
 
 async def run(req: RunRequest, ctx: RunContext):
-    upload = _extract_upload(req)
-    audio_path = _write_temp_audio(upload, ctx.cache_dir)
     model_id = req.model or SPEC["id"]
     instance = await ctx.registry.ensure_instance(model_id, ctx)
     if not instance:
         raise RuntimeError("Parakeet MLX model is not initialized.")
+    upload = _extract_upload(req)
+    audio_path = _write_temp_audio(upload, ctx.cache_dir)
 
     form_data = req.form or {}
     decoding_config = _build_decoding_config()
-    chunk_duration = float(form_data.get("chunk_duration", DEFAULT_CHUNK_SECONDS))
-    overlap_duration = float(form_data.get("overlap_duration", DEFAULT_OVERLAP_SECONDS))
+    chunk_duration, overlap_duration = _normalise_transcribe_window(
+        form_data.get("chunk_duration", DEFAULT_CHUNK_SECONDS),
+        form_data.get("overlap_duration", DEFAULT_OVERLAP_SECONDS),
+    )
     run_meta = {
         "model_id": model_id,
         "stream": bool(req.stream),
@@ -200,7 +319,7 @@ async def run(req: RunRequest, ctx: RunContext):
     start = time.perf_counter()
     try:
         result = await _run_transcribe(
-            instance["model"],
+            instance,
             audio_path,
             chunk_duration=chunk_duration,
             overlap_duration=overlap_duration,
@@ -211,18 +330,29 @@ async def run(req: RunRequest, ctx: RunContext):
         try:
             os.remove(audio_path)
         except OSError:
-            ctx.logger.warning("Failed to clean up temp audio file: %s", audio_path)
+            ctx.logger.warning(
+                "parakeet_mlx.temp_cleanup_failed",
+                extra={"model_id": model_id},
+            )
 
     ctx.logger.info(
         "parakeet_mlx.run.output",
-        extra={**run_meta, "text": transcript, "segments": len(payload_segments), "text_chars": len(transcript)},
+        extra={
+            **run_meta,
+            "segments": len(payload_segments),
+            "text_chars": len(transcript),
+        },
     )
 
     if req.stream:
+
         async def generator() -> AsyncIterator[dict]:
             for segment in payload_segments:
                 if segment["text"]:
-                    yield {"event": "transcript.text.delta", "data": {"text": segment["text"], "start": segment["start"], "end": segment["end"]}}
+                    yield {
+                        "event": "transcript.text.delta",
+                        "data": {"text": segment["text"], "start": segment["start"], "end": segment["end"]},
+                    }
             yield {"event": "transcript.text.done", "data": {"text": transcript}}
 
         async def tracked() -> AsyncIterator[dict]:
@@ -241,6 +371,11 @@ async def run(req: RunRequest, ctx: RunContext):
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     ctx.logger.info(
         "parakeet_mlx.run.complete",
-        extra={**run_meta, "duration_ms": duration_ms, "segments": len(payload_segments), "text_chars": len(transcript)},
+        extra={
+            **run_meta,
+            "duration_ms": duration_ms,
+            "segments": len(payload_segments),
+            "text_chars": len(transcript),
+        },
     )
     return {"text": transcript, "segments": payload_segments}

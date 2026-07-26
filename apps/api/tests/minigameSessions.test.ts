@@ -40,6 +40,12 @@ const setupDb = () => {
       team_id TEXT,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE minigame_teams (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE minigame_rounds (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,

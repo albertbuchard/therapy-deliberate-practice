@@ -3,25 +3,6 @@ import type { LogFn } from "../utils/logger";
 import { OPENAI_STT_MODEL } from "./models";
 import { BaseSttProvider } from "./base";
 import { transcribeWithOpenAI } from "./openaiStt";
-import { localSuiteHealthCheck, localSuiteTranscribe } from "./localSuite";
-
-class LocalWhisperSttProviderImpl extends BaseSttProvider {
-  constructor(private baseUrl: string, logger?: LogFn) {
-    super("local", undefined, logger);
-  }
-
-  healthCheck() {
-    return localSuiteHealthCheck(this.baseUrl);
-  }
-
-  protected async doTranscribe(audio: string) {
-    const result = await localSuiteTranscribe({
-      baseUrl: this.baseUrl,
-      audioBase64: audio
-    });
-    return { value: result.transcript };
-  }
-}
 
 const resolveResponseFormat = (opts?: SttTranscribeOptions, model?: string) => {
   const resolvedModel = model ?? OPENAI_STT_MODEL;
@@ -40,7 +21,7 @@ class OpenAISttProviderImpl extends BaseSttProvider {
 
   protected getProviderOverride(opts?: SttTranscribeOptions) {
     const model = opts?.model ?? OPENAI_STT_MODEL;
-    return { kind: "openai", model };
+    return { kind: "openai" as const, model };
   }
 
   protected getStartFields(opts?: SttTranscribeOptions) {
@@ -61,9 +42,6 @@ class OpenAISttProviderImpl extends BaseSttProvider {
     return { value: result.transcript, requestId: result.requestId };
   }
 }
-
-export const LocalWhisperSttProvider = (baseUrl: string, logger?: LogFn): SttProvider =>
-  new LocalWhisperSttProviderImpl(baseUrl, logger);
 
 export const OpenAISttProvider = (
   { apiKey }: { apiKey: string },

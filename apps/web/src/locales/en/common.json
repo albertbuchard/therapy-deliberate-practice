@@ -131,6 +131,7 @@
     "scoreLabel": "Score {{score}}",
     "statusPassed": "Passed",
     "statusNeedsWork": "Needs work",
+    "localUnverified": "Local · unverified",
     "exampleDifficulty": "Example difficulty {{difficulty}}",
     "viewTask": "View task",
     "viewSession": "View session"
@@ -246,6 +247,17 @@
       "overrideSttPlaceholder": "http://127.0.0.1:8484",
       "overrideSttHelper": "Optional: route STT requests to a separate URL.",
       "overrideActive": "Overrides saved — open advanced settings to edit."
+    },
+    "localPairing": {
+      "label": "Local pairing key",
+      "helper": "Copy this key from the Local Runtime desktop app. The browser uses it only for direct requests to your own computer.",
+      "placeholder": "Paste the pairing key",
+      "reveal": "Reveal",
+      "hide": "Hide",
+      "security": "The key is stored only in this browser for this local URL. It is never sent to the hosted Therapy API.",
+      "missingUrl": "Add a valid local runtime URL before saving.",
+      "saved": "Pairing key saved in this browser.",
+      "pairAgain": "The pairing key is missing or no longer valid. Copy the current key from the desktop app and pair this browser again."
     },
     "storeAudio": {
       "label": "Store audio recordings",
@@ -548,91 +560,87 @@
     "localSuite": {
       "kicker": "Local runtime",
       "title": "Local Suite",
-      "subtitle": "Run local models with a cross-platform desktop launcher that exposes an OpenAI-compatible gateway.",
+      "subtitle": "Pair this browser with the desktop gateway to run supported speech and language models on your computer.",
       "overview": {
         "title": "How Local Suite works",
-        "subtitle": "A desktop app runs the gateway on your machine and keeps the model layer observable, reliable, and offline-first.",
+        "subtitle": "The desktop app starts a protected loopback gateway, loads compatible models, and shows clear recovery information.",
         "cards": [
           {
             "title": "Cross-platform launcher",
-            "description": "Install the Local Suite app on macOS, Windows, or Linux to start, stop, and monitor local inference.",
+            "description": "Use the desktop app to start, stop, and monitor the gateway on a supported computer.",
             "bullets": [
               "One-click start with health checks.",
               "Built-in doctor diagnostics.",
-              "No cloud calls required."
+              "Local prompts and recordings stay on your computer."
             ]
           },
           {
             "title": "OpenAI-compatible gateway",
-            "description": "A single Base URL exposes OpenAI-style endpoints for scoring and speech so the app can plug in seamlessly.",
+            "description": "One local URL provides the language and speech-recognition endpoints used by the browser.",
             "bullets": [
               "POST /v1/responses for LLM scoring.",
-              "POST /v1/audio/speech for TTS.",
-              "POST /v1/audio/transcriptions for STT."
+              "POST /v1/audio/transcriptions for speech recognition.",
+              "A pairing key protects model and diagnostic routes."
             ]
           },
           {
             "title": "Curated model catalog",
-            "description": "Browse pre-validated model options with hardware requirements, endpoint support, and tuning hints.",
+            "description": "Browse executable model options with their real platform and hardware requirements.",
             "bullets": [
               "Filter by endpoint, provider, and hardware.",
-              "Copy model IDs into Settings.",
-              "Track RAM/VRAM needs up front."
+              "The desktop app hides incompatible models.",
+              "See memory and disk guidance before downloading."
             ]
           }
         ]
       },
       "paths": {
-        "title": "Choose your setup path",
-        "subtitle": "Most teams use Local Suite. Advanced users can bring their own models as long as endpoints match.",
+        "title": "Connect in four steps",
+        "subtitle": "The local URL and pairing key must come from the same running desktop gateway.",
         "recommended": {
           "kicker": "Recommended",
           "title": "Use Local Suite (recommended)",
-          "body": "Download the desktop app, select a model set, and paste the Base URL into Settings.",
+          "body": "Use a verified desktop release, prepare compatible models, and pair this browser with the running gateway.",
           "stepsTitle": "Local Suite steps",
           "steps": [
-            "Install the Local Suite app and sign in if prompted.",
-            "Pick a model bundle that matches your hardware, then start the gateway.",
-            "Copy the Base URL from the app into Settings → AI Providers."
+            "Install a verified desktop release for your operating system when one is available.",
+            "Start the gateway, choose compatible speech and language models, and wait for both to load.",
+            "Copy both the local URL and pairing key from the desktop app.",
+            "Paste them into Therapy Settings and test the connection."
           ],
           "cta": "Go to downloads"
         },
         "advanced": {
-          "kicker": "Advanced",
-          "title": "Advanced: use your own models",
-          "body": "Already running your own stack? As long as you expose the same endpoints, Therapy Studio can connect. If you want a lighter setup, run scripts/start_local_ai.py instead of the full Local Suite.",
-          "stepsTitle": "Custom server steps",
+          "kicker": "Privacy",
+          "title": "Know what stays local",
+          "body": "Local inference keeps model inputs and outputs on this computer. Account, task, and permitted result metadata still use the hosted application.",
+          "stepsTitle": "Data boundary",
           "steps": [
-            "Run scripts/start_local_ai.py (or your own server) to expose the OpenAI-style endpoints below.",
-            "Verify your server implements /v1/responses, /v1/audio/speech, and /v1/audio/transcriptions.",
-            "Paste your Base URL into Settings → AI Providers and select the model IDs it advertises."
+            "The pairing key stays in this browser for the exact local gateway origin.",
+            "Local results are labeled unverified and excluded from public rankings.",
+            "Patient text-to-speech remains a separate hosted feature when Real Time Mode uses it."
           ],
-          "callout": {
-            "kicker": "Script alternative",
-            "body": "The bundled script starts a lightweight FastAPI gateway that mirrors the Local Suite API surface."
-          },
-          "codeTitle": "Example gateway skeleton",
-          "code": "from fastapi import FastAPI, UploadFile, File\nfrom fastapi.responses import JSONResponse, Response\n\napp = FastAPI()\n\n@app.post(\"/v1/responses\")\nasync def responses(payload: dict):\n    return {\"id\": \"resp_001\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"...\"}]}]}\n\n@app.post(\"/v1/audio/speech\")\nasync def audio_speech(payload: dict):\n    return Response(content=b\"\", media_type=\"audio/mpeg\")\n\n@app.post(\"/v1/audio/transcriptions\")\nasync def audio_transcriptions(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}\n\n@app.post(\"/v1/audio/translations\")\nasync def audio_translations(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}",
-          "cta": "See endpoint details"
+          "cta": "Read the privacy boundary"
         }
       },
       "downloads": {
         "title": "Desktop downloads",
-        "subtitle": "macOS installs are delivered via the Mac App Store. Windows and Linux builds come from GitHub Releases.",
+        "subtitle": "Only verified GitHub Release assets appear here. Build artifacts are not public releases.",
         "labels": {
           "windows": "Windows",
-          "macos": "Mac App Store",
+          "macosAppleSilicon": "macOS — Apple silicon",
+          "macosIntel": "macOS — Intel",
           "linux": "Linux"
         },
-        "appStoreUrl": "https://apps.apple.com",
-        "appStoreAction": "View in App Store",
         "ready": "Download",
-        "pending": "Coming soon",
-        "error": "Unable to load GitHub releases. Showing cached links."
+        "pending": "No verified release",
+        "empty": "No verified desktop release has been published yet.",
+        "error": "Unable to check verified GitHub Releases. Try again later."
       },
       "catalog": {
         "title": "Available models",
-        "subtitle": "Search across all local and proxy-backed models validated by the gateway.",
+        "subtitle": "Search the executable local models included in the generated gateway catalog.",
+        "platformNote": "Intel macOS currently supports Faster Whisper speech recognition only. The interface will not offer an incompatible language model.",
         "searchPlaceholder": "Search by name, endpoint, or provider",
         "copy": "Copy ID",
         "empty": "No models match this search yet."
@@ -657,7 +665,7 @@
     "side": {
       "title": "Quick checklist",
       "subtitle": "What powers the experience",
-      "description": "Evaluations run on an LLM. Patient audio uses TTS. You can keep everything local, or let OpenAI handle both securely.",
+      "description": "Evaluations use a language model, recorded answers use speech recognition, and optional patient audio uses hosted text-to-speech. Choose the provider for each supported path.",
       "tipTitle": "Tip",
       "tipBody": "You can switch later in Settings. If you skip now, practice will run in offline mode until a provider is configured."
     },
@@ -666,7 +674,7 @@
       "description": "Pick the setup that fits your workflow today.",
       "local": {
         "title": "Use my own models (local)",
-        "body": "Run the LLM + TTS servers on your machine."
+        "body": "Run language evaluation and speech recognition through the protected desktop gateway."
       },
       "openai": {
         "title": "Use OpenAI",
@@ -687,20 +695,20 @@
         },
         {
           "title": "What you need to run evaluations",
-          "description": "Evaluations require an LLM and TTS provider. You can keep everything local or connect OpenAI.",
+          "description": "Evaluations require a language model. Recorded answers also need speech recognition; patient audio in Real Time Mode uses a separate hosted text-to-speech path.",
           "bullets": [
-            "Local mode: run the bundled Python launcher.",
+            "Local mode: start the desktop gateway and pair this browser.",
             "OpenAI mode: add your API key once.",
-            "You can mix and match later."
+            "You can change provider mode later."
           ]
         },
         {
           "title": "Choose how you'd like to proceed",
           "description": "Pick a path on the right. You'll get guided steps and links.",
           "bullets": [
-            "Local setup = no external API calls.",
+            "Local model prompts and recordings stay on this computer.",
             "OpenAI setup = fastest to start.",
-            "Skipping keeps practice in offline mode."
+            "Account and task data still use the hosted application."
           ]
         }
       ]
@@ -719,22 +727,21 @@
         },
         {
           "title": "Connect Therapy Studio to the gateway",
-          "description": "Start Local Suite, copy the Base URL, and paste it into Settings to enable local scoring and speech.",
+          "description": "Start Local Suite, copy its local URL and pairing key, then paste both into Settings.",
           "bullets": [
             "Check the gateway health and model list in the desktop app.",
-            "Keep the Base URL consistent for both LLM and audio endpoints.",
+            "Load one compatible language model and one speech model.",
             "Switch AI mode to Local only or Local preferred."
           ]
         },
         {
-          "title": "Advanced: run your own models",
-          "description": "If you already host models, expose OpenAI-compatible endpoints so the app can connect.",
+          "title": "Test and recover the connection",
+          "description": "Settings verifies gateway identity and pairing before practice sends local content.",
           "bullets": [
-            "Required endpoints: /v1/responses, /v1/audio/speech, /v1/audio/transcriptions.",
-            "Optional: /v1/audio/translations for multilingual audio.",
-            "Return standard OpenAI response shapes."
-          ],
-          "code": "from fastapi import FastAPI, UploadFile, File\nfrom fastapi.responses import Response\n\napp = FastAPI()\n\n@app.post(\"/v1/responses\")\nasync def responses(payload: dict):\n    return {\"id\": \"resp_001\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"...\"}]}]}\n\n@app.post(\"/v1/audio/speech\")\nasync def audio_speech(payload: dict):\n    return Response(content=b\"\", media_type=\"audio/mpeg\")\n\n@app.post(\"/v1/audio/transcriptions\")\nasync def audio_transcriptions(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}"
+            "If the key changes, copy the new value from the desktop app and pair again.",
+            "The pairing key never needs to be sent to the hosted API.",
+            "Local evaluations are labeled unverified and excluded from public rankings."
+          ]
         }
       ]
     },
@@ -805,6 +812,11 @@
     "snagTitle": "We hit a snag",
     "coachFeedback": "Coach feedback",
     "scoringTitle": "Scoring matrix",
+    "localScoreBadge": "Local · unverified",
+    "localScoreNotice": "This score was produced with your local runtime. It stays in your personal history and is excluded from public rankings.",
+    "localRuntime": {
+      "pairAgain": "Your local pairing key is missing or no longer valid. Open Settings and pair this browser with the desktop runtime again."
+    },
     "criterionLabel": "Criterion {{id}}",
     "scoreLabel": "Score {{score}} / 4",
     "patientReady": "Ready",

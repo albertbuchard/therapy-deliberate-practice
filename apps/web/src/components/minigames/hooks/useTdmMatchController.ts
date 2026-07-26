@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MinigameRound } from "../../../store/api";
-import { useStartMinigameRoundMutation, useSubmitMinigameRoundMutation } from "../../../store/api";
+import { useStartMinigameRoundMutation } from "../../../store/api";
 import { useAudioRecorder } from "./useAudioRecorder";
 import { useResponseTiming, MIN_RESPONSE_TIMER_NEGATIVE } from "./useResponseTiming";
 import type { PatientAudioBankHandle } from "../../../patientAudio/usePatientAudioBank";
 import { applyTimingPenalty, createTimeoutEvaluation, normalizeSubmitResponse } from "./turnSubmit";
+import { useMinigameAttemptRunner } from "./useMinigameAttemptRunner";
 
 export type MatchState =
   | "idle"
@@ -24,7 +25,6 @@ type TdmMatchControllerOptions = {
   round?: MinigameRound;
   audioElement?: HTMLAudioElement | null;
   enabled?: boolean;
-  aiMode?: string;
   responseTimerEnabled: boolean;
   responseTimerSeconds?: number;
   maxResponseEnabled: boolean;
@@ -38,6 +38,7 @@ type TdmMatchControllerOptions = {
     attemptId?: string;
     timingPenalty?: number;
     playerId: string;
+    scoreTrust?: "cloud_trusted" | "local_unverified";
   }) => void;
 };
 
@@ -46,7 +47,6 @@ export const useTdmMatchController = ({
   round,
   audioElement,
   enabled = true,
-  aiMode,
   responseTimerEnabled,
   responseTimerSeconds,
   maxResponseEnabled,
@@ -56,14 +56,15 @@ export const useTdmMatchController = ({
   onResult
 }: TdmMatchControllerOptions) => {
   const [startRound] = useStartMinigameRoundMutation();
-  const [submitRound] = useSubmitMinigameRoundMutation();
+  const runAttempt = useMinigameAttemptRunner();
   const { recordingState, startRecording, stopRecording, cancelRecording } = useAudioRecorder();
   const [patientEndedAt, setPatientEndedAt] = useState<number | null>(null);
   const playTokenRef = useRef(0);
   const { getEntry, ensureReady, play, stop, bank } = patientAudio;
-  const entry = round
-    ? getEntry(round.task_id, round.example_id)
-    : undefined;
+  const roundTaskId = round?.task_id;
+  const roundExampleId = round?.example_id;
+  const entry =
+    roundTaskId && roundExampleId ? getEntry(roundTaskId, roundExampleId) : undefined;
   const patientCacheKey =
     (entry as unknown as { cacheKey?: string | null })?.cacheKey ?? undefined;
   const audioStatus = entry?.status ?? "idle";
@@ -114,11 +115,11 @@ export const useTdmMatchController = ({
   }, [audioElement, resetTiming, round?.id, round?.player_a_id, stop]);
 
   useEffect(() => {
-    if (!enabled || !round) return;
+    if (!enabled || !roundTaskId || !roundExampleId) return;
     const controller = new AbortController();
-    void ensureReady(round.task_id, round.example_id, { signal: controller.signal });
+    void ensureReady(roundTaskId, roundExampleId, { signal: controller.signal });
     return () => controller.abort();
-  }, [enabled, ensureReady, round?.example_id, round?.task_id]);
+  }, [enabled, ensureReady, roundExampleId, roundTaskId]);
 
   useEffect(() => {
     if (audioStatus === "playing") {
@@ -268,55 +269,34 @@ export const useTdmMatchController = ({
     setState("transcribing");
     recordResponseStop();
     const timingSnapshot = getTimingSnapshot();
-    try {
-      const transcriptionResponse = await submitRound({
-        sessionId,
-        roundId: round.id,
-        player_id: activePlayerId,
-        audio_base64: recorded.base64,
-        audio_mime: recorded.mimeType,
-        mode: aiMode,
-        practice_mode: "real_time",
-        skip_scoring: true,
-        turn_context: {
-          patient_cache_key: patientCacheKey,
-          patient_statement_id: round.example_id,
-          timing: {
-            response_delay_ms: timingSnapshot.responseDelayMs,
-            response_duration_ms: timingSnapshot.responseDurationMs,
-            response_timer_seconds: responseTimerEnabled ? responseTimerSeconds : undefined,
-            max_response_duration_seconds: maxResponseEnabled ? maxResponseSeconds : undefined
-          }
-        }
-      }).unwrap();
-      const parsedTranscript = normalizeSubmitResponse(transcriptionResponse);
-      onTranscript?.({
-        transcript: parsedTranscript.transcript,
-        attemptId: parsedTranscript.attemptId
-      });
-      if (!parsedTranscript.transcript || !parsedTranscript.attemptId) {
-        throw new Error("Transcription missing.");
+    const turnContext = {
+      patient_cache_key: patientCacheKey,
+      patient_statement_id: round.example_id,
+      timing: {
+        response_delay_ms: timingSnapshot.responseDelayMs,
+        response_duration_ms: timingSnapshot.responseDurationMs,
+        response_timer_seconds: responseTimerEnabled ? responseTimerSeconds : undefined,
+        max_response_duration_seconds: maxResponseEnabled ? maxResponseSeconds : undefined
       }
-      setState("evaluating");
-      const response = await submitRound({
+    };
+    try {
+      const response = await runAttempt({
         sessionId,
         roundId: round.id,
-        player_id: activePlayerId,
-        transcript_text: parsedTranscript.transcript,
-        attempt_id: parsedTranscript.attemptId,
-        mode: aiMode,
-        practice_mode: "real_time",
-        turn_context: {
-          patient_cache_key: patientCacheKey,
-          patient_statement_id: round.example_id,
-          timing: {
-            response_delay_ms: timingSnapshot.responseDelayMs,
-            response_duration_ms: timingSnapshot.responseDurationMs,
-            response_timer_seconds: responseTimerEnabled ? responseTimerSeconds : undefined,
-            max_response_duration_seconds: maxResponseEnabled ? maxResponseSeconds : undefined
-          }
-        }
-      }).unwrap();
+        taskId: round.task_id,
+        exampleId: round.example_id,
+        playerId: activePlayerId,
+        recorded,
+        turnContext,
+        onTranscript: (transcriptionResponse) => {
+          const parsedTranscript = normalizeSubmitResponse(transcriptionResponse);
+          onTranscript?.({
+            transcript: parsedTranscript.transcript,
+            attemptId: parsedTranscript.attemptId
+          });
+        },
+        onEvaluating: () => setState("evaluating")
+      });
       const parsed = normalizeSubmitResponse(response);
       const timingPenalty = parsed.timingPenalty ?? timingSnapshot.penalty;
       const adjustedScore = applyTimingPenalty({ score: parsed.score, timingPenalty });
@@ -326,7 +306,8 @@ export const useTdmMatchController = ({
         score: response.adjusted_score ?? adjustedScore ?? parsed.score,
         attemptId: parsed.attemptId,
         timingPenalty,
-        playerId: activePlayerId
+        playerId: activePlayerId,
+        scoreTrust: response.score_trust
       });
       resetTiming();
       if (round.player_b_id && activePlayerId === round.player_a_id) {
@@ -338,12 +319,11 @@ export const useTdmMatchController = ({
         setState("complete");
       }
     } catch (error) {
-      setSubmitError("Submission failed. Please try again.");
+      setSubmitError(error instanceof Error ? error.message : "Submission failed. Please try again.");
       setState("patient_ready");
     }
   }, [
     activePlayerId,
-    aiMode,
     audioElement,
     enabled,
     maxResponseEnabled,
@@ -354,9 +334,9 @@ export const useTdmMatchController = ({
     responseTimerEnabled,
     responseTimerSeconds,
     round,
+    runAttempt,
     sessionId,
     stopRecording,
-    submitRound,
     getTimingSnapshot,
     recordResponseStop,
     resetTiming,

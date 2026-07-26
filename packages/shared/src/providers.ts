@@ -19,7 +19,7 @@ export type SttTranscribeOptions = {
   model?: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" | "gpt-4o-transcribe-diarize" | "whisper-1";
   responseFormat?: "json" | "text" | "diarized_json";
   prompt?: string;
-  chunkingStrategy?: "auto" | string;
+  chunkingStrategy?: "auto";
   knownSpeakerNames?: string[];
   knownSpeakerReferences?: string[];
 };

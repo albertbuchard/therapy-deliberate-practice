@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import { attemptJsonRepair } from "../utils/jsonRepair";
 import { safeTruncate } from "../utils/logger";
 import { getOpenAIClient } from "./openaiClient";
@@ -74,24 +73,11 @@ const extractOutputText = (payload: unknown): string | null => {
   return null;
 };
 
-const buildStrictJsonSchema = (schema: z.ZodSchema<unknown>, schemaName: string) => {
-  const full = zodToJsonSchema(schema, {
-    name: schemaName,
-    $refStrategy: "none",
-    target: "jsonSchema7"
+const buildStrictJsonSchema = (schema: z.ZodSchema<unknown>, _schemaName: string) => {
+  const root = z.toJSONSchema(schema, {
+    target: "draft-07",
+    reused: "inline"
   }) as Record<string, unknown>;
-  const defs =
-    (full.definitions ?? full.$defs ?? {}) as Record<string, Record<string, unknown>>;
-  let root: Record<string, unknown> = full;
-
-  if (defs?.[schemaName]) {
-    root = defs[schemaName];
-  } else if (typeof full.$ref === "string") {
-    const match = full.$ref.match(/^#\/(definitions|\$defs)\/(.+)$/);
-    if (match && defs?.[match[2]]) {
-      root = defs[match[2]];
-    }
-  }
 
   if (root && typeof root === "object" && root.type == null && root.properties) {
     root.type = "object";

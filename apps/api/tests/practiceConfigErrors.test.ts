@@ -42,6 +42,8 @@ const setupDb = () => {
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT 'Player',
+      bio TEXT,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE user_settings (
@@ -56,6 +58,23 @@ const setupDb = () => {
       openai_key_kid TEXT,
       updated_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL
+    );
+    CREATE TABLE attempts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      session_id TEXT,
+      session_item_id TEXT,
+      task_id TEXT NOT NULL,
+      example_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      audio_ref TEXT,
+      transcript TEXT NOT NULL,
+      evaluation TEXT NOT NULL,
+      overall_pass INTEGER NOT NULL,
+      overall_score REAL NOT NULL,
+      score_trust TEXT NOT NULL DEFAULT 'local_unverified',
+      model_info TEXT
     );
   `);
   const db = drizzle(sqlite);
@@ -88,7 +107,13 @@ test("practice run returns 400 when openai_only has no key", async () => {
   const app = createApiApp({ env, db, tts: { storage } });
   const userId = "user-1";
 
-  await db.insert(users).values({ id: userId, email: "user@example.com", created_at: Date.now() });
+  await db.insert(users).values({
+    id: userId,
+    email: "user@example.com",
+    display_name: "User",
+    bio: null,
+    created_at: Date.now()
+  });
   await db.insert(userSettings).values({
     user_id: userId,
     ai_mode: "openai_only",

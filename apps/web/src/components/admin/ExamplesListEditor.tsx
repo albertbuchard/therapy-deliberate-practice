@@ -120,7 +120,7 @@ export const ExamplesListEditor = ({ examples, errors, onChange }: ExamplesListE
         </div>
       </div>
       <div className="space-y-4">
-        {filtered.map((example, filteredIndex) => {
+        {filtered.map((example) => {
           const index = examples.findIndex((item) => item.id === example.id);
           const exampleErrors = errors[index] || {};
           const isCollapsed = collapsed[example.id];

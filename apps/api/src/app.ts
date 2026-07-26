@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import {
@@ -19,7 +20,20 @@ import {
   userTaskProgress,
   users
 } from "./db/schema";
-import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, or } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  or
+} from "drizzle-orm";
 import {
   deliberatePracticeTaskV2Schema,
   evaluationResultSchema,
@@ -48,11 +62,11 @@ import {
   logServerError,
   makeRequestId,
   safeError,
-  safeTruncate
+  safeTruncate,
+  type LogFn
 } from "./utils/logger";
 import { selectTtsProvider } from "./providers";
 import {
-  assertLocalBaseUrl,
   assertOpenAiKey,
   buildEnvAiConfig,
   resolveEffectiveAiConfig,
@@ -60,7 +74,6 @@ import {
   DEFAULT_LOCAL_BASE_URL
 } from "./providers/config";
 import { isProviderConfigError } from "./providers/providerErrors";
-import { localSuiteHealthCheck } from "./providers/localSuite";
 import { getOrCreateTtsAsset, type TtsStorage } from "./services/ttsService";
 import { fetchLeaderboardEntries, fetchUserProfileStats } from "./services/leaderboardService";
 import {
@@ -74,6 +87,11 @@ import {
   generateMinigameRounds,
   redrawMinigameRound
 } from "./services/minigameRoundsService";
+import {
+  LocalEvaluationValidationError,
+  validateAndDeriveLocalEvaluation
+} from "./services/localPracticeService";
+import type { ApiHonoEnv } from "./httpTypes";
 
 export type ApiDependencies = {
   env: RuntimeEnv;
@@ -155,7 +173,7 @@ const inferLanguage = (text: string) => {
 const remapUniqueUuids = <T extends { id: string }>(
   items: T[],
   label: string,
-  log?: ReturnType<typeof logger.child>
+  log?: ReturnType<typeof createLogger>
 ) => {
   const used = new Set<string>();
   const idMap = new Map<string, string[]>();
@@ -319,8 +337,83 @@ const normalizeTask = (row: typeof tasks.$inferSelect): Task => ({
   parent_task_id: row.parent_task_id ?? null
 });
 
+const normalizeCriterionRow = (
+  row: Pick<typeof taskCriteria.$inferSelect, "id" | "label" | "description" | "rubric">
+): TaskCriterion =>
+  taskCriterionSchema.parse({
+    id: row.id,
+    label: row.label,
+    description: row.description,
+    rubric: row.rubric ?? undefined
+  });
+
+const normalizeExampleRow = (row: typeof taskExamples.$inferSelect): TaskExample =>
+  taskExampleSchema.parse({
+    ...row,
+    meta: row.meta ?? null
+  });
+
+const toLogFn = (logger: ReturnType<typeof createLogger>): LogFn =>
+  (level, event, fields) => logger[level](event, fields);
+
+const toContentfulStatus = (status: number) => status as ContentfulStatusCode;
+
+const normalizeLoopbackOrigin = (value: string): string => {
+  const parsed = new URL(value.trim());
+  const isLoopback =
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "[::1]";
+  if (
+    parsed.protocol !== "http:" ||
+    !isLoopback ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    (parsed.pathname !== "/" && parsed.pathname !== "")
+  ) {
+    throw new Error("Local runtime URLs must be plain loopback HTTP origins.");
+  }
+  return parsed.origin;
+};
+
+type MinigameAttemptScope = {
+  kind: "minigame";
+  session_id: string;
+  round_id: string;
+  player_id: string;
+};
+
+type AttemptModelInfo = {
+  provider?: {
+    stt?: { kind?: "local" | "openai"; model?: string } | null;
+    llm?: { kind?: "local" | "openai"; model?: string } | null;
+  };
+  timing_ms?: { stt?: number; llm?: number; total?: number };
+  practice?: {
+    mode?: string;
+    turn_context?: unknown;
+    scope?: MinigameAttemptScope;
+  };
+  score_trust?: "cloud_trusted" | "local_unverified";
+  state?: string;
+};
+
+const readAttemptModelInfo = (value: unknown): AttemptModelInfo =>
+  value && typeof value === "object" ? (value as AttemptModelInfo) : {};
+
+const sameMinigameScope = (
+  left: MinigameAttemptScope | undefined,
+  right: MinigameAttemptScope
+) =>
+  left?.kind === "minigame" &&
+  left.session_id === right.session_id &&
+  left.round_id === right.round_id &&
+  left.player_id === right.player_id;
+
 export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
-  const app = new Hono();
+  const app = new Hono<ApiHonoEnv>();
   const adminAuth = createAdminAuth(env);
   const userAuth = createUserAuth(env, db);
   const logger = createLogger({ service: "api" });
@@ -395,6 +488,40 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     return initial;
   };
 
+  const buildStoredAttemptPayload = (
+    attempt: typeof attempts.$inferSelect,
+    requestId: string,
+    additions: Record<string, unknown> = {}
+  ) => {
+    const evaluation = evaluationResultSchema.safeParse(attempt.evaluation);
+    if (!attempt.completed_at || !evaluation.success) return null;
+    const modelInfo = readAttemptModelInfo(attempt.model_info);
+    const stt = modelInfo.provider?.stt;
+    const llm = modelInfo.provider?.llm;
+    return {
+      requestId,
+      attemptId: attempt.id,
+      score_trust: attempt.score_trust,
+      transcript: {
+        text: attempt.transcript,
+        provider: {
+          kind: stt?.kind ?? (attempt.score_trust === "local_unverified" ? "local" : "openai"),
+          model: stt?.model ?? "unknown"
+        },
+        duration_ms: modelInfo.timing_ms?.stt ?? 0
+      },
+      scoring: {
+        evaluation: evaluation.data,
+        provider: {
+          kind: llm?.kind ?? (attempt.score_trust === "local_unverified" ? "local" : "openai"),
+          model: llm?.model ?? "unknown"
+        },
+        duration_ms: modelInfo.timing_ms?.llm ?? 0
+      },
+      ...additions
+    };
+  };
+
   app.use(async (c, next) => {
     const requestId = c.req.header("x-request-id") ?? makeRequestId();
     c.set("requestId", requestId);
@@ -432,55 +559,6 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
   });
 
   app.get("/api/v1/health", (c) => c.json({ status: "ok" }));
-
-  app.get("/api/v1/health/local-ai", userAuth, async (c) => {
-    const log = logger.child({ requestId: c.get("requestId"), endpoint: "health_local_ai" });
-    const user = c.get("user");
-    const settings = await getUserSettingsRow(user.id);
-    if (!settings) {
-      return c.json({ error: "Settings not found." }, 404);
-    }
-
-    let config: EffectiveAiConfig;
-    try {
-      config = await resolveEffectiveAiConfig({
-        env,
-        settings,
-        decryptOpenAiKey
-      });
-    } catch (error) {
-      if (isProviderConfigError(error)) {
-        log.warn("Local AI config error", { code: error.code });
-        return c.json({ error: error.message, code: error.code }, error.status);
-      }
-      logServerError("health.local_ai.config_error", error as Error, {
-        requestId: c.get("requestId"),
-        userId: user.id
-      });
-      return c.json({ error: "Local AI configuration failed." }, 500);
-    }
-
-    const sttUrl = config.local.sttUrl ?? config.local.baseUrl;
-    const llmUrl = config.local.llmUrl ?? config.local.baseUrl;
-    if (!sttUrl || !llmUrl || !config.local.baseUrl) {
-      return c.json(
-        { error: "Local AI mode requires a local base URL.", code: "LOCAL_BASE_URL_MISSING" },
-        400
-      );
-    }
-
-    const [sttHealthy, llmHealthy, ttsHealthy] = await Promise.all([
-      localSuiteHealthCheck(sttUrl),
-      localSuiteHealthCheck(llmUrl),
-      localSuiteHealthCheck(config.local.baseUrl)
-    ]);
-    log.info("Local AI health check completed", {
-      stt: sttHealthy,
-      llm: llmHealthy,
-      tts: ttsHealthy
-    });
-    return c.json({ stt: sttHealthy, llm: llmHealthy, tts: ttsHealthy });
-  });
 
   app.get("/api/v1/tasks", async (c) => {
     const log = logger.child({ requestId: c.get("requestId"), endpoint: "tasks_list" });
@@ -555,7 +633,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       filters.push(lte(tasks.base_difficulty, query.difficulty_max));
     }
 
-    let resultsQuery = db.select().from(tasks);
+    let resultsQuery = db.select().from(tasks).$dynamic();
     if (filters.length) {
       resultsQuery = resultsQuery.where(and(...filters));
     }
@@ -835,10 +913,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         .select()
         .from(taskExamples)
         .where(eq(taskExamples.task_id, task.id));
-      const normalized = examples.map((example) => ({
-        ...example,
-        meta: example.meta ?? null
-      }));
+      const normalized = examples.map(normalizeExampleRow);
       const attemptedIds = attemptMap.get(task.id) ?? new Set<string>();
       const fresh = normalized.filter((example) => !attemptedIds.has(example.id));
       const pool = fresh.length >= data.item_count ? fresh : normalized;
@@ -876,10 +951,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
           .select()
           .from(taskExamples)
           .where(eq(taskExamples.task_id, task.id));
-        const normalized = examples.map((example) => ({
-          ...example,
-          meta: example.meta ?? null
-        }));
+        const normalized = examples.map(normalizeExampleRow);
         const attemptedIds = attemptMap.get(task.id) ?? new Set<string>();
         const fresh = normalized.filter((example) => !attemptedIds.has(example.id));
         const pool = fresh.length ? fresh : normalized;
@@ -1067,10 +1139,17 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         transcript: attempts.transcript,
         evaluation: attempts.evaluation,
         overall_score: attempts.overall_score,
-        overall_pass: attempts.overall_pass
+        overall_pass: attempts.overall_pass,
+        score_trust: attempts.score_trust
       })
       .from(attempts)
-      .where(and(eq(attempts.user_id, user.id), eq(attempts.session_id, sessionId)))
+      .where(
+        and(
+          eq(attempts.user_id, user.id),
+          eq(attempts.session_id, sessionId),
+          isNotNull(attempts.completed_at)
+        )
+      )
       .orderBy(desc(attempts.completed_at));
 
     const latestByItem = new Map<
@@ -1083,6 +1162,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         evaluation: unknown | null;
         overall_score: number;
         overall_pass: boolean;
+        score_trust: string;
       }
     >();
 
@@ -1093,7 +1173,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
           attempt.evaluation && evaluationResultSchema.safeParse(attempt.evaluation).success
             ? attempt.evaluation
             : null;
-        latestByItem.set(attempt.session_item_id, { ...attempt, evaluation });
+        latestByItem.set(attempt.session_item_id, {
+          ...attempt,
+          session_item_id: attempt.session_item_id,
+          evaluation
+        });
       }
     }
 
@@ -1162,13 +1246,21 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
   const ttsConfigReady = Boolean(env.r2Bucket);
   const selectPatientTtsProvider = async (
-    config: EffectiveAiConfig,
     logEvent: (level: "debug" | "info" | "warn" | "error", event: string, fields?: Record<string, unknown>) => void
   ) => {
     const ttsConfig: EffectiveAiConfig = {
-      ...config,
       mode: "openai_only",
-      local: { ...config.local, baseUrl: null }
+      openai: { apiKey: env.openaiApiKey || null },
+      local: {
+        baseUrl: null,
+        sttUrl: null,
+        llmUrl: null,
+        apiPrefix: "/v1"
+      },
+      resolvedFrom: {
+        openaiKey: env.openaiApiKey ? "env" : "none",
+        localBaseUrl: "none"
+      }
     };
     logEvent("info", "tts.select.start", { mode: ttsConfig.mode });
     const ttsSelection = await selectTtsProvider(
@@ -1194,7 +1286,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     return ttsSelection.provider;
   };
 
-  const handleTtsRequest = async (c: Context) => {
+  const handleTtsRequest = async (
+    c: Context<ApiHonoEnv, "/api/v1/tts/:cacheKey">
+  ) => {
     const requestId = c.get("requestId");
     const cacheKey = c.req.param("cacheKey");
     const logEvent = (level: "debug" | "info" | "warn" | "error", event: string, fields = {}) =>
@@ -1231,7 +1325,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       if (c.req.method === "HEAD") {
         return c.body(null, 200, headers);
       }
-      return c.body(object.body, 200, headers);
+      const body = object.body.buffer.slice(
+        object.body.byteOffset,
+        object.body.byteOffset + object.body.byteLength
+      ) as ArrayBuffer;
+      return c.body(body, 200, headers);
     } catch (error) {
       logEvent("error", "tts.fetch.error", { error: safeError(error) });
       return c.json({ error: "TTS asset unavailable." }, 404);
@@ -1258,25 +1356,6 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     if (!settings) {
       logEvent("warn", "tts.prefetch.settings_missing");
       return c.json({ error: "Settings not found." }, 404);
-    }
-
-    let config: EffectiveAiConfig;
-    try {
-      config = await resolveEffectiveAiConfig({
-        env,
-        settings,
-        decryptOpenAiKey
-      });
-    } catch (error) {
-      if (isProviderConfigError(error)) {
-        logEvent("warn", "tts.prefetch.config_error", { code: error.code });
-        return c.json({ error: error.message, code: error.code }, error.status);
-      }
-      logServerError("tts.prefetch.config_error", error as Error, {
-        requestId,
-        userId: user?.id ?? null
-      });
-      return c.json({ error: "TTS configuration failed." }, 500);
     }
 
     const schema = z.object({
@@ -1324,7 +1403,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
     let ttsProvider: Awaited<ReturnType<typeof selectPatientTtsProvider>>;
     try {
-      ttsProvider = await selectPatientTtsProvider(config, logEvent);
+      ttsProvider = await selectPatientTtsProvider(logEvent);
     } catch (error) {
       logEvent("error", "tts.select.error", { error: safeError(error) });
       return c.json(
@@ -1420,27 +1499,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json({ error: "Patient text too long for TTS." }, 400);
     }
 
-    let config: EffectiveAiConfig;
-    try {
-      config = await resolveEffectiveAiConfig({
-        env,
-        settings,
-        decryptOpenAiKey
-      });
-    } catch (error) {
-      if (isProviderConfigError(error)) {
-        logEvent("warn", "tts.prefetch_batch.config_error", { code: error.code });
-        return c.json({ error: error.message, code: error.code }, error.status);
-      }
-      logServerError("tts.prefetch_batch.config_error", error as Error, {
-        requestId,
-        userId: user?.id ?? null
-      });
-      return c.json({ error: "TTS configuration failed." }, 500);
-    }
     let ttsProvider: Awaited<ReturnType<typeof selectPatientTtsProvider>>;
     try {
-      ttsProvider = await selectPatientTtsProvider(config, logEvent);
+      ttsProvider = await selectPatientTtsProvider(logEvent);
     } catch (error) {
       logEvent("error", "tts.select.error", { error: safeError(error) });
       return c.json(
@@ -1542,7 +1603,10 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     }
     let llmProvider;
     try {
-      const selection = await selectLlmProvider(buildEnvAiConfig(env, "openai_only"), log);
+      const selection = await selectLlmProvider(
+        buildEnvAiConfig(env, "openai_only"),
+        toLogFn(log)
+      );
       llmProvider = selection.provider;
     } catch (error) {
       log.error("LLM provider selection failed", { error: safeError(error) });
@@ -1869,6 +1933,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       .select()
       .from(taskExamples)
       .where(eq(taskExamples.task_id, id));
+    const interactionRows = await db
+      .select()
+      .from(taskInteractionExamples)
+      .where(eq(taskInteractionExamples.task_id, id))
+      .orderBy(taskInteractionExamples.difficulty);
 
     const now = Date.now();
     const newTaskId = nanoid();
@@ -1955,6 +2024,11 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       .select()
       .from(taskExamples)
       .where(eq(taskExamples.task_id, id));
+    const interactionRows = await db
+      .select()
+      .from(taskInteractionExamples)
+      .where(eq(taskInteractionExamples.task_id, id))
+      .orderBy(taskInteractionExamples.difficulty);
 
     if (!env.openaiApiKey) {
       logServerError("admin.translate_task.openai_key_missing", new Error("OpenAI key missing"), {
@@ -1965,7 +2039,10 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
 
     let llmProvider;
     try {
-      const selection = await selectLlmProvider(buildEnvAiConfig(env, "openai_only"), log);
+      const selection = await selectLlmProvider(
+        buildEnvAiConfig(env, "openai_only"),
+        toLogFn(log)
+      );
       llmProvider = selection.provider;
     } catch (error) {
       log.error("LLM provider selection failed", { error: safeError(error) });
@@ -1986,20 +2063,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
             tags: taskRow.tags as Task["tags"],
             language: taskRow.language
           },
-          criteria: criteriaRows.map((criterion) => ({
-            id: criterion.id,
-            label: criterion.label,
-            description: criterion.description,
-            rubric: criterion.rubric ?? undefined
-          })),
-          examples: exampleRows.map((example) => ({
-            id: example.id,
-            difficulty: example.difficulty,
-            severity_label: example.severity_label ?? null,
-            patient_text: example.patient_text,
-            language: example.language ?? taskRow.language,
-            meta: example.meta ?? null
-          })),
+          criteria: criteriaRows.map(normalizeCriterionRow),
+          examples: exampleRows.map(normalizeExampleRow),
           interaction_examples: interactionRows.map((example) => ({
             id: example.id,
             difficulty: example.difficulty,
@@ -2279,18 +2344,40 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       return c.json({ error: "Invalid settings payload", details: parsed.error.flatten() }, 400);
     }
     const data = parsed.data;
-    const normalizedBase = normalizeUrl(data.localAiBaseUrl);
-    const normalizedStt = normalizeUrl(data.localSttUrl);
-    const normalizedLlm = normalizeUrl(data.localLlmUrl);
-    const hasOverrides = Boolean(normalizedStt || normalizedLlm);
-    const resolvedBase = normalizedBase ?? DEFAULT_LOCAL_BASE_URL;
+    const submittedUrls = [
+      normalizeUrl(data.localAiBaseUrl),
+      normalizeUrl(data.localSttUrl),
+      normalizeUrl(data.localLlmUrl)
+    ].filter((value): value is string => Boolean(value));
+    let localOrigins: string[];
+    try {
+      localOrigins = [...new Set(submittedUrls.map(normalizeLoopbackOrigin))];
+    } catch {
+      return c.json(
+        {
+          error:
+            "The local runtime URL must be a plain http://localhost, http://127.0.0.1, or http://[::1] origin."
+        },
+        400
+      );
+    }
+    if (localOrigins.length > 1) {
+      return c.json(
+        {
+          error:
+            "Speech recognition and evaluation must use the same local gateway origin."
+        },
+        400
+      );
+    }
+    const resolvedBase = localOrigins[0] ?? DEFAULT_LOCAL_BASE_URL;
     await db
       .update(userSettings)
       .set({
         ai_mode: data.aiMode,
-        local_base_url: hasOverrides ? null : resolvedBase,
-        local_stt_url: hasOverrides ? normalizedStt : null,
-        local_llm_url: hasOverrides ? normalizedLlm : null,
+        local_base_url: resolvedBase,
+        local_stt_url: null,
+        local_llm_url: null,
         store_audio: data.storeAudio,
         updated_at: Date.now()
       })
@@ -2413,7 +2500,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const user = c.get("user");
     const log = logger.child({ requestId: c.get("requestId"), endpoint: "attempts_list", userId: user.id });
     const { task_id } = c.req.query();
-    const filters = [eq(attempts.user_id, user.id)];
+    const filters = [eq(attempts.user_id, user.id), isNotNull(attempts.completed_at)];
     if (task_id) {
       filters.push(eq(attempts.task_id, task_id));
     }
@@ -2423,6 +2510,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         completed_at: attempts.completed_at,
         overall_score: attempts.overall_score,
         overall_pass: attempts.overall_pass,
+        score_trust: attempts.score_trust,
         session_id: attempts.session_id,
         task_id: attempts.task_id,
         task_title: tasks.title,
@@ -2444,6 +2532,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         session_id: attempt.session_id,
         overall_score: attempt.overall_score,
         overall_pass: attempt.overall_pass,
+        score_trust: attempt.score_trust,
         completed_at: new Date(attempt.completed_at ?? Date.now()).toISOString()
       }))
     );
@@ -2454,13 +2543,15 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     debugEnabled,
     logEvent,
     requestId,
-    user
+    user,
+    minigameScope
   }: {
     body: unknown;
     debugEnabled: boolean;
     logEvent: (level: "debug" | "info" | "warn" | "error", event: string, fields?: Record<string, unknown>) => void;
     requestId: string;
     user: { id: string };
+    minigameScope?: MinigameAttemptScope;
   }): Promise<{
     status: number;
     payload: Record<string, unknown>;
@@ -2545,11 +2636,114 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       };
     }
 
+    let taskId = input.task_id ?? null;
+    let exampleId = input.example_id ?? null;
+    let sessionId: string | null = null;
+    let sessionItemId: string | null = null;
+
+    if (input.session_item_id) {
+      const [itemRow] = await db
+        .select({
+          id: practiceSessionItems.id,
+          session_id: practiceSessionItems.session_id,
+          task_id: practiceSessionItems.task_id,
+          example_id: practiceSessionItems.example_id,
+          owner_id: practiceSessions.user_id
+        })
+        .from(practiceSessionItems)
+        .innerJoin(practiceSessions, eq(practiceSessionItems.session_id, practiceSessions.id))
+        .where(eq(practiceSessionItems.id, input.session_item_id))
+        .limit(1);
+      if (!itemRow || itemRow.owner_id !== user.id) {
+        return {
+          status: 404,
+          payload: { requestId, errors: [{ stage: "input", message: "Session item not found." }] }
+        };
+      }
+      sessionItemId = itemRow.id;
+      sessionId = itemRow.session_id;
+      taskId = itemRow.task_id;
+      exampleId = itemRow.example_id;
+    }
+
+    if (!taskId || !exampleId) {
+      return {
+        status: 400,
+        payload: { requestId, errors: [{ stage: "input", message: "Task or example missing." }] }
+      };
+    }
+
+    const [existingAttempt] = await db
+      .select()
+      .from(attempts)
+      .where(
+        and(
+          eq(attempts.id, input.attempt_id ?? "__missing__"),
+          eq(attempts.user_id, user.id)
+        )
+      )
+      .limit(1);
+    if (
+      existingAttempt &&
+      (existingAttempt.task_id !== taskId ||
+        existingAttempt.example_id !== exampleId ||
+        existingAttempt.session_item_id !== sessionItemId)
+    ) {
+      return {
+        status: 409,
+        payload: {
+          requestId,
+          errors: [{ stage: "input", message: "Attempt context does not match this practice item." }]
+        }
+      };
+    }
+    const existingModelInfo = readAttemptModelInfo(existingAttempt?.model_info);
+    if (
+      minigameScope &&
+      existingAttempt &&
+      !sameMinigameScope(existingModelInfo.practice?.scope, minigameScope)
+    ) {
+      return {
+        status: 409,
+        payload: {
+          requestId,
+          errors: [
+            {
+              stage: "input",
+              message: "Attempt is not bound to this minigame round and player."
+            }
+          ]
+        }
+      };
+    }
+    if (existingAttempt?.completed_at) {
+      const storedPayload = buildStoredAttemptPayload(existingAttempt, requestId);
+      if (!storedPayload) {
+        return {
+          status: 409,
+          payload: {
+            requestId,
+            errors: [{ stage: "db", message: "Completed attempt data is invalid." }]
+          }
+        };
+      }
+      return {
+        status: 200,
+        payload: storedPayload,
+        attemptId: existingAttempt.id,
+        overallScore: existingAttempt.overall_score,
+        overallPass: existingAttempt.overall_pass
+      };
+    }
+
     let config: EffectiveAiConfig;
     try {
       config = await resolveEffectiveAiConfig({
         env,
-        settings,
+        settings: {
+          ...settings,
+          ai_mode: input.mode ?? settings.ai_mode
+        },
         decryptOpenAiKey
       });
     } catch (error) {
@@ -2569,10 +2763,23 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         payload: { requestId, errors: [{ stage: "input", message: "AI configuration failed." }] }
       };
     }
-
+    if (config.mode !== "openai_only") {
+      return {
+        status: 409,
+        payload: {
+          requestId,
+          errors: [
+            {
+              stage: "input",
+              message:
+                "Local practice runs directly between your browser and the desktop runtime. Reconnect it in Settings and try again."
+            }
+          ]
+        }
+      };
+    }
     try {
       assertOpenAiKey(config);
-      assertLocalBaseUrl(config);
     } catch (error) {
       if (isProviderConfigError(error)) {
         logEvent("warn", "auth.context.error", { reason: error.code, mode: settings.ai_mode });
@@ -2584,48 +2791,18 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
           }
         };
       }
-      logServerError("practice.config.error", error as Error, { requestId, userId: user.id });
-      return {
-        status: 500,
-        payload: { requestId, errors: [{ stage: "input", message: "AI configuration failed." }] }
-      };
+      throw error;
     }
-
     logEvent("info", "auth.context.ok", {
       mode: config.mode,
       store_audio: settings.store_audio ?? false,
       has_openai_key: Boolean(config.openai.apiKey),
-      local_base_configured: Boolean(config.local.baseUrl),
       resolved_from: config.resolvedFrom
     });
-
-    let taskId = input.task_id ?? null;
-    let exampleId = input.example_id ?? null;
-    let sessionId: string | null = null;
-    let sessionItemId: string | null = null;
-
-    if (input.session_item_id) {
-      const [itemRow] = await db
-        .select()
-        .from(practiceSessionItems)
-        .where(eq(practiceSessionItems.id, input.session_item_id))
-        .limit(1);
-      if (!itemRow) {
-        return {
-          status: 404,
-          payload: { requestId, errors: [{ stage: "input", message: "Session item not found." }] }
-        };
-      }
-      sessionItemId = itemRow.id;
-      sessionId = itemRow.session_id;
-      taskId = itemRow.task_id;
-      exampleId = itemRow.example_id;
-    }
-
-    if (!taskId || !exampleId) {
+    if (input.attempt_id && !existingAttempt) {
       return {
-        status: 400,
-        payload: { requestId, errors: [{ stage: "input", message: "Task or example missing." }] }
+        status: 404,
+        payload: { requestId, errors: [{ stage: "input", message: "Attempt not found." }] }
       };
     }
 
@@ -2644,7 +2821,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const [exampleRow] = await db
       .select()
       .from(taskExamples)
-      .where(eq(taskExamples.id, exampleId))
+      .where(and(eq(taskExamples.id, exampleId), eq(taskExamples.task_id, taskId)))
       .limit(1);
     if (!exampleRow) {
       return {
@@ -2652,46 +2829,9 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         payload: { requestId, errors: [{ stage: "input", message: "Example not found." }] }
       };
     }
-
     const task = normalizeTask(taskRow);
-    const criteria: TaskCriterion[] = criteriaRows.map((criterion) => ({
-      id: criterion.id,
-      label: criterion.label,
-      description: criterion.description,
-      rubric: criterion.rubric ?? undefined
-    }));
-    const example: TaskExample = {
-      id: exampleRow.id,
-      task_id: exampleRow.task_id,
-      difficulty: exampleRow.difficulty,
-      severity_label: exampleRow.severity_label ?? null,
-      patient_text: exampleRow.patient_text,
-      meta: exampleRow.meta ?? null
-    };
-
-    const [existingAttempt] = await db
-      .select({
-        id: attempts.id,
-        completed_at: attempts.completed_at,
-        evaluation: attempts.evaluation,
-        overall_score: attempts.overall_score,
-        overall_pass: attempts.overall_pass,
-        model_info: attempts.model_info
-      })
-      .from(attempts)
-      .where(eq(attempts.id, input.attempt_id ?? "__missing__"))
-      .limit(1);
-    const existingModelInfo =
-      existingAttempt?.model_info && typeof existingAttempt.model_info === "object"
-        ? (existingAttempt.model_info as {
-            provider?: {
-              stt?: { kind?: "local" | "openai"; model?: string };
-              llm?: { kind?: "local" | "openai"; model?: string } | null;
-            };
-            timing_ms?: { stt?: number; llm?: number; total?: number };
-            practice?: { mode?: string; turn_context?: unknown };
-          })
-        : undefined;
+    const criteria: TaskCriterion[] = criteriaRows.map(normalizeCriterionRow);
+    const example = normalizeExampleRow(exampleRow);
 
     let sttProvider: SttProvider | null = null;
     let transcript: { text: string };
@@ -2699,7 +2839,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     let sttMeta: { kind: "local" | "openai"; model: string };
     if (usesProvidedTranscript) {
       transcript = { text: transcriptOverride };
-      sttMeta = existingModelInfo?.provider?.stt?.kind
+      sttMeta = existingModelInfo.provider?.stt?.kind
         ? {
             kind: existingModelInfo.provider.stt.kind,
             model: existingModelInfo.provider.stt.model ?? "unknown"
@@ -2830,7 +2970,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       if (!parsed.success) {
         logEvent("warn", "llm.evaluate.invalid", {
           attemptId,
-          issues: parsed.error.errors.map((issue) => issue.message)
+          issues: parsed.error.issues.map((issue) => issue.message)
         });
         errors.push({
           stage: "scoring",
@@ -2844,29 +2984,39 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     let nextDifficulty: number | undefined;
     let overallScore = scoringResult?.overall.score ?? 0;
     let overallPass = scoringResult?.overall.pass ?? false;
+    const scoreTrust =
+      scoringResult && llmProvider
+        ? llmProvider.kind === "openai"
+          ? "cloud_trusted"
+          : "local_unverified"
+        : (existingAttempt?.score_trust ?? "cloud_trusted");
     if (transcript) {
       logEvent("info", "db.attempt.insert.start", { attemptId });
       try {
-        const sttTiming = usesProvidedTranscript ? existingModelInfo?.timing_ms?.stt : sttDuration;
-        const llmTiming = llmDuration ?? existingModelInfo?.timing_ms?.llm;
+        const sttTiming = usesProvidedTranscript ? existingModelInfo.timing_ms?.stt : sttDuration;
+        const llmTiming = llmDuration ?? existingModelInfo.timing_ms?.llm;
         const modelInfo = {
           provider: {
             stt: sttMeta,
             llm: llmProvider
               ? { kind: llmProvider.kind, model: llmProvider.model ?? "unknown" }
-              : existingModelInfo?.provider?.llm ?? null
+              : existingModelInfo.provider?.llm ?? null
           },
           timing_ms: {
             stt: sttTiming,
             llm: llmTiming,
             total: (sttTiming ?? 0) + (llmTiming ?? 0)
           },
-          practice: input.practice_mode
-            ? {
-                mode: input.practice_mode,
-                turn_context: input.turn_context ?? null
-              }
-            : existingModelInfo?.practice
+          score_trust: scoreTrust,
+          practice:
+            input.practice_mode || minigameScope || existingModelInfo.practice
+              ? {
+                  mode: input.practice_mode ?? existingModelInfo.practice?.mode,
+                  turn_context:
+                    input.turn_context ?? existingModelInfo.practice?.turn_context ?? null,
+                  scope: minigameScope ?? existingModelInfo.practice?.scope
+                }
+              : undefined
         };
         const transcriptText = transcript.text ?? "";
 
@@ -2886,13 +3036,15 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
             evaluation: existingAttempt?.evaluation ?? {},
             overall_pass: existingAttempt?.overall_pass ?? false,
             overall_score: existingAttempt?.overall_score ?? 0,
+            score_trust: scoreTrust,
             model_info: modelInfo
           })
           .onConflictDoUpdate({
             target: attempts.id,
             set: {
               transcript: transcriptText,
-              model_info: modelInfo
+              model_info: modelInfo,
+              score_trust: scoreTrust
             }
           });
 
@@ -2906,7 +3058,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
               evaluation: scoringResult,
               overall_pass: overallPass,
               overall_score: overallScore,
-              model_info: modelInfo
+              model_info: modelInfo,
+              score_trust: scoreTrust
             })
             .where(and(eq(attempts.id, attemptId), isNull(attempts.completed_at)));
           const completionChanges =
@@ -2965,6 +3118,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const response = {
       requestId,
       attemptId,
+      score_trust: scoreTrust,
       next_recommended_difficulty: nextDifficulty,
       transcript: transcript
         ? {
@@ -3050,7 +3204,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     const schema = z.object({
       game_type: z.enum(["ffa", "tdm"]),
       visibility_mode: z.enum(["normal", "hard", "extreme"]),
-      task_selection: z.record(z.unknown()),
+      task_selection: z.record(z.string(), z.unknown()),
       settings: z
         .object({
           rounds_per_player: z.number().optional(),
@@ -3143,7 +3297,8 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
         overall_pass: minigameRoundResults.overall_pass,
         created_at: minigameRoundResults.created_at,
         transcript: attempts.transcript,
-        evaluation: attempts.evaluation
+        evaluation: attempts.evaluation,
+        score_trust: attempts.score_trust
       })
       .from(minigameRoundResults)
       .leftJoin(attempts, eq(minigameRoundResults.attempt_id, attempts.id))
@@ -3523,6 +3678,22 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
     if (!round) {
       return c.json({ error: "Round not found." }, 404);
     }
+    const [player] = await db
+      .select({ id: minigamePlayers.id })
+      .from(minigamePlayers)
+      .where(
+        and(
+          eq(minigamePlayers.id, parsed.data.player_id),
+          eq(minigamePlayers.session_id, sessionId)
+        )
+      )
+      .limit(1);
+    if (
+      !player ||
+      (round.player_a_id !== player.id && round.player_b_id !== player.id)
+    ) {
+      return c.json({ error: "Player is not assigned to this round." }, 409);
+    }
 
     const runResult = await runPracticeAttempt({
       body: {
@@ -3540,29 +3711,95 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       debugEnabled: env.environment === "development",
       logEvent,
       requestId,
-      user
+      user,
+      minigameScope: {
+        kind: "minigame",
+        session_id: sessionId,
+        round_id: roundId,
+        player_id: parsed.data.player_id
+      }
     });
 
     if (runResult.status !== 200 || !runResult.attemptId) {
-      return c.json(runResult.payload, runResult.status);
+      return c.json(runResult.payload, toContentfulStatus(runResult.status));
     }
 
     if (parsed.data.skip_scoring) {
-      return c.json(runResult.payload, runResult.status);
+      return c.json(runResult.payload, toContentfulStatus(runResult.status));
+    }
+
+    const [existingRoundResult] = await db
+      .select({
+        attempt_id: minigameRoundResults.attempt_id,
+        overall_score: minigameRoundResults.overall_score,
+        round_id: minigameRoundResults.round_id,
+        player_id: minigameRoundResults.player_id
+      })
+      .from(minigameRoundResults)
+      .where(
+        or(
+          and(
+            eq(minigameRoundResults.round_id, roundId),
+            eq(minigameRoundResults.player_id, parsed.data.player_id)
+          ),
+          eq(minigameRoundResults.attempt_id, runResult.attemptId)
+        )
+      )
+      .limit(1);
+    if (existingRoundResult) {
+      if (
+        existingRoundResult.attempt_id !== runResult.attemptId ||
+        existingRoundResult.round_id !== roundId ||
+        existingRoundResult.player_id !== parsed.data.player_id
+      ) {
+        return c.json({ error: "This player or attempt was already submitted." }, 409);
+      }
+      return c.json({
+        ...runResult.payload,
+        adjusted_score: existingRoundResult.overall_score
+      });
     }
 
     const timingPenalty = calculateTimingPenalty(parsed.data.turn_context?.timing);
-    const adjustedScore = Math.max(0, (runResult.overallScore ?? 0) - timingPenalty);
+    const requestedAdjustedScore = Math.max(
+      0,
+      (runResult.overallScore ?? 0) - timingPenalty
+    );
 
-    await db.insert(minigameRoundResults).values({
-      id: generateUuid(),
-      round_id: roundId,
-      player_id: parsed.data.player_id,
-      attempt_id: runResult.attemptId,
-      overall_score: adjustedScore,
-      overall_pass: runResult.overallPass ?? false,
-      created_at: Date.now()
-    });
+    await db
+      .insert(minigameRoundResults)
+      .values({
+        id: generateUuid(),
+        round_id: roundId,
+        player_id: parsed.data.player_id,
+        attempt_id: runResult.attemptId,
+        overall_score: requestedAdjustedScore,
+        overall_pass: runResult.overallPass ?? false,
+        created_at: Date.now()
+      })
+      .onConflictDoNothing();
+    const [storedRoundResult] = await db
+      .select()
+      .from(minigameRoundResults)
+      .where(
+        or(
+          and(
+            eq(minigameRoundResults.round_id, roundId),
+            eq(minigameRoundResults.player_id, parsed.data.player_id)
+          ),
+          eq(minigameRoundResults.attempt_id, runResult.attemptId)
+        )
+      )
+      .limit(1);
+    if (
+      !storedRoundResult ||
+      storedRoundResult.attempt_id !== runResult.attemptId ||
+      storedRoundResult.round_id !== roundId ||
+      storedRoundResult.player_id !== parsed.data.player_id
+    ) {
+      return c.json({ error: "This player or attempt was already submitted." }, 409);
+    }
+    const adjustedScore = storedRoundResult.overall_score;
     if (!round.player_b_id) {
       await db
         .update(minigameRounds)
@@ -3585,6 +3822,607 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       ...runResult.payload,
       timing_penalty: timingPenalty,
       adjusted_score: adjustedScore
+    });
+  });
+
+  app.post("/api/v1/minigames/sessions/:id/rounds/:roundId/commit-local", async (c) => {
+    const user = c.get("user");
+    const requestId = c.get("requestId");
+    const sessionId = c.req.param("id");
+    const roundId = c.req.param("roundId");
+    const parsed = z
+      .object({
+        player_id: z.string().min(1),
+        attempt_id: z.string().min(1),
+        turn_context: z
+          .object({
+            patient_cache_key: z.string().optional(),
+            patient_statement_id: z.string().optional(),
+            timing: z
+              .object({
+                response_delay_ms: z.number().nullable().optional(),
+                response_duration_ms: z.number().nullable().optional(),
+                response_timer_seconds: z.number().optional(),
+                max_response_duration_seconds: z.number().optional()
+              })
+              .optional()
+          })
+          .optional()
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: "Invalid local round payload.", requestId }, 400);
+    }
+
+    const [context] = await db
+      .select({
+        task_id: minigameRounds.task_id,
+        example_id: minigameRounds.example_id,
+        player_a_id: minigameRounds.player_a_id,
+        player_b_id: minigameRounds.player_b_id,
+        player_id: minigamePlayers.id
+      })
+      .from(minigameSessions)
+      .innerJoin(
+        minigameRounds,
+        and(
+          eq(minigameRounds.id, roundId),
+          eq(minigameRounds.session_id, minigameSessions.id)
+        )
+      )
+      .innerJoin(
+        minigamePlayers,
+        and(
+          eq(minigamePlayers.id, parsed.data.player_id),
+          eq(minigamePlayers.session_id, minigameSessions.id)
+        )
+      )
+      .where(
+        and(
+          eq(minigameSessions.id, sessionId),
+          eq(minigameSessions.user_id, user.id),
+          isNull(minigameSessions.deleted_at)
+        )
+      )
+      .limit(1);
+    if (
+      !context ||
+      (context.player_a_id !== context.player_id &&
+        context.player_b_id !== context.player_id)
+    ) {
+      return c.json({ error: "Round or assigned player not found.", requestId }, 404);
+    }
+
+    const [attempt] = await db
+      .select()
+      .from(attempts)
+      .where(
+        and(
+          eq(attempts.id, parsed.data.attempt_id),
+          eq(attempts.user_id, user.id),
+          eq(attempts.task_id, context.task_id),
+          eq(attempts.example_id, context.example_id),
+          eq(attempts.score_trust, "local_unverified"),
+          isNotNull(attempts.completed_at)
+        )
+      )
+      .limit(1);
+    const evaluation = attempt
+      ? evaluationResultSchema.safeParse(attempt.evaluation)
+      : null;
+    if (!attempt || !evaluation?.success) {
+      return c.json({ error: "Completed local attempt not found.", requestId }, 404);
+    }
+    const scope = readAttemptModelInfo(attempt.model_info).practice?.scope;
+    if (
+      !sameMinigameScope(scope, {
+        kind: "minigame",
+        session_id: sessionId,
+        round_id: roundId,
+        player_id: context.player_id
+      })
+    ) {
+      return c.json(
+        { error: "Local attempt is not bound to this minigame round and player.", requestId },
+        409
+      );
+    }
+
+    const [existingResult] = await db
+      .select()
+      .from(minigameRoundResults)
+      .where(
+        or(
+          and(
+            eq(minigameRoundResults.round_id, roundId),
+            eq(minigameRoundResults.player_id, context.player_id)
+          ),
+          eq(minigameRoundResults.attempt_id, attempt.id)
+        )
+      )
+      .limit(1);
+    if (
+      existingResult &&
+      (existingResult.attempt_id !== attempt.id ||
+        existingResult.round_id !== roundId ||
+        existingResult.player_id !== context.player_id)
+    ) {
+      return c.json({ error: "This player or attempt was already submitted.", requestId }, 409);
+    }
+
+    const timingPenalty = calculateTimingPenalty(parsed.data.turn_context?.timing);
+    const requestedAdjustedScore =
+      existingResult?.overall_score ?? Math.max(0, attempt.overall_score - timingPenalty);
+    if (!existingResult) {
+      await db
+        .insert(minigameRoundResults)
+        .values({
+          id: generateUuid(),
+          round_id: roundId,
+          player_id: context.player_id,
+          attempt_id: attempt.id,
+          overall_score: requestedAdjustedScore,
+          overall_pass: attempt.overall_pass,
+          created_at: Date.now()
+        })
+        .onConflictDoNothing();
+    }
+    const [storedResult] = await db
+      .select()
+      .from(minigameRoundResults)
+      .where(
+        or(
+          and(
+            eq(minigameRoundResults.round_id, roundId),
+            eq(minigameRoundResults.player_id, context.player_id)
+          ),
+          eq(minigameRoundResults.attempt_id, attempt.id)
+        )
+      )
+      .limit(1);
+    if (
+      !storedResult ||
+      storedResult.attempt_id !== attempt.id ||
+      storedResult.round_id !== roundId ||
+      storedResult.player_id !== context.player_id
+    ) {
+      return c.json({ error: "This player or attempt was already submitted.", requestId }, 409);
+    }
+    const adjustedScore = storedResult.overall_score;
+
+    if (!context.player_b_id) {
+      await db
+        .update(minigameRounds)
+        .set({ status: "completed", completed_at: Date.now() })
+        .where(eq(minigameRounds.id, roundId));
+    } else {
+      const [resultCount] = await db
+        .select({ count: count(minigameRoundResults.id) })
+        .from(minigameRoundResults)
+        .where(eq(minigameRoundResults.round_id, roundId));
+      if ((resultCount?.count ?? 0) >= 2) {
+        await db
+          .update(minigameRounds)
+          .set({ status: "completed", completed_at: Date.now() })
+          .where(eq(minigameRounds.id, roundId));
+      }
+    }
+
+    const modelInfo =
+      attempt.model_info && typeof attempt.model_info === "object"
+        ? (attempt.model_info as {
+            provider?: {
+              stt?: { model?: string };
+              llm?: { model?: string };
+            };
+            timing_ms?: { stt?: number; llm?: number };
+          })
+        : undefined;
+    return c.json({
+      requestId,
+      attemptId: attempt.id,
+      score_trust: "local_unverified",
+      transcript: {
+        text: attempt.transcript,
+        provider: {
+          kind: "local",
+          model: modelInfo?.provider?.stt?.model ?? "local-stt"
+        },
+        duration_ms: modelInfo?.timing_ms?.stt ?? 0
+      },
+      scoring: {
+        evaluation: evaluation.data,
+        provider: {
+          kind: "local",
+          model: modelInfo?.provider?.llm?.model ?? "local-llm"
+        },
+        duration_ms: modelInfo?.timing_ms?.llm ?? 0
+      },
+      timing_penalty: timingPenalty,
+      adjusted_score: adjustedScore
+    });
+  });
+
+  app.post("/api/v1/practice/local/prepare", async (c) => {
+    const requestId = c.get("requestId");
+    const user = c.get("user");
+    const schema = z
+      .object({
+        session_item_id: z.string().min(1).optional(),
+        task_id: z.string().min(1).optional(),
+        example_id: z.string().min(1).optional(),
+        minigame: z
+          .object({
+            session_id: z.string().min(1),
+            round_id: z.string().min(1),
+            player_id: z.string().min(1)
+          })
+          .optional()
+      })
+      .superRefine((value, ctx) => {
+        if (!value.session_item_id && !(value.task_id && value.example_id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Provide session_item_id or task_id and example_id."
+          });
+        }
+      });
+    const parsed = schema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: "Invalid local preparation payload.", requestId }, 400);
+    }
+    if (!checkRateLimit(`practice-local:${user.id}`)) {
+      return c.json({ error: "Too many practice requests.", requestId }, 429);
+    }
+
+    let taskId = parsed.data.task_id ?? null;
+    let exampleId = parsed.data.example_id ?? null;
+    let sessionId: string | null = null;
+    let sessionItemId: string | null = null;
+    if (parsed.data.session_item_id) {
+      const [item] = await db
+        .select({
+          id: practiceSessionItems.id,
+          session_id: practiceSessionItems.session_id,
+          task_id: practiceSessionItems.task_id,
+          example_id: practiceSessionItems.example_id,
+          owner_id: practiceSessions.user_id
+        })
+        .from(practiceSessionItems)
+        .innerJoin(practiceSessions, eq(practiceSessionItems.session_id, practiceSessions.id))
+        .where(eq(practiceSessionItems.id, parsed.data.session_item_id))
+        .limit(1);
+      if (!item || item.owner_id !== user.id) {
+        return c.json({ error: "Session item not found.", requestId }, 404);
+      }
+      sessionItemId = item.id;
+      sessionId = item.session_id;
+      taskId = item.task_id;
+      exampleId = item.example_id;
+    }
+    if (!taskId || !exampleId) {
+      return c.json({ error: "Task or example missing.", requestId }, 400);
+    }
+
+    let minigameScope: MinigameAttemptScope | undefined;
+    if (parsed.data.minigame) {
+      const requested = parsed.data.minigame;
+      const [context] = await db
+        .select({
+          task_id: minigameRounds.task_id,
+          example_id: minigameRounds.example_id,
+          player_a_id: minigameRounds.player_a_id,
+          player_b_id: minigameRounds.player_b_id,
+          player_id: minigamePlayers.id
+        })
+        .from(minigameSessions)
+        .innerJoin(
+          minigameRounds,
+          and(
+            eq(minigameRounds.id, requested.round_id),
+            eq(minigameRounds.session_id, minigameSessions.id)
+          )
+        )
+        .innerJoin(
+          minigamePlayers,
+          and(
+            eq(minigamePlayers.id, requested.player_id),
+            eq(minigamePlayers.session_id, minigameSessions.id)
+          )
+        )
+        .where(
+          and(
+            eq(minigameSessions.id, requested.session_id),
+            eq(minigameSessions.user_id, user.id),
+            isNull(minigameSessions.deleted_at)
+          )
+        )
+        .limit(1);
+      if (
+        !context ||
+        (context.player_a_id !== context.player_id &&
+          context.player_b_id !== context.player_id) ||
+        context.task_id !== taskId ||
+        context.example_id !== exampleId
+      ) {
+        return c.json(
+          { error: "Minigame round, player, or practice context was not found.", requestId },
+          404
+        );
+      }
+      minigameScope = {
+        kind: "minigame",
+        session_id: requested.session_id,
+        round_id: requested.round_id,
+        player_id: requested.player_id
+      };
+    }
+
+    const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+    const criteriaRows = await db
+      .select()
+      .from(taskCriteria)
+      .where(eq(taskCriteria.task_id, taskId))
+      .orderBy(taskCriteria.sort_order);
+    const [exampleRow] = await db
+      .select()
+      .from(taskExamples)
+      .where(and(eq(taskExamples.id, exampleId), eq(taskExamples.task_id, taskId)))
+      .limit(1);
+    if (
+      !taskRow ||
+      (!parsed.data.session_item_id && !taskRow.is_published) ||
+      !exampleRow ||
+      criteriaRows.length === 0
+    ) {
+      return c.json({ error: "Practice task context is incomplete.", requestId }, 404);
+    }
+
+    const attemptId = nanoid();
+    await db.insert(attempts).values({
+      id: attemptId,
+      user_id: user.id,
+      session_id: sessionId,
+      session_item_id: sessionItemId,
+      task_id: taskId,
+      example_id: exampleId,
+      started_at: Date.now(),
+      completed_at: null,
+      audio_ref: null,
+      transcript: "",
+      evaluation: {},
+      overall_pass: false,
+      overall_score: 0,
+      score_trust: "local_unverified",
+      model_info: {
+        provider: { stt: null, llm: null },
+        score_trust: "local_unverified",
+        state: "prepared",
+        practice: minigameScope ? { scope: minigameScope } : undefined
+      }
+    });
+
+    const task = {
+      ...normalizeTask(taskRow),
+      criteria: criteriaRows.map(normalizeCriterionRow)
+    };
+    return c.json({
+      requestId,
+      attemptId,
+      score_trust: "local_unverified",
+      task,
+      example: normalizeExampleRow(exampleRow)
+    });
+  });
+
+  app.post("/api/v1/practice/local/commit", async (c) => {
+    const requestId = c.get("requestId");
+    const user = c.get("user");
+    const modelResult = z.object({
+      model: z.string().trim().min(1).max(200),
+      duration_ms: z.number().int().min(0).max(3_600_000)
+    });
+    const schema = z.object({
+      attempt_id: z.string().min(1),
+      transcript: z.object({
+        text: z.string().trim().min(1).max(20_000),
+        model: z.string().trim().min(1).max(200),
+        duration_ms: z.number().int().min(0).max(3_600_000)
+      }),
+      evaluation: z.unknown(),
+      llm: modelResult,
+      practice_mode: z.enum(["standard", "real_time"]).optional(),
+      turn_context: z
+        .object({
+          patient_cache_key: z.string().optional(),
+          patient_statement_id: z.string().optional(),
+          timing: z
+            .object({
+              response_delay_ms: z.number().nullable().optional(),
+              response_duration_ms: z.number().nullable().optional(),
+              response_timer_seconds: z.number().optional(),
+              max_response_duration_seconds: z.number().optional()
+            })
+            .optional()
+        })
+        .optional()
+    });
+    const parsed = schema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: "Invalid local result payload.", requestId }, 400);
+    }
+
+    const [attempt] = await db
+      .select()
+      .from(attempts)
+      .where(and(eq(attempts.id, parsed.data.attempt_id), eq(attempts.user_id, user.id)))
+      .limit(1);
+    if (!attempt || attempt.score_trust !== "local_unverified") {
+      return c.json({ error: "Prepared local attempt not found.", requestId }, 404);
+    }
+    const preparedModelInfo = readAttemptModelInfo(attempt.model_info);
+    const criteriaRows = await db
+      .select()
+      .from(taskCriteria)
+      .where(eq(taskCriteria.task_id, attempt.task_id))
+      .orderBy(taskCriteria.sort_order);
+    if (criteriaRows.length === 0) {
+      return c.json({ error: "Task criteria are missing.", requestId }, 409);
+    }
+
+    let evaluation;
+    try {
+      evaluation = validateAndDeriveLocalEvaluation(parsed.data.evaluation, {
+        taskId: attempt.task_id,
+        exampleId: attempt.example_id,
+        attemptId: attempt.id,
+        transcript: parsed.data.transcript.text,
+        criterionIds: criteriaRows.map((criterion) => criterion.id)
+      });
+    } catch (error) {
+      if (error instanceof LocalEvaluationValidationError) {
+        return c.json({ error: error.message, requestId }, 422);
+      }
+      throw error;
+    }
+
+    const isIdenticalCompletedRetry = (candidate: typeof attempts.$inferSelect) => {
+      const modelInfo = readAttemptModelInfo(candidate.model_info);
+      return (
+        Boolean(candidate.completed_at) &&
+        candidate.transcript === parsed.data.transcript.text &&
+        JSON.stringify(candidate.evaluation) === JSON.stringify(evaluation) &&
+        modelInfo.provider?.stt?.model === parsed.data.transcript.model &&
+        modelInfo.provider?.llm?.model === parsed.data.llm.model &&
+        modelInfo.timing_ms?.stt === parsed.data.transcript.duration_ms &&
+        modelInfo.timing_ms?.llm === parsed.data.llm.duration_ms
+      );
+    };
+    if (attempt.completed_at) {
+      if (!isIdenticalCompletedRetry(attempt)) {
+        return c.json(
+          { error: "This local attempt is already complete with a different result.", requestId },
+          409
+        );
+      }
+      const storedPayload = buildStoredAttemptPayload(attempt, requestId);
+      return storedPayload
+        ? c.json(storedPayload)
+        : c.json({ error: "Stored local attempt data is invalid.", requestId }, 409);
+    }
+
+    const modelInfo = {
+      provider: {
+        stt: { kind: "local", model: parsed.data.transcript.model },
+        llm: { kind: "local", model: parsed.data.llm.model }
+      },
+      timing_ms: {
+        stt: parsed.data.transcript.duration_ms,
+        llm: parsed.data.llm.duration_ms,
+        total: parsed.data.transcript.duration_ms + parsed.data.llm.duration_ms
+      },
+      score_trust: "local_unverified",
+      practice:
+        parsed.data.practice_mode || preparedModelInfo.practice
+          ? {
+              mode: parsed.data.practice_mode ?? preparedModelInfo.practice?.mode,
+              turn_context:
+                parsed.data.turn_context ?? preparedModelInfo.practice?.turn_context ?? null,
+              scope: preparedModelInfo.practice?.scope
+            }
+          : undefined
+    };
+    const completion = await db
+      .update(attempts)
+      .set({
+        completed_at: Date.now(),
+        transcript: parsed.data.transcript.text,
+        evaluation,
+        overall_pass: evaluation.overall.pass,
+        overall_score: evaluation.overall.score,
+        model_info: modelInfo
+      })
+      .where(
+        and(
+          eq(attempts.id, attempt.id),
+          eq(attempts.user_id, user.id),
+          isNull(attempts.completed_at)
+        )
+      );
+    const completionChanges =
+      completion && typeof completion === "object"
+        ? typeof (completion as { changes?: number }).changes === "number"
+          ? (completion as { changes: number }).changes
+          : typeof (completion as { meta?: { changes?: number } }).meta?.changes === "number"
+            ? (completion as { meta: { changes: number } }).meta.changes
+            : 0
+        : 0;
+    if (completionChanges === 0) {
+      const [committedAttempt] = await db
+        .select()
+        .from(attempts)
+        .where(and(eq(attempts.id, attempt.id), eq(attempts.user_id, user.id)))
+        .limit(1);
+      if (!committedAttempt || !isIdenticalCompletedRetry(committedAttempt)) {
+        return c.json(
+          { error: "This local attempt was committed with a different result.", requestId },
+          409
+        );
+      }
+      const storedPayload = buildStoredAttemptPayload(committedAttempt, requestId);
+      return storedPayload
+        ? c.json(storedPayload)
+        : c.json({ error: "Stored local attempt data is invalid.", requestId }, 409);
+    }
+
+    const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, attempt.task_id)).limit(1);
+    let nextDifficulty: number | undefined;
+    if (taskRow) {
+      const task = normalizeTask(taskRow);
+      const existingProgress = await ensureUserTaskProgress(user.id, task);
+      let updatedDifficulty = existingProgress.current_difficulty;
+      let nextStreak = existingProgress.streak;
+      if (evaluation.overall.pass && evaluation.overall.score >= 3.2) {
+        updatedDifficulty = Math.min(5, updatedDifficulty + 1);
+        nextStreak += 1;
+      } else if (!evaluation.overall.pass || evaluation.overall.score < 2.4) {
+        updatedDifficulty = Math.max(1, updatedDifficulty - 1);
+        nextStreak = 0;
+      }
+      nextDifficulty = updatedDifficulty;
+      await db
+        .update(userTaskProgress)
+        .set({
+          current_difficulty: updatedDifficulty,
+          last_overall_score: evaluation.overall.score,
+          last_pass: evaluation.overall.pass,
+          streak: nextStreak,
+          attempt_count: existingProgress.attempt_count + 1,
+          updated_at: Date.now()
+        })
+        .where(
+          and(
+            eq(userTaskProgress.user_id, user.id),
+            eq(userTaskProgress.task_id, attempt.task_id)
+          )
+        );
+    }
+
+    return c.json({
+      requestId,
+      attemptId: attempt.id,
+      score_trust: "local_unverified",
+      next_recommended_difficulty: nextDifficulty,
+      transcript: {
+        text: parsed.data.transcript.text,
+        provider: { kind: "local", model: parsed.data.transcript.model },
+        duration_ms: parsed.data.transcript.duration_ms
+      },
+      scoring: {
+        evaluation,
+        provider: { kind: "local", model: parsed.data.llm.model },
+        duration_ms: parsed.data.llm.duration_ms
+      }
     });
   });
 
@@ -3614,7 +4452,7 @@ export const createApiApp = ({ env, db, tts }: ApiDependencies) => {
       user
     });
 
-    return c.json(result.payload, result.status);
+    return c.json(result.payload, toContentfulStatus(result.status));
   });
 
   return app;

@@ -131,6 +131,7 @@
     "scoreLabel": "Score {{score}}",
     "statusPassed": "Réussi",
     "statusNeedsWork": "À améliorer",
+    "localUnverified": "Local · non vérifié",
     "exampleDifficulty": "Difficulté de l'exemple {{difficulty}}",
     "viewTask": "Voir la tâche",
     "viewSession": "Voir la session"
@@ -246,6 +247,17 @@
       "overrideSttPlaceholder": "http://127.0.0.1:8484",
       "overrideSttHelper": "Optionnel : diriger le STT vers une URL différente.",
       "overrideActive": "Remplacements enregistrés — ouvrez les options avancées pour les modifier."
+    },
+    "localPairing": {
+      "label": "Clé d’appairage locale",
+      "helper": "Copiez cette clé depuis l’application Local Runtime. Le navigateur l’utilise uniquement pour les requêtes directes vers votre ordinateur.",
+      "placeholder": "Collez la clé d’appairage",
+      "reveal": "Afficher",
+      "hide": "Masquer",
+      "security": "La clé est stockée uniquement dans ce navigateur pour cette URL locale. Elle n’est jamais envoyée à l’API Therapy hébergée.",
+      "missingUrl": "Ajoutez une URL locale valide avant d’enregistrer.",
+      "saved": "Clé d’appairage enregistrée dans ce navigateur.",
+      "pairAgain": "La clé d’appairage est absente ou n’est plus valide. Copiez la clé actuelle depuis l’application de bureau et associez à nouveau ce navigateur."
     },
     "storeAudio": {
       "label": "Enregistrer les enregistrements audio",
@@ -548,91 +560,87 @@
     "localSuite": {
       "kicker": "Exécution locale",
       "title": "Suite locale",
-      "subtitle": "Exécutez des modèles locaux avec une application de bureau multiplateforme qui expose une passerelle compatible OpenAI.",
+      "subtitle": "Associez ce navigateur à la passerelle de bureau pour exécuter les modèles vocaux et linguistiques compatibles sur votre ordinateur.",
       "overview": {
         "title": "Comment fonctionne la Suite locale",
-        "subtitle": "Une app de bureau exécute la passerelle sur votre machine et rend la couche modèle observable, fiable et hors ligne.",
+        "subtitle": "L'application de bureau démarre une passerelle locale protégée, charge les modèles compatibles et explique comment résoudre les erreurs.",
         "cards": [
           {
             "title": "Launcher multiplateforme",
-            "description": "Installez la Suite locale sur macOS, Windows ou Linux pour démarrer, arrêter et surveiller l'inférence locale.",
+            "description": "Utilisez l'application de bureau pour démarrer, arrêter et surveiller la passerelle sur un ordinateur compatible.",
             "bullets": [
               "Démarrage en un clic avec checks de santé.",
               "Diagnostics intégrés.",
-              "Aucun appel cloud requis."
+              "Les requêtes et enregistrements locaux restent sur votre ordinateur."
             ]
           },
           {
             "title": "Passerelle compatible OpenAI",
-            "description": "Une Base URL expose des endpoints type OpenAI pour l'évaluation et la voix.",
+            "description": "Une seule URL locale fournit les endpoints de langage et de reconnaissance vocale utilisés par le navigateur.",
             "bullets": [
               "POST /v1/responses pour l'évaluation LLM.",
-              "POST /v1/audio/speech pour la TTS.",
-              "POST /v1/audio/transcriptions pour le STT."
+              "POST /v1/audio/transcriptions pour la reconnaissance vocale.",
+              "Une clé d'appairage protège les modèles et les diagnostics."
             ]
           },
           {
             "title": "Catalogue de modèles",
-            "description": "Parcourez des modèles validés avec contraintes matérielles, endpoints et recommandations.",
+            "description": "Parcourez des modèles exécutables avec leurs véritables contraintes de plateforme et de matériel.",
             "bullets": [
               "Filtrer par endpoint, fournisseur et matériel.",
-              "Copier les IDs dans Paramètres.",
-              "Voir RAM/VRAM requises."
+              "L'application de bureau masque les modèles incompatibles.",
+              "Consultez les besoins en mémoire et en disque avant le téléchargement."
             ]
           }
         ]
       },
       "paths": {
-        "title": "Choisissez votre parcours",
-        "subtitle": "La plupart des équipes utilisent la Suite locale. Les utilisateurs avancés peuvent apporter leurs modèles.",
+        "title": "Connectez-vous en quatre étapes",
+        "subtitle": "L'URL locale et la clé d'appairage doivent provenir de la même passerelle de bureau.",
         "recommended": {
           "kicker": "Recommandé",
           "title": "Utiliser la Suite locale (recommandé)",
-          "body": "Téléchargez l'app, choisissez les modèles, puis collez la Base URL dans Paramètres.",
+          "body": "Utilisez une version de bureau vérifiée, préparez les modèles compatibles et associez ce navigateur à la passerelle.",
           "stepsTitle": "Étapes Suite locale",
           "steps": [
-            "Installez l'app Suite locale et connectez-vous si nécessaire.",
-            "Choisissez un pack de modèles adapté à votre matériel, puis démarrez la passerelle.",
-            "Copiez la Base URL depuis l'app dans Paramètres → Fournisseurs d'IA."
+            "Installez une version de bureau vérifiée pour votre système lorsqu'elle est disponible.",
+            "Démarrez la passerelle, choisissez les modèles compatibles et attendez leur chargement.",
+            "Copiez l'URL locale et la clé d'appairage depuis l'application de bureau.",
+            "Collez-les dans les paramètres de Therapy Studio et testez la connexion."
           ],
           "cta": "Aller aux téléchargements"
         },
         "advanced": {
-          "kicker": "Avancé",
-          "title": "Avancé : utiliser vos propres modèles",
-          "body": "Vous avez déjà votre stack ? Il suffit d'exposer les mêmes endpoints. Pour une option plus légère, lancez scripts/start_local_ai.py au lieu de la Suite locale.",
-          "stepsTitle": "Étapes serveur personnalisé",
+          "kicker": "Confidentialité",
+          "title": "Comprendre ce qui reste local",
+          "body": "L'inférence locale garde les entrées et sorties des modèles sur cet ordinateur. Le compte, les tâches et les métadonnées de résultats autorisées utilisent toujours l'application hébergée.",
+          "stepsTitle": "Limite des données",
           "steps": [
-            "Lancez scripts/start_local_ai.py (ou votre serveur) pour exposer les endpoints de type OpenAI ci-dessous.",
-            "Vérifiez que votre serveur implémente /v1/responses, /v1/audio/speech et /v1/audio/transcriptions.",
-            "Collez votre Base URL dans Paramètres → Fournisseurs d'IA et sélectionnez les IDs de modèle annoncés."
+            "La clé d'appairage reste dans ce navigateur pour l'origine exacte de la passerelle locale.",
+            "Les résultats locaux sont signalés comme non vérifiés et exclus des classements publics.",
+            "La synthèse vocale du patient reste une fonction hébergée distincte lorsque le mode temps réel l'utilise."
           ],
-          "callout": {
-            "kicker": "Alternative script",
-            "body": "Le script fourni démarre une passerelle FastAPI légère qui reprend l'API de la Suite locale."
-          },
-          "codeTitle": "Exemple de passerelle",
-          "code": "from fastapi import FastAPI, UploadFile, File\nfrom fastapi.responses import JSONResponse, Response\n\napp = FastAPI()\n\n@app.post(\"/v1/responses\")\nasync def responses(payload: dict):\n    return {\"id\": \"resp_001\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"...\"}]}]}\n\n@app.post(\"/v1/audio/speech\")\nasync def audio_speech(payload: dict):\n    return Response(content=b\"\", media_type=\"audio/mpeg\")\n\n@app.post(\"/v1/audio/transcriptions\")\nasync def audio_transcriptions(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}\n\n@app.post(\"/v1/audio/translations\")\nasync def audio_translations(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}",
-          "cta": "Voir les endpoints"
+          "cta": "Lire la limite de confidentialité"
         }
       },
       "downloads": {
         "title": "Téléchargements bureau",
-        "subtitle": "macOS est distribué via le Mac App Store. Windows et Linux passent par GitHub Releases.",
+        "subtitle": "Seuls les fichiers vérifiés d'une GitHub Release apparaissent ici. Les artefacts de build ne sont pas des versions publiques.",
         "labels": {
           "windows": "Windows",
-          "macos": "Mac App Store",
+          "macosAppleSilicon": "macOS — puce Apple",
+          "macosIntel": "macOS — Intel",
           "linux": "Linux"
         },
-        "appStoreUrl": "https://apps.apple.com",
-        "appStoreAction": "Voir sur l'App Store",
         "ready": "Télécharger",
-        "pending": "Bientôt disponible",
-        "error": "Impossible de charger GitHub Releases. Affichage du cache."
+        "pending": "Aucune version vérifiée",
+        "empty": "Aucune version de bureau vérifiée n'a encore été publiée.",
+        "error": "Impossible de vérifier les GitHub Releases. Réessayez plus tard."
       },
       "catalog": {
         "title": "Modèles disponibles",
-        "subtitle": "Recherchez parmi les modèles locaux ou proxy validés par la passerelle.",
+        "subtitle": "Recherchez les modèles locaux exécutables du catalogue généré par la passerelle.",
+        "platformNote": "Sur macOS Intel, seule la reconnaissance vocale Faster Whisper est actuellement prise en charge. L'interface ne proposera pas de modèle linguistique incompatible.",
         "searchPlaceholder": "Rechercher par nom, endpoint ou fournisseur",
         "copy": "Copier l'identifiant",
         "empty": "Aucun modèle ne correspond à cette recherche."
@@ -657,7 +665,7 @@
     "side": {
       "title": "Checklist rapide",
       "subtitle": "Ce qui alimente l'expérience",
-      "description": "Les évaluations reposent sur un LLM. La voix du patient utilise la TTS. Vous pouvez tout garder en local ou laisser OpenAI gérer le tout en sécurité.",
+      "description": "Les évaluations utilisent un modèle linguistique, les réponses enregistrées utilisent la reconnaissance vocale et l'audio patient facultatif utilise une synthèse vocale hébergée. Choisissez le fournisseur pour chaque parcours compatible.",
       "tipTitle": "Astuce",
       "tipBody": "Vous pourrez changer plus tard dans les paramètres. Si vous ignorez pour l'instant, la pratique reste hors ligne jusqu'à configuration."
     },
@@ -666,7 +674,7 @@
       "description": "Sélectionnez la configuration qui vous convient aujourd'hui.",
       "local": {
         "title": "Utiliser mes modèles (local)",
-        "body": "Lancez les serveurs LLM + TTS sur votre machine."
+        "body": "Exécutez l'évaluation linguistique et la reconnaissance vocale avec la passerelle de bureau protégée."
       },
       "openai": {
         "title": "Utiliser OpenAI",
@@ -687,20 +695,20 @@
         },
         {
           "title": "Ce qu'il faut pour lancer les évaluations",
-          "description": "Les évaluations nécessitent un LLM et un fournisseur TTS. Vous pouvez rester en local ou connecter OpenAI.",
+          "description": "Les évaluations nécessitent un modèle linguistique. Les réponses enregistrées demandent aussi une reconnaissance vocale ; l'audio patient du mode temps réel utilise une synthèse vocale hébergée distincte.",
           "bullets": [
-            "Mode local : exécutez le script Python fourni.",
+            "Mode local : démarrez la passerelle de bureau et associez ce navigateur.",
             "Mode OpenAI : ajoutez votre clé API une fois.",
-            "Vous pourrez ajuster plus tard."
+            "Vous pourrez changer de fournisseur plus tard."
           ]
         },
         {
           "title": "Choisissez comment continuer",
           "description": "Sélectionnez une option à droite pour obtenir des étapes guidées et des liens.",
           "bullets": [
-            "Local = aucune requête externe.",
+            "Les requêtes et enregistrements des modèles locaux restent sur cet ordinateur.",
             "OpenAI = le démarrage le plus rapide.",
-            "Ignorer = pratique hors ligne."
+            "Le compte et les tâches utilisent toujours l'application hébergée."
           ]
         }
       ]
@@ -719,22 +727,21 @@
         },
         {
           "title": "Connectez Therapy Studio à la passerelle",
-          "description": "Démarrez la Suite locale, copiez la Base URL et collez-la dans Paramètres.",
+          "description": "Démarrez la Suite locale, copiez son URL locale et sa clé d'appairage, puis collez les deux dans Paramètres.",
           "bullets": [
             "Vérifiez l'état de santé et la liste des modèles.",
-            "Utilisez la même Base URL pour les endpoints LLM et audio.",
+            "Chargez un modèle linguistique et un modèle vocal compatibles.",
             "Passez en mode IA Local only ou Local preferred."
           ]
         },
         {
-          "title": "Avancé : exécuter vos propres modèles",
-          "description": "Si vous hébergez déjà vos modèles, exposez des endpoints compatibles OpenAI.",
+          "title": "Tester et rétablir la connexion",
+          "description": "Les paramètres vérifient l'identité de la passerelle et l'appairage avant d'envoyer du contenu local.",
           "bullets": [
-            "Endpoints requis : /v1/responses, /v1/audio/speech, /v1/audio/transcriptions.",
-            "Optionnel : /v1/audio/translations pour l'audio multilingue.",
-            "Renvoyez les formats de réponse OpenAI."
-          ],
-          "code": "from fastapi import FastAPI, UploadFile, File\nfrom fastapi.responses import Response\n\napp = FastAPI()\n\n@app.post(\"/v1/responses\")\nasync def responses(payload: dict):\n    return {\"id\": \"resp_001\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"...\"}]}]}\n\n@app.post(\"/v1/audio/speech\")\nasync def audio_speech(payload: dict):\n    return Response(content=b\"\", media_type=\"audio/mpeg\")\n\n@app.post(\"/v1/audio/transcriptions\")\nasync def audio_transcriptions(file: UploadFile = File(...)):\n    return {\"text\": \"...\"}"
+            "Si la clé change, copiez la nouvelle valeur depuis l'application de bureau et recommencez l'appairage.",
+            "La clé d'appairage n'a jamais besoin d'être envoyée à l'API hébergée.",
+            "Les évaluations locales sont signalées comme non vérifiées et exclues des classements publics."
+          ]
         }
       ]
     },
@@ -805,6 +812,11 @@
     "snagTitle": "Nous avons rencontré un problème",
     "coachFeedback": "Retour du coach",
     "scoringTitle": "Matrice de score",
+    "localScoreBadge": "Local · non vérifié",
+    "localScoreNotice": "Ce score a été produit par votre environnement local. Il reste dans votre historique personnel et n'est pas inclus dans les classements publics.",
+    "localRuntime": {
+      "pairAgain": "Votre clé d’appairage locale est absente ou n’est plus valide. Ouvrez les paramètres et associez à nouveau ce navigateur à l’environnement de bureau."
+    },
     "criterionLabel": "Critère {{id}}",
     "scoreLabel": "Score {{score}} / 4",
     "patientReady": "Prêt",

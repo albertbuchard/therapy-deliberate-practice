@@ -109,7 +109,7 @@ test.describe("patient audio warmup and playback", () => {
 
       token += 1;
       const currentToken = token;
-      const second = await playWithToken("statement-2", currentToken);
+      await playWithToken("statement-2", currentToken);
       const staleResult = await first;
 
       revokeAllBlobUrls();
@@ -173,7 +173,7 @@ test.describe("patient audio warmup and playback", () => {
           await audio.play();
           bank.updateEntry("exercise", "statement", { status: "playing" });
           return true;
-        } catch (error) {
+        } catch {
           bank.updateEntry("exercise", "statement", { status: "blocked" });
           return false;
         }

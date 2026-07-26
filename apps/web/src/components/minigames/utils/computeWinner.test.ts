@@ -12,7 +12,8 @@ const buildResult = (overrides: Partial<MinigameRoundResult>): MinigameRoundResu
   created_at: overrides.created_at ?? 0,
   transcript: overrides.transcript ?? null,
   evaluation: overrides.evaluation ?? null,
-  client_penalty: overrides.client_penalty ?? null
+  client_penalty: overrides.client_penalty ?? null,
+  score_trust: overrides.score_trust ?? "cloud_trusted"
 });
 
 const buildPlayer = (overrides: Partial<MinigamePlayer>): MinigamePlayer => ({

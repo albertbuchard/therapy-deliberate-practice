@@ -5,7 +5,7 @@ import { synthesizeWithOpenAI } from "../src/providers/openaiTts";
 test("synthesizeWithOpenAI converts bytes and falls back content type", async () => {
   const response = {
     arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
-    headers: new Headers(["content-type", "audio/mpeg"])
+    headers: new Headers([["content-type", "audio/mpeg"]])
   };
   const client = {
     audio: {

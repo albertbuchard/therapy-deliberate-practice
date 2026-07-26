@@ -32,12 +32,13 @@ export const DeleteSessionConfirmDialog = ({
         const focusable = [confirmRef.current, cancelRef.current].filter(Boolean) as HTMLElement[];
         if (!focusable.length) return;
         const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
-        let nextIndex = currentIndex;
-        if (event.shiftKey) {
-          nextIndex = currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1;
-        } else {
-          nextIndex = currentIndex === focusable.length - 1 ? 0 : currentIndex + 1;
-        }
+        const nextIndex = event.shiftKey
+          ? currentIndex <= 0
+            ? focusable.length - 1
+            : currentIndex - 1
+          : currentIndex === focusable.length - 1
+            ? 0
+            : currentIndex + 1;
         focusable[nextIndex]?.focus();
         event.preventDefault();
       }

@@ -9,6 +9,7 @@ export type ProviderConfigErrorCode =
   | "OPENAI_KEY_MISSING"
   | "LOCAL_BASE_URL_MISSING"
   | "LOCAL_UNREACHABLE"
+  | "LOCAL_BROWSER_REQUIRED"
   | "OPENAI_KEY_SECRET_MISSING";
 
 export class ProviderConfigError extends Error {

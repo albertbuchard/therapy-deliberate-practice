@@ -28,8 +28,8 @@ type TelemetryOptions = {
 };
 
 export abstract class BaseProvider {
-  protected readonly kind: ProviderKind;
-  protected readonly model?: string;
+  public readonly kind: ProviderKind;
+  public readonly model?: string;
   protected readonly logger?: LogFn;
 
   protected constructor(kind: ProviderKind, model?: string, logger?: LogFn) {
@@ -107,6 +107,7 @@ export abstract class BaseSttProvider extends BaseProvider implements SttProvide
 }
 
 export abstract class BaseTtsProvider extends BaseProvider implements TtsProvider {
+  public declare readonly model: string;
   abstract healthCheck(): Promise<boolean>;
   abstract voice: string;
   abstract format: TtsProvider["format"];

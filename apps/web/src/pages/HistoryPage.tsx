@@ -53,6 +53,11 @@ export const HistoryPage = () => {
                 </div>
               </div>
               <div className="text-right">
+                {attempt.score_trust === "local_unverified" ? (
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200">
+                    {t("history.localUnverified")}
+                  </p>
+                ) : null}
                 <p className="text-sm font-semibold">
                   {t("history.scoreLabel", { score: attempt.overall_score.toFixed(1) })}
                 </p>

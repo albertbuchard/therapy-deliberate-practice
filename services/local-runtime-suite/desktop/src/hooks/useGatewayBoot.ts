@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export type GatewayBootPhase = "idle" | "booting" | "polling" | "ready" | "error" | "cancelled";
@@ -12,6 +12,22 @@ export type GatewayBootState = {
   lastReadiness?: string;
   error?: string;
 };
+
+export function gatewayBootActivityMessage(boot: GatewayBootState) {
+  if (boot.phase === "ready") return "Gateway ready.";
+  if (boot.phase === "error") return "Startup failed.";
+  if (boot.phase === "cancelled") return "Startup cancelled.";
+  if (boot.phase === "idle") return "Launch local server.";
+  if (boot.phase === "booting") return "Starting the gateway process…";
+  if (boot.attempts === 0) return "Waiting for the first health response…";
+  if (boot.lastReadiness) {
+    return `Gateway reported “${boot.lastReadiness}”; checking again…`;
+  }
+  if (boot.lastHttpStatus) {
+    return `Gateway returned HTTP ${boot.lastHttpStatus}; checking again…`;
+  }
+  return "No healthy response yet; checking again…";
+}
 
 type BootAction =
   | { type: "REQUEST_START"; runId: number; startedAtMs: number }
@@ -82,6 +98,16 @@ function formatErrorMessage(error: unknown) {
   }
 }
 
+export function isReadyGatewayHealth(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const candidate = payload as Record<string, unknown>;
+  return (
+    candidate.service === "therapy-local-runtime" &&
+    candidate.protocol_version === "1" &&
+    candidate.status === "ready"
+  );
+}
+
 async function checkHealthOnce(
   url: string,
   timeoutMs: number
@@ -97,10 +123,12 @@ async function checkHealthOnce(
     });
 
     let readiness: string | undefined;
+    let identityMatches = false;
     try {
       const contentType = res.headers.get("content-type") || "";
       if (contentType.includes("application/json")) {
-        const payload = (await res.json()) as { status?: unknown };
+        const payload = (await res.json()) as Record<string, unknown>;
+        identityMatches = isReadyGatewayHealth(payload);
         if (payload && typeof payload.status === "string") {
           readiness = payload.status;
         }
@@ -109,7 +137,7 @@ async function checkHealthOnce(
       // Ignore JSON parse failures; the HTTP status still informs readiness.
     }
 
-    const ok = res.status === 200 && (!readiness || readiness === "ready");
+    const ok = res.status === 200 && identityMatches;
     return { ok, httpStatus: res.status, readiness };
   } finally {
     window.clearTimeout(timer);
@@ -154,11 +182,15 @@ export function useGatewayBoot(options: UseGatewayBootOptions) {
 
   const cancel = useCallback(async () => {
     cancelRef.current = true;
-    dispatch({ type: "CANCELLED" });
+    runIdRef.current += 1;
     try {
       await invoke("stop_gateway");
-    } catch {
-      // ignore stop errors; UI already reflects cancellation
+      dispatch({ type: "CANCELLED" });
+    } catch (error) {
+      dispatch({
+        type: "FAIL",
+        error: `Could not stop the gateway: ${formatErrorMessage(error)}`
+      });
     }
   }, []);
 
@@ -214,17 +246,5 @@ export function useGatewayBoot(options: UseGatewayBootOptions) {
     };
   }, [state.phase, state.runId, state.startedAtMs, healthUrl, maxWaitMs, pollIntervalMs, requestTimeoutMs]);
 
-  const derived = useMemo(() => {
-    const startedAtMs = state.startedAtMs;
-    const elapsedMs = startedAtMs ? Math.max(0, Date.now() - startedAtMs) : 0;
-    const progress =
-      state.phase === "ready"
-        ? 1
-        : startedAtMs
-          ? Math.min(0.95, elapsedMs / maxWaitMs)
-          : 0;
-    return { elapsedMs, progress, maxWaitMs };
-  }, [state.phase, state.startedAtMs, maxWaitMs]);
-
-  return { state, start, cancel, reset, derived };
+  return { state, start, cancel, reset };
 }

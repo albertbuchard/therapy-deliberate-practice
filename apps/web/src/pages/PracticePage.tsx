@@ -3,14 +3,17 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { PracticeRunResponse } from "@deliberate/shared";
 import {
+  type LocalPracticePreparation,
+  type PracticeSessionItem,
+  useCommitLocalPracticeMutation,
   useGetTaskQuery,
   useGetPracticeSessionsQuery,
   useGetPracticeSessionAttemptsQuery,
   useDeletePracticeSessionMutation,
   useRunPracticeMutation,
+  usePrepareLocalPracticeMutation,
   useStartSessionMutation
 } from "../store/api";
-import { TalkingPatientCanvas } from "../components/TalkingPatientCanvas";
 import { StatusPill } from "../components/StatusPill";
 import { Spinner } from "../components/Spinner";
 import { DeleteSessionConfirmDialog } from "../components/minigames/history/DeleteSessionConfirmDialog";
@@ -27,6 +30,15 @@ import {
 } from "../store/practiceSlice";
 import { usePatientAudioBank } from "../patientAudio/usePatientAudioBank";
 import { classifyMicError, useMicRecorder } from "../hooks/useMicRecorder";
+import {
+  checkLocalRuntimeHealth,
+  evaluateWithLocalRuntime,
+  isLocalRuntimePairingError,
+  requireLocalRuntimePairingKey,
+  resolveLocalRuntimeGatewayOrigin,
+  transcribeWithLocalRuntime,
+  type LocalTranscription
+} from "../localRuntime/client";
 
 const blobToBase64 = (blob: Blob, errorMessage: string) =>
   new Promise<string>((resolve, reject) => {
@@ -54,6 +66,8 @@ export const PracticePage = () => {
   const [startSession, { isLoading: isStartingSession }] = useStartSessionMutation();
   const [deleteSession, { isLoading: isDeletingSession }] = useDeletePracticeSessionMutation();
   const [runPractice] = useRunPracticeMutation();
+  const [prepareLocalPractice] = usePrepareLocalPracticeMutation();
+  const [commitLocalPractice] = useCommitLocalPracticeMutation();
   const {
     bank: patientAudioBank,
     ensureReady: ensurePatientAudioReady,
@@ -61,7 +75,6 @@ export const PracticePage = () => {
     play: playPatientAudio,
     stop: stopPatientAudio,
     getEntry: getPatientAudioEntry,
-    progress: patientAudioProgress
   } = usePatientAudioBank({ loggerScope: "practice" });
   const dispatch = useAppDispatch();
   const practice = useAppSelector((state) => state.practice);
@@ -84,13 +97,15 @@ export const PracticePage = () => {
   >(null);
   const [nextDifficulty, setNextDifficulty] = useState<number | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
+  const [scoreTrust, setScoreTrust] = useState<"cloud_trusted" | "local_unverified" | null>(
+    null
+  );
   const [practiceMode, setPracticeMode] = useState<"standard" | "real_time">("standard");
   const [patientSpeaking, setPatientSpeaking] = useState(false);
   const [canRecord, setCanRecord] = useState(true);
   const [hidePatientText, setHidePatientText] = useState(true);
   const [autoPlayPatientAudio, setAutoPlayPatientAudio] = useState(true);
   const [isWarmingPack, setIsWarmingPack] = useState(false);
-  const [patientPlay, setPatientPlay] = useState(false);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null);
   const [transcriptionStatus, setTranscriptionStatus] = useState<
@@ -118,11 +133,16 @@ export const PracticePage = () => {
   } | null>(null);
   const evaluationPromiseRef = useRef<Promise<PracticeRunResponse> | null>(null);
   const evaluationRequestRef = useRef<string | null>(null);
+  const localAttemptRef = useRef<{
+    preparation: LocalPracticePreparation;
+    transcription: LocalTranscription;
+    token: string;
+    llmBaseUrl: string;
+  } | null>(null);
   const isEvaluating = evaluationStatus === "evaluating";
   const isProcessing = transcriptionStatus === "transcribing" || isEvaluating;
   const currentItem = practice.sessionItems[practice.currentIndex];
   const currentExampleId = currentItem?.example_id;
-  const patientLine = currentItem?.patient_text ?? "";
   const currentAudioEntry =
     currentExampleId && taskId ? getPatientAudioEntry(taskId, currentExampleId) : undefined;
   const patientAudioStatus = currentAudioEntry?.status ?? "idle";
@@ -138,16 +158,12 @@ export const PracticePage = () => {
     [practice.sessionItems]
   );
   const packTotalCount = sessionStatementIds.length;
-  const packReadyCount = useMemo(
-    () =>
-      sessionStatementIds.reduce((count, statementId) => {
-        if (!taskId) return count;
-        return getPatientAudioEntry(taskId, statementId)?.status === "ready"
-          ? count + 1
-          : count;
-      }, 0),
-    [getPatientAudioEntry, patientAudioProgress, sessionStatementIds, taskId]
-  );
+  const packReadyCount = sessionStatementIds.reduce((count, statementId) => {
+    if (!taskId) return count;
+    return getPatientAudioEntry(taskId, statementId)?.status === "ready"
+      ? count + 1
+      : count;
+  }, 0);
   const packProgressPercent =
     packTotalCount > 0 ? Math.round((packReadyCount / packTotalCount) * 100) : 0;
   const showWarmupRing =
@@ -169,7 +185,8 @@ export const PracticePage = () => {
           {
             transcript: attempt.transcript,
             evaluation: attempt.evaluation ?? undefined,
-            attemptId: attempt.id
+            attemptId: attempt.id,
+            scoreTrust: attempt.score_trust
           }
         ])
     );
@@ -258,9 +275,9 @@ export const PracticePage = () => {
     setResponseErrors(null);
     setNextDifficulty(null);
     setRequestId(null);
+    setScoreTrust(null);
     patientAudioBank.revokeAll();
     setPatientSpeaking(false);
-    setPatientPlay(false);
     setCanRecord(practiceMode === "standard");
     setEvaluationStatus("idle");
     setTranscriptExpanded(false);
@@ -269,6 +286,7 @@ export const PracticePage = () => {
     transcriptionPromiseRef.current = null;
     transcriptionRequestRef.current = null;
     pendingResultRef.current = null;
+    localAttemptRef.current = null;
     playAbortRef.current?.abort();
     playAbortRef.current = null;
     playTokenRef.current += 1;
@@ -288,7 +306,7 @@ export const PracticePage = () => {
       dispatch(setCurrentIndex(0));
       resetSessionUI();
       await refetchSessions();
-    } catch (err) {
+    } catch {
       setError(t("practice.error.sessionFailed"));
     }
   }, [dispatch, refetchSessions, resetSessionUI, startSession, t, taskId]);
@@ -304,13 +322,13 @@ export const PracticePage = () => {
         dispatch(resetSessionState());
       }
       await refetchSessions();
-    } catch (err) {
+    } catch {
       setError("Unable to delete this session. Please try again.");
     }
   }, [deleteSession, dispatch, pendingDeleteSessionId, practice.sessionId, refetchSessions, sessionIndexKey]);
 
   const loadSession = useCallback(
-    (sessionId: string, items: typeof practice.sessionItems, fallbackIndex: number) => {
+    (sessionId: string, items: PracticeSessionItem[], fallbackIndex: number) => {
       dispatch(resetSessionState());
       dispatch(setSession({ sessionId, items }));
       const cachedIndex = Number(window.localStorage.getItem(sessionIndexKey(sessionId)));
@@ -422,6 +440,10 @@ export const PracticePage = () => {
   }, [evaluationStatus, practice.currentSessionItemId, practice.evaluation, practice.transcript]);
 
   useEffect(() => {
+    setScoreTrust(practice.scoreTrust ?? null);
+  }, [practice.currentSessionItemId, practice.scoreTrust]);
+
+  useEffect(() => {
     if (!practice.sessionId) return;
     const key = sessionAttempts
       .map((attempt) => `${attempt.id}:${attempt.session_item_id ?? ""}:${attempt.completed_at ?? "x"}`)
@@ -458,7 +480,6 @@ export const PracticePage = () => {
   useEffect(() => {
     setPatientSpeaking(false);
     setCanRecord(practiceMode === "standard");
-    setPatientPlay(false);
     setTranscriptionStatus("idle");
     setTranscriptionError(null);
     setTranscriptExpanded(false);
@@ -472,11 +493,7 @@ export const PracticePage = () => {
     if (patientAudioRef.current) {
       stopPatientAudio(patientAudioRef.current);
     }
-  }, [currentExampleId, patientAudioBank, practiceMode]);
-
-  useEffect(() => {
-    setPatientPlay(false);
-  }, [patientLine]);
+  }, [currentExampleId, patientAudioBank, practiceMode, stopPatientAudio]);
 
   useEffect(() => {
     if (practiceMode !== "real_time") return;
@@ -590,9 +607,9 @@ export const PracticePage = () => {
       setResponseErrors(null);
       setNextDifficulty(null);
       setRequestId(null);
+      setScoreTrust(null);
       dispatch(setEvaluation(undefined));
       const promise = (async () => {
-        const base64 = await blobToBase64(blob, t("practice.error.readAudio"));
         const turnContext =
           practiceMode === "real_time"
             ? {
@@ -600,15 +617,77 @@ export const PracticePage = () => {
                 patient_statement_id: currentExampleId
               }
             : undefined;
-        const result = await runPractice({
-          session_item_id: currentItem.session_item_id,
-          audio: base64,
-          audio_mime: mimeType ?? undefined,
-          mode: settings.aiMode,
-          practice_mode: practiceMode,
-          turn_context: turnContext,
-          skip_scoring: true
-        }).unwrap();
+        let result: PracticeRunResponse | null = null;
+        let localError: unknown;
+        if (settings.aiMode !== "openai_only") {
+          try {
+            const gatewayOrigin = resolveLocalRuntimeGatewayOrigin({
+              baseUrl: settings.localAiBaseUrl,
+              sttUrl: settings.localEndpoints.stt,
+              llmUrl: settings.localEndpoints.llm
+            });
+            const token = requireLocalRuntimePairingKey(gatewayOrigin);
+            const health = await checkLocalRuntimeHealth(gatewayOrigin);
+            if (health.status !== "ready") {
+              throw new Error(`The local runtime is ${health.status}.`);
+            }
+            const transcription = await transcribeWithLocalRuntime({
+              baseUrl: gatewayOrigin,
+              token,
+              audio: blob,
+              language: task?.language
+            });
+            const preparation = await prepareLocalPractice({
+              session_item_id: currentItem.session_item_id
+            }).unwrap();
+            localAttemptRef.current = {
+              preparation,
+              transcription,
+              token,
+              llmBaseUrl: gatewayOrigin
+            };
+            result = {
+              requestId: preparation.requestId,
+              attemptId: preparation.attemptId,
+              score_trust: "local_unverified",
+              transcript: {
+                text: transcription.text,
+                provider: { kind: "local", model: transcription.model },
+                duration_ms: transcription.durationMs
+              }
+            };
+          } catch (caught) {
+            localError = caught;
+            localAttemptRef.current = null;
+            if (isLocalRuntimePairingError(caught)) {
+              throw new Error(t("practice.localRuntime.pairAgain"), { cause: caught });
+            }
+            if (settings.aiMode === "local_only" || !settings.hasOpenAiKey) {
+              const detail = caught instanceof Error ? caught.message : String(caught);
+              throw new Error(`Local runtime unavailable: ${detail}`, { cause: caught });
+            }
+          }
+        }
+        if (!result) {
+          const base64 = await blobToBase64(blob, t("practice.error.readAudio"));
+          result = await runPractice({
+            session_item_id: currentItem.session_item_id,
+            audio: base64,
+            audio_mime: mimeType ?? undefined,
+            mode: "openai_only",
+            practice_mode: practiceMode,
+            turn_context: turnContext,
+            skip_scoring: true
+          }).unwrap();
+          if (localError) {
+            setResponseErrors([
+              {
+                stage: "stt",
+                message: "The local runtime was unavailable, so this attempt used OpenAI."
+              }
+            ]);
+          }
+        }
         if (transcriptionRequestRef.current !== transcriptionId) {
           return result;
         }
@@ -620,10 +699,12 @@ export const PracticePage = () => {
           setAttemptForItem({
             sessionItemId: currentItem.session_item_id,
             transcript: result.transcript?.text,
-            attemptId: result.attemptId
+            attemptId: result.attemptId,
+            scoreTrust: result.score_trust ?? "cloud_trusted"
           })
         );
         setRequestId(result.requestId ?? null);
+        setScoreTrust(result.score_trust ?? "cloud_trusted");
         setTranscriptionStatus("ready");
         dispatch(setRecordingState("ready"));
         return result;
@@ -645,8 +726,14 @@ export const PracticePage = () => {
       dispatch,
       patientCacheKey,
       practiceMode,
+      prepareLocalPractice,
       runPractice,
       settings.aiMode,
+      settings.hasOpenAiKey,
+      settings.localAiBaseUrl,
+      settings.localEndpoints.llm,
+      settings.localEndpoints.stt,
+      task?.language,
       t
     ]
   );
@@ -673,26 +760,97 @@ export const PracticePage = () => {
                 patient_statement_id: currentExampleId
               }
             : undefined;
-        const evaluationResult = await runPractice({
-          session_item_id: currentItem.session_item_id,
-          attempt_id: attemptId,
-          transcript_text: transcriptText,
-          mode: settings.aiMode,
-          practice_mode: practiceMode,
-          turn_context: turnContext
-        }).unwrap();
+        let evaluationResult: PracticeRunResponse;
+        let localFallbackMessage: string | null = null;
+        const localAttempt =
+          localAttemptRef.current?.preparation.attemptId === attemptId
+            ? localAttemptRef.current
+            : null;
+        const isPreparedLocalAttempt =
+          result?.score_trust === "local_unverified" ||
+          practice.scoreTrust === "local_unverified";
+
+        if (localAttempt) {
+          let localEvaluation;
+          try {
+            localEvaluation = await evaluateWithLocalRuntime({
+              baseUrl: localAttempt.llmBaseUrl,
+              token: localAttempt.token,
+              task: localAttempt.preparation.task,
+              example: localAttempt.preparation.example,
+              attemptId,
+              transcript: transcriptText
+            });
+          } catch (caught) {
+            if (isLocalRuntimePairingError(caught)) {
+              throw new Error(t("practice.localRuntime.pairAgain"), { cause: caught });
+            }
+            if (settings.aiMode === "local_only" || !settings.hasOpenAiKey) {
+              const detail = caught instanceof Error ? caught.message : String(caught);
+              throw new Error(`Local evaluation failed: ${detail}`, { cause: caught });
+            }
+            localFallbackMessage =
+              "The local evaluator was unavailable, so OpenAI evaluated this locally transcribed attempt.";
+            evaluationResult = await runPractice({
+              session_item_id: currentItem.session_item_id,
+              attempt_id: attemptId,
+              transcript_text: transcriptText,
+              mode: "openai_only",
+              practice_mode: practiceMode,
+              turn_context: turnContext
+            }).unwrap();
+          }
+          if (localEvaluation) {
+            evaluationResult = await commitLocalPractice({
+              attempt_id: attemptId,
+              transcript: {
+                text: transcriptText,
+                model: localAttempt.transcription.model,
+                duration_ms: localAttempt.transcription.durationMs
+              },
+              evaluation: localEvaluation.evaluation,
+              llm: {
+                model: localEvaluation.model,
+                duration_ms: localEvaluation.durationMs
+              },
+              practice_mode: practiceMode,
+              turn_context: turnContext
+            }).unwrap();
+          }
+        } else {
+          if (isPreparedLocalAttempt && settings.aiMode === "local_only") {
+            throw new Error(
+              "This local attempt must be recorded again because its private runtime context is no longer available."
+            );
+          }
+          evaluationResult = await runPractice({
+            session_item_id: currentItem.session_item_id,
+            attempt_id: attemptId,
+            transcript_text: transcriptText,
+            mode: "openai_only",
+            practice_mode: practiceMode,
+            turn_context: turnContext
+          }).unwrap();
+        }
         if (evaluationRequestRef.current !== evaluationId) {
           return evaluationResult;
         }
         setRequestId(evaluationResult.requestId ?? null);
-        setResponseErrors(evaluationResult.errors ?? null);
+        setResponseErrors(
+          evaluationResult.errors ??
+            (localFallbackMessage
+              ? [{ stage: "evaluation", message: localFallbackMessage }]
+              : null)
+        );
         setNextDifficulty(evaluationResult.next_recommended_difficulty ?? null);
+        setScoreTrust(evaluationResult.score_trust ?? "cloud_trusted");
         dispatch(
           setAttemptForItem({
             sessionItemId: currentItem.session_item_id,
             transcript: transcriptText,
             evaluation: evaluationResult.scoring?.evaluation,
-            attemptId: evaluationResult.attemptId ?? attemptId
+            attemptId: evaluationResult.attemptId ?? attemptId,
+            scoreTrust: evaluationResult.score_trust ?? "cloud_trusted"
           })
         );
         setEvaluationStatus(evaluationResult.scoring?.evaluation ? "ready" : "error");
@@ -710,13 +868,17 @@ export const PracticePage = () => {
     [
       currentExampleId,
       currentItem,
+      commitLocalPractice,
       dispatch,
       patientCacheKey,
       practice.currentAttemptId,
+      practice.scoreTrust,
       practice.transcript,
       practiceMode,
       runPractice,
-      settings.aiMode
+      settings.aiMode,
+      settings.hasOpenAiKey,
+      t
     ]
   );
 
@@ -733,6 +895,8 @@ export const PracticePage = () => {
     evaluationPromiseRef.current = null;
     evaluationRequestRef.current = null;
     pendingResultRef.current = null;
+    localAttemptRef.current = null;
+    setScoreTrust(null);
     dispatch(setEvaluation(undefined));
     if (practiceMode === "real_time" && !canRecord) {
       setError("Wait for the patient audio to finish before recording.");
@@ -924,6 +1088,11 @@ export const PracticePage = () => {
                   <p className="mt-2 text-xs text-slate-300">
                     {practice.evaluation.overall.pass ? "On track." : "Needs refinement."}
                   </p>
+                  {scoreTrust === "local_unverified" && (
+                    <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                      {t("practice.localScoreNotice")}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -1310,7 +1479,6 @@ export const PracticePage = () => {
                         playAbortRef.current?.abort();
                         playAbortRef.current = null;
                         setPatientSpeaking(true);
-                        setPatientPlay(true);
                         setCanRecord(false);
                         if (taskId && currentExampleId) {
                           patientAudioBank.updateEntry(taskId, currentExampleId, {
@@ -1324,7 +1492,6 @@ export const PracticePage = () => {
                         playAbortRef.current?.abort();
                         playAbortRef.current = null;
                         setPatientSpeaking(false);
-                        setPatientPlay(false);
                         setCanRecord(true);
                         if (patientAudioRef.current) {
                           patientAudioRef.current.currentTime = 0;
@@ -1337,7 +1504,6 @@ export const PracticePage = () => {
                       }}
                       onEnded={() => {
                         setPatientSpeaking(false);
-                        setPatientPlay(false);
                         setCanRecord(true);
                         playTokenRef.current += 1;
                         playAbortRef.current?.abort();
@@ -1530,7 +1696,14 @@ export const PracticePage = () => {
 
       {practice.evaluation && (
         <section id="practice-scoring-matrix" className="rounded-3xl border border-white/10 bg-slate-900/40 p-6">
-          <h3 className="text-lg font-semibold">{t("practice.scoringTitle")}</h3>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h3 className="text-lg font-semibold">{t("practice.scoringTitle")}</h3>
+            {scoreTrust === "local_unverified" && (
+              <span className="rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-semibold text-amber-100">
+                {t("practice.localScoreBadge")}
+              </span>
+            )}
+          </div>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             {practice.evaluation.criterion_scores.map((score) => {
               const criterion = criterionMap.get(score.criterion_id);

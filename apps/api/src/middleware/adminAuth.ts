@@ -2,6 +2,8 @@ import { createRemoteJWKSet, decodeJwt, jwtVerify } from "jose";
 import type { MiddlewareHandler } from "hono";
 import type { RuntimeEnv } from "../env";
 import { logServerError } from "../utils/logger";
+import type { ApiHonoEnv } from "../httpTypes";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 type AccessIdentity = {
   isAuthenticated: boolean;
@@ -143,7 +145,7 @@ export const resolveAdminStatus = async (
   return { ok: true as const, identity, isAdmin };
 };
 
-export const createAdminAuth = (env: RuntimeEnv): MiddlewareHandler => {
+export const createAdminAuth = (env: RuntimeEnv): MiddlewareHandler<ApiHonoEnv> => {
   return async (c, next) => {
     const result = await resolveAdminStatus(env, c.req.raw.headers);
     if (!result.ok) {
@@ -153,7 +155,7 @@ export const createAdminAuth = (env: RuntimeEnv): MiddlewareHandler => {
           status: result.status
         });
       }
-      return c.json({ error: result.message }, result.status);
+      return c.json({ error: result.message }, result.status as ContentfulStatusCode);
     }
     if (result.devBypass) {
       c.set("adminEmail", result.identity.email);

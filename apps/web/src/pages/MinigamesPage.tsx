@@ -65,7 +65,6 @@ export const MinigamePlayPage = () => {
   const navigate = useNavigate();
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
   const minigames = useAppSelector((state) => state.minigames);
-  const settings = useAppSelector((state) => state.settings);
   const currentPlayerId = minigames.currentPlayerId;
   const [selectOpen, setSelectOpen] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
@@ -213,7 +212,7 @@ export const MinigamePlayPage = () => {
     setMode(state.preselectedMode);
     setSelectOpen(false);
     setSetupOpen(true);
-  }, [location.state]);
+  }, [location.state, sessionIdParam]);
 
 
   const currentRound = useMemo(
@@ -464,7 +463,7 @@ export const MinigamePlayPage = () => {
     const runWarmup = async () => {
       try {
         await patientAudioRef.current.warmup(grouped, { signal: controller.signal });
-      } catch (error) {
+      } catch {
         if (!controller.signal.aborted) {
           return;
         }
@@ -505,7 +504,6 @@ export const MinigamePlayPage = () => {
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
     playerId: currentRound?.player_a_id,
-    aiMode: settings.aiMode,
     audioElement,
     patientAudio,
     responseTimerEnabled: timingSettings.responseTimerEnabled,
@@ -554,7 +552,8 @@ export const MinigamePlayPage = () => {
             overallPass: payload.evaluation?.overall?.pass ?? true,
             transcript: payload.transcript,
             evaluation: payload.evaluation as EvaluationResult | undefined,
-            clientPenalty: payload.timingPenalty
+            clientPenalty: payload.timingPenalty,
+            scoreTrust: payload.scoreTrust
           })
         );
       }
@@ -570,7 +569,6 @@ export const MinigamePlayPage = () => {
     enabled: mode === "tdm" && !roundFlowLocked,
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
-    aiMode: settings.aiMode,
     audioElement,
     patientAudio,
     responseTimerEnabled: timingSettings.responseTimerEnabled,
@@ -607,7 +605,8 @@ export const MinigamePlayPage = () => {
             overallPass: payload.evaluation?.overall?.pass ?? true,
             transcript: payload.transcript,
             evaluation: payload.evaluation as EvaluationResult | undefined,
-            clientPenalty: payload.timingPenalty
+            clientPenalty: payload.timingPenalty,
+            scoreTrust: payload.scoreTrust
           })
         );
       }
@@ -727,7 +726,7 @@ export const MinigamePlayPage = () => {
         sessionId: session.session_id,
         teams: payload.teams.map((team) => ({ name: team.name, color: team.color }))
       }).unwrap();
-      teamRows = response.teams.map((team, index) => ({ ...team, id: team.id }));
+      teamRows = response.teams.map((team) => ({ ...team, id: team.id }));
     }
 
     const teamIdMap = new Map<string, string>();

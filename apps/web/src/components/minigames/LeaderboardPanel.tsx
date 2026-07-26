@@ -26,6 +26,7 @@ export const LeaderboardPanel = ({
   variant = "standalone",
   badgeLabel = "Live"
 }: LeaderboardPanelProps) => {
+  const hasLocalScores = results.some((result) => result.score_trust === "local_unverified");
   const playerStats = players.map((player) => {
     const attempts = results.filter((result) => result.player_id === player.id);
     const average =
@@ -65,9 +66,14 @@ export const LeaderboardPanel = ({
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">Leaderboard</h3>
         <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-white/70">
-          {badgeLabel}
+          {hasLocalScores ? "Local · unverified" : badgeLabel}
         </span>
       </div>
+      {hasLocalScores && (
+        <p className="mt-2 text-[11px] leading-4 text-amber-100/80">
+          Local scores count in this private game, but never in the public leaderboard.
+        </p>
+      )}
       {mode === "tdm" && (
         <div className="mt-4 space-y-2">
           {teamSummary.map((team) => (

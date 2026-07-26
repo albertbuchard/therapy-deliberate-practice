@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeliberatePracticeTaskV2, ParseMode } from "@deliberate/shared";
 import { useTranslation } from "react-i18next";
 import { Button, Label, Textarea, Input, Select } from "./AdminUi";
@@ -43,14 +43,14 @@ export const ParseTaskDialog = ({
     ? "Instruction prompt"
     : t("admin.createFromText.placeholderText");
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     setFreeText("");
     setSourceUrl("");
     setParseMode("original");
     setResult(null);
     setError(null);
     onClose();
-  };
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +65,7 @@ export const ParseTaskDialog = ({
       if (event.key === "Tab") {
         const focusable = Array.from(
           containerRef.current?.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])'
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
           ) ?? []
         );
         if (!focusable.length) return;
@@ -82,7 +82,7 @@ export const ParseTaskDialog = ({
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [open]);
+  }, [handleClose, open]);
 
   if (!open) return null;
 
