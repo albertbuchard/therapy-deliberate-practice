@@ -19,6 +19,9 @@ function matchVersion(pathname, pattern, label) {
 
 const packageVersion = readJson(path.resolve(desktopDir, "package.json")).version;
 const tauriConfig = readJson(path.resolve(tauriDir, "tauri.conf.json"));
+const linuxAppImageConfig = readJson(
+  path.resolve(tauriDir, "tauri.linux-appimage.conf.json"),
+);
 const tauriVersion = tauriConfig.version;
 const cargoVersion = matchVersion(
   path.resolve(tauriDir, "Cargo.toml"),
@@ -27,7 +30,7 @@ const cargoVersion = matchVersion(
 );
 const cargoLockVersion = matchVersion(
   path.resolve(tauriDir, "Cargo.lock"),
-  /name = "local-runtime-desktop"\nversion = "([^"]+)"/,
+  /name = "local-runtime-desktop"\r?\nversion = "([^"]+)"/,
   "Cargo.lock",
 );
 const versions = new Set([packageVersion, tauriVersion, cargoVersion, cargoLockVersion]);
@@ -54,6 +57,18 @@ for (const [target, asset] of Object.entries(assets.targets)) {
   if (!asset.name.includes(assets.python_version) || !asset.name.includes(target)) {
     throw new Error(`Python runtime asset identity does not match ${target}.`);
   }
+}
+
+if (
+  !Array.isArray(linuxAppImageConfig.bundle?.resources) ||
+  linuxAppImageConfig.bundle.resources.length !== 0 ||
+  linuxAppImageConfig.bundle?.linux?.appimage?.files?.[
+    "/usr/share/local-runtime-python"
+  ] !== "resources/local-runtime-python"
+) {
+  throw new Error(
+    "The Linux AppImage override must keep the portable runtime out of linuxdeploy's usr/lib scan.",
+  );
 }
 
 const minimumMacVersion = tauriConfig.bundle?.macOS?.minimumSystemVersion;

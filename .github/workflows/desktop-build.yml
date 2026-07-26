@@ -31,12 +31,12 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             host_python: "3.12.10"
-            bundles: app,dmg
+            bundles: app
             artifact: desktop-macos-arm64
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             host_python: "3.12.10"
-            bundles: app,dmg
+            bundles: app
             artifact: desktop-macos-intel
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
@@ -89,6 +89,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libxdo-dev \
             patchelf \
             rpm \
             xvfb
@@ -106,6 +107,7 @@ jobs:
       - name: Build verified sidecar
         run: npm run sidecar:build -w services/local-runtime-suite/desktop
       - name: Build unsigned Tauri packages
+        if: runner.os != 'Linux'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         with:
           projectPath: services/local-runtime-suite/desktop
@@ -114,6 +116,56 @@ jobs:
             --config src-tauri/tauri.conf.json
             --config src-tauri/tauri.sidecar.conf.json
             --bundles ${{ matrix.bundles }}
+            --verbose
+      # Tauri's decorative DMG helper can wait indefinitely for Finder
+      # automation on standard runners. Build the app with Tauri, then create a
+      # simple read-only installer without AppleEvents.
+      - name: Create noninteractive unsigned macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          bundle_root="services/local-runtime-suite/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          apps=("$bundle_root/macos/"*.app)
+          if [[ ${#apps[@]} -ne 1 ]]; then
+            echo "Expected exactly one macOS application bundle; found ${#apps[@]}." >&2
+            exit 1
+          fi
+          version="$(node -p "require('./services/local-runtime-suite/desktop/package.json').version")"
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) architecture="aarch64" ;;
+            x86_64-apple-darwin) architecture="x64" ;;
+            *) echo "Unsupported macOS target: ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          mkdir -p "$bundle_root/dmg"
+          services/local-runtime-suite/desktop/scripts/build-macos-dmg.sh \
+            "${apps[0]}" \
+            "$bundle_root/dmg/Local_Runtime_Suite_${version}_${architecture}.dmg"
+      - name: Build unsigned Linux deb and rpm packages
+        if: runner.os == 'Linux'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: services/local-runtime-suite/desktop
+          args: >-
+            --target ${{ matrix.target }}
+            --config src-tauri/tauri.conf.json
+            --config src-tauri/tauri.sidecar.conf.json
+            --bundles deb,rpm
+            --verbose
+      # linuxdeploy recursively rewrites ELF files under usr/lib. Keep the
+      # packaged Python/model runtime in usr/share for AppImage only.
+      - name: Build unsigned Linux AppImage
+        if: runner.os == 'Linux'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: services/local-runtime-suite/desktop
+          args: >-
+            --target ${{ matrix.target }}
+            --config src-tauri/tauri.conf.json
+            --config src-tauri/tauri.sidecar.conf.json
+            --config src-tauri/tauri.linux-appimage.conf.json
+            --bundles appimage
+            --verbose
       - name: Record unsigned build status
         shell: bash
         run: |

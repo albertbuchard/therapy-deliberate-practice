@@ -25,6 +25,8 @@ fn candidates(exe_dir: &Path, app_dir: Option<&Path>) -> Vec<PathBuf> {
             .join(PRODUCT_NAME)
             .join("local-runtime-python")
     });
+    let linux_appimage_share =
+        app_dir.map(|p| p.join("usr").join("share").join("local-runtime-python"));
     let mac2 = exe_dir
         .parent()
         .and_then(|p| p.parent())
@@ -37,6 +39,7 @@ fn candidates(exe_dir: &Path, app_dir: Option<&Path>) -> Vec<PathBuf> {
         legacy_flat,
         linux_system,
         linux_appimage,
+        linux_appimage_share,
         mac2,
     ]
     .into_iter()
@@ -184,6 +187,9 @@ mod tests {
         assert!(appimage_candidates.contains(&PathBuf::from(
             "/tmp/appimage/usr/lib/Local Runtime Suite/local-runtime-python"
         )));
+        assert!(appimage_candidates.contains(&PathBuf::from(
+            "/tmp/appimage/usr/share/local-runtime-python"
+        )));
     }
 
     #[test]
@@ -221,6 +227,28 @@ mod tests {
                 &executable_dir,
                 Some(&directory.path().join("missing")),
                 None
+            ),
+            Some(runtime)
+        );
+    }
+
+    #[test]
+    fn runtime_discovery_falls_back_to_appimage_share_layout() {
+        let directory = tempfile::tempdir().expect("temporary AppImage");
+        let executable_dir = directory.path().join("usr").join("bin");
+        let runtime = directory
+            .path()
+            .join("usr")
+            .join("share")
+            .join("local-runtime-python");
+        std::fs::create_dir_all(&executable_dir).expect("executable directory");
+        std::fs::create_dir_all(&runtime).expect("AppImage runtime directory");
+
+        assert_eq!(
+            find_runtime_root(
+                &executable_dir,
+                Some(&directory.path().join("missing-resource-dir")),
+                Some(directory.path()),
             ),
             Some(runtime)
         );

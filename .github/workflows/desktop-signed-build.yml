@@ -30,12 +30,12 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             host_python: "3.12.10"
-            bundles: app,dmg
+            bundles: app
             artifact: desktop-macos-arm64
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             host_python: "3.12.10"
-            bundles: app,dmg
+            bundles: app
             artifact: desktop-macos-intel
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
@@ -96,6 +96,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libxdo-dev \
             patchelf \
             rpm \
             xvfb
@@ -193,6 +194,47 @@ jobs:
             --config src-tauri/tauri.conf.json
             --config src-tauri/tauri.sidecar.conf.json
             --bundles ${{ matrix.bundles }}
+            --verbose
+      - name: Create, sign, and notarize macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for variable in APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "The protected macOS signing variable $variable is not configured." >&2
+              exit 1
+            fi
+          done
+          bundle_root="services/local-runtime-suite/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          apps=("$bundle_root/macos/"*.app)
+          if [[ ${#apps[@]} -ne 1 ]]; then
+            echo "Expected exactly one signed macOS application bundle; found ${#apps[@]}." >&2
+            exit 1
+          fi
+          version="$(node -p "require('./services/local-runtime-suite/desktop/package.json').version")"
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) architecture="aarch64" ;;
+            x86_64-apple-darwin) architecture="x64" ;;
+            *) echo "Unsupported macOS target: ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          mkdir -p "$bundle_root/dmg"
+          dmg_path="$bundle_root/dmg/Local_Runtime_Suite_${version}_${architecture}.dmg"
+          services/local-runtime-suite/desktop/scripts/build-macos-dmg.sh \
+            "${apps[0]}" \
+            "$dmg_path"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg_path"
       - name: Build signed Windows packages
         if: runner.os == 'Windows'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
@@ -204,7 +246,8 @@ jobs:
             --config src-tauri/tauri.sidecar.conf.json
             --config ${{ runner.temp }}/windows-signing.json
             --bundles ${{ matrix.bundles }}
-      - name: Build unsigned Linux packages
+            --verbose
+      - name: Build unsigned Linux deb and rpm packages
         if: runner.os == 'Linux'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         with:
@@ -213,7 +256,22 @@ jobs:
             --target ${{ matrix.target }}
             --config src-tauri/tauri.conf.json
             --config src-tauri/tauri.sidecar.conf.json
-            --bundles ${{ matrix.bundles }}
+            --bundles deb,rpm
+            --verbose
+      # linuxdeploy recursively rewrites ELF files under usr/lib. Keep the
+      # packaged Python/model runtime in usr/share for AppImage only.
+      - name: Build unsigned Linux AppImage
+        if: runner.os == 'Linux'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: services/local-runtime-suite/desktop
+          args: >-
+            --target ${{ matrix.target }}
+            --config src-tauri/tauri.conf.json
+            --config src-tauri/tauri.sidecar.conf.json
+            --config src-tauri/tauri.linux-appimage.conf.json
+            --bundles appimage
+            --verbose
       - name: Verify macOS signatures and notarization
         if: runner.os == 'macOS'
         shell: bash
