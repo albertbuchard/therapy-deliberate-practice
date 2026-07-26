@@ -144,14 +144,44 @@ def _safe_archive_path(root: Path, member_name: str) -> Path:
     return destination
 
 
+def _safe_archive_link_target(
+    root: Path,
+    member_name: str,
+    link_name: str,
+    *,
+    relative_to_member: bool,
+) -> Path:
+    link_path = PurePosixPath(link_name.replace("\\", "/"))
+    if link_path.is_absolute():
+        raise RuntimeError(f"Unsafe archive link target: {member_name} -> {link_name}")
+    base = PurePosixPath(member_name.replace("\\", "/")).parent if relative_to_member else PurePosixPath()
+    normalized: list[str] = []
+    for part in (*base.parts, *link_path.parts):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not normalized:
+                raise RuntimeError(f"Archive link escapes destination: {member_name} -> {link_name}")
+            normalized.pop()
+            continue
+        normalized.append(part)
+    destination = (root / Path(*normalized)).resolve()
+    if destination != root and root not in destination.parents:
+        raise RuntimeError(f"Archive link escapes destination: {member_name} -> {link_name}")
+    return destination
+
+
 def _validate_tar_member(root: Path, member: tarfile.TarInfo) -> None:
     _safe_archive_path(root, member.name)
-    if member.isdev() or member.isfifo():
+    if not (member.isreg() or member.isdir() or member.issym() or member.islnk()):
         raise RuntimeError(f"Unsupported special file in archive: {member.name}")
     if member.issym() or member.islnk():
-        link_path = PurePosixPath(member.linkname.replace("\\", "/"))
-        base = PurePosixPath(member.name).parent if member.issym() else PurePosixPath()
-        _safe_archive_path(root, str(base / link_path))
+        _safe_archive_link_target(
+            root,
+            member.name,
+            member.linkname,
+            relative_to_member=member.issym(),
+        )
 
 
 def _validate_zip_member(root: Path, member: zipfile.ZipInfo) -> None:

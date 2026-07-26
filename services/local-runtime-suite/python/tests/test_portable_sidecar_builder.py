@@ -59,6 +59,39 @@ def test_tar_extraction_rejects_parent_traversal(tmp_path) -> None:
     assert not (tmp_path / "outside.txt").exists()
 
 
+def test_tar_extraction_allows_relative_link_that_stays_inside_root(tmp_path) -> None:
+    archive = tmp_path / "safe-link.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        target = tarfile.TarInfo("python/share/terminfo/a/adm1178")
+        payload = b"terminal definition"
+        target.size = len(payload)
+        bundle.addfile(target, io.BytesIO(payload))
+        link = tarfile.TarInfo("python/share/terminfo/1/adm1178")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../a/adm1178"
+        bundle.addfile(link)
+
+    output = tmp_path / "output"
+    build_portable_sidecar.extract(archive, output)
+
+    extracted_link = output / "python/share/terminfo/1/adm1178"
+    assert extracted_link.is_symlink()
+    assert extracted_link.read_bytes() == payload
+
+
+def test_tar_extraction_rejects_link_that_escapes_root(tmp_path) -> None:
+    archive = tmp_path / "unsafe-link.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        link = tarfile.TarInfo("python/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../outside.txt"
+        bundle.addfile(link)
+
+    with pytest.raises(RuntimeError, match="Archive link escapes destination"):
+        build_portable_sidecar.extract(archive, tmp_path / "output")
+    assert not (tmp_path / "outside.txt").exists()
+
+
 def test_zip_extraction_rejects_parent_traversal(tmp_path) -> None:
     archive = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
