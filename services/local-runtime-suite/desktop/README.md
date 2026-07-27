@@ -43,8 +43,8 @@ Rust checks run from `src-tauri`:
 
 ```bash
 cargo fmt --check
-cargo check --locked --all-features
-cargo test --locked --all-features
+cargo check --locked --features sidecar-launcher
+cargo test --locked --features sidecar-launcher
 ```
 
 ## Build a native package

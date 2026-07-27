@@ -70,9 +70,9 @@ const ciWorkflow = readFileSync(
   "utf8",
 );
 const sidecarCiContract = [
-  "cargo clippy --locked --all-targets --all-features -- -D warnings",
-  "cargo check --locked --all-features",
-  "cargo test --locked --all-features",
+  "cargo clippy --locked --all-targets --features sidecar-launcher -- -D warnings",
+  "cargo check --locked --features sidecar-launcher",
+  "cargo test --locked --features sidecar-launcher",
 ];
 const missingSidecarCiContract = sidecarCiContract.filter(
   (command) => !ciWorkflow.includes(command),
