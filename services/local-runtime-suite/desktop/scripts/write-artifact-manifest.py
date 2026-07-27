@@ -8,6 +8,8 @@ import re
 import shutil
 from pathlib import Path
 
+from verify_linux_launcher_transform import LINUX_TARGET, validate_receipt
+
 PUBLISHABLE_PATTERNS = {
     "aarch64-apple-darwin": (re.compile(r"(?:aarch64|arm64).*\.dmg$", re.IGNORECASE),),
     "x86_64-apple-darwin": (
@@ -24,6 +26,7 @@ PUBLISHABLE_PATTERNS = {
     ),
 }
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+ARTIFACT_MANIFEST_SCHEMA_VERSION = 2
 EXPECTED_DESKTOP_EXECUTABLES = {
     "aarch64-apple-darwin": "local-runtime-desktop",
     "x86_64-apple-darwin": "local-runtime-desktop",
@@ -62,6 +65,29 @@ def collect_publishable_packages(bundle_dir: Path, target: str) -> list[Path]:
     return matches
 
 
+def validate_launcher_transformation(
+    target: str,
+    receipt: object,
+    *,
+    provenance: dict,
+    smoke: dict,
+) -> dict | None:
+    if target != LINUX_TARGET:
+        if receipt is not None:
+            raise RuntimeError(
+                f"{target} contains unexpected launcher transformation evidence."
+            )
+        return None
+    validated = validate_receipt(receipt)
+    if validated["pre_bundle"]["sha256"] != provenance.get(
+        "launcher_sha256"
+    ) or validated["packaged"]["sha256"] != smoke.get("packaged_launcher_sha256"):
+        raise RuntimeError(
+            "Linux launcher transformation does not connect sealed provenance to packaged smoke."
+        )
+    return validated
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
@@ -71,6 +97,7 @@ def main() -> None:
     parser.add_argument("--smoke-receipt", type=Path, required=True)
     parser.add_argument("--desktop-shell-receipt", type=Path, required=True)
     parser.add_argument("--native-backend-receipt", type=Path)
+    parser.add_argument("--launcher-transform-receipt", type=Path)
     parser.add_argument("--signature-receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
@@ -81,6 +108,11 @@ def main() -> None:
     native_backend_smoke = (
         json.loads(arguments.native_backend_receipt.read_text("utf-8"))
         if arguments.native_backend_receipt
+        else None
+    )
+    launcher_transformation = (
+        json.loads(arguments.launcher_transform_receipt.read_text("utf-8"))
+        if arguments.launcher_transform_receipt
         else None
     )
     if provenance.get("target") != arguments.target:
@@ -103,12 +135,19 @@ def main() -> None:
         # pre-package launcher digest is sealed.
         or (
             not arguments.target.endswith("apple-darwin")
+            and arguments.target != LINUX_TARGET
             and smoke["packaged_launcher_sha256"] != provenance.get("launcher_sha256")
         )
     ):
         raise RuntimeError(
             "Packaged-sidecar smoke does not identify the launcher sealed in provenance."
         )
+    launcher_transformation = validate_launcher_transformation(
+        arguments.target,
+        launcher_transformation,
+        provenance=provenance,
+        smoke=smoke,
+    )
     if signature.get("target") != arguments.target:
         raise RuntimeError(
             "Signature receipt target does not match the package target."
@@ -148,7 +187,7 @@ def main() -> None:
             "BUILD_SOURCE_SHA or GITHUB_SHA is required to seal release provenance."
         )
     manifest = {
-        "schema_version": 1,
+        "schema_version": ARTIFACT_MANIFEST_SCHEMA_VERSION,
         "target": arguments.target,
         "app_version": provenance["app_version"],
         "source_sha": source_sha,
@@ -158,6 +197,7 @@ def main() -> None:
         "packaged_sidecar_smoke": smoke,
         "desktop_shell_smoke": desktop_shell_smoke,
         "native_backend_smoke": native_backend_smoke,
+        "launcher_transformation": launcher_transformation,
         "artifact_count": len(artifacts),
         "artifact_bytes": sum(artifact["bytes"] for artifact in artifacts),
         "artifacts": artifacts,

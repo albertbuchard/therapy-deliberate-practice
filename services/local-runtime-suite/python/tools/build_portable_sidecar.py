@@ -241,6 +241,7 @@ def runtime_dependency_install_command(
         "pip",
         "install",
         "--disable-pip-version-check",
+        "--no-compile",
         "--only-binary=:all:",
         "--requirement",
         str(requirements_path),
@@ -263,6 +264,38 @@ def runtime_dependency_install_command(
             ]
         )
     return command
+
+
+def generated_bytecode_paths(root: Path) -> list[Path]:
+    generated: list[Path] = []
+    for current_root, directory_names, filenames in os.walk(root, topdown=True, followlinks=False):
+        current = Path(current_root)
+        retained_directories = []
+        for directory_name in directory_names:
+            candidate = current / directory_name
+            if directory_name == "__pycache__":
+                generated.append(candidate)
+            elif candidate.is_symlink():
+                continue
+            else:
+                retained_directories.append(directory_name)
+        directory_names[:] = retained_directories
+        generated.extend(
+            current / filename for filename in filenames if Path(filename).suffix.lower() in {".pyc", ".pyo"}
+        )
+    return sorted(generated)
+
+
+def prune_generated_bytecode(root: Path) -> None:
+    for path in generated_bytecode_paths(root):
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    remaining = generated_bytecode_paths(root)
+    if remaining:
+        relative = ", ".join(str(path.relative_to(root)) for path in remaining[:5])
+        raise RuntimeError(f"Generated Python bytecode remains in the portable runtime: {relative}")
 
 
 def embedded_python_environment() -> dict[str, str]:
@@ -439,6 +472,7 @@ def build_runtime(
                 "pip",
                 "install",
                 "--disable-pip-version-check",
+                "--no-compile",
                 "--no-deps",
                 "--target",
                 str(pylibs),
@@ -446,6 +480,7 @@ def build_runtime(
             ],
             env=environment,
         )
+        prune_generated_bytecode(runtime_root)
 
     stamp_path.write_text(json.dumps(stamp, indent=2, sort_keys=True) + "\n", "utf-8")
     (runtime_root / "build-provenance.json").write_text(

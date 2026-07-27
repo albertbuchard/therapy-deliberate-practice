@@ -228,6 +228,11 @@ jobs:
           )
           launcher="$(find "$extract_dir/squashfs-root" -type f -name 'local-runtime-gateway*' -print -quit)"
           runtime="$(find "$extract_dir/squashfs-root" -type d -name 'local-runtime-python' -print -quit)"
+          pre_bundle_launcher="services/local-runtime-suite/desktop/src-tauri/binaries/local-runtime-gateway-${{ matrix.target }}"
+          python services/local-runtime-suite/desktop/scripts/verify_linux_launcher_transform.py \
+            --pre-bundle "$pre_bundle_launcher" \
+            --packaged "$launcher" \
+            --output "release-evidence/${{ matrix.target }}/launcher-transformation.json"
           python services/local-runtime-suite/desktop/scripts/smoke-packaged-sidecar.py \
             --launcher "$launcher" \
             --runtime-root "$runtime" \
@@ -314,6 +319,10 @@ jobs:
           native_receipt="release-evidence/${{ matrix.target }}/native-backends.json"
           if [[ -f "$native_receipt" ]]; then
             args+=(--native-backend-receipt "$native_receipt")
+          fi
+          launcher_transform="release-evidence/${{ matrix.target }}/launcher-transformation.json"
+          if [[ -f "$launcher_transform" ]]; then
+            args+=(--launcher-transform-receipt "$launcher_transform")
           fi
           python services/local-runtime-suite/desktop/scripts/write-artifact-manifest.py "${args[@]}"
       - name: Upload packages and evidence

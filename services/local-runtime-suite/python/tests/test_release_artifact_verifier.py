@@ -3,15 +3,22 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "desktop" / "scripts" / "verify-release-artifacts.py"
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("verify_release_artifacts", SCRIPT_PATH)
 assert SPEC and SPEC.loader
 verify_release_artifacts = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verify_release_artifacts)
+WRITER_PATH = SCRIPT_PATH.parent / "write-artifact-manifest.py"
+WRITER_SPEC = importlib.util.spec_from_file_location("write_artifact_manifest", WRITER_PATH)
+assert WRITER_SPEC and WRITER_SPEC.loader
+write_artifact_manifest = importlib.util.module_from_spec(WRITER_SPEC)
+WRITER_SPEC.loader.exec_module(write_artifact_manifest)
 
 SOURCE_SHA = "a" * 40
 VERSION = "0.1.5"
@@ -135,6 +142,127 @@ def desktop_shell_receipt(target: str) -> dict:
     }
 
 
+def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
+    program_headers = [
+        {
+            "index": 0,
+            "type": 1,
+            "type_name": "PT_LOAD",
+            "flags": 5,
+            "offset": 0,
+            "virtual_address": 0x400000,
+            "physical_address": 0x400000,
+            "file_size": 4096,
+            "memory_size": 4096,
+            "alignment": 4096,
+            "sections": [".text", ".dynstr", ".dynamic"],
+        },
+        {
+            "index": 1,
+            "type": 2,
+            "type_name": "PT_DYNAMIC",
+            "flags": 6,
+            "offset": 2048,
+            "virtual_address": 0x400800,
+            "physical_address": 0x400800,
+            "file_size": 256,
+            "memory_size": 256,
+            "alignment": 8,
+            "sections": [".dynamic"],
+        },
+        {
+            "index": 2,
+            "type": 0x6474E551,
+            "type_name": "PT_GNU_STACK",
+            "flags": 6,
+            "offset": 0,
+            "virtual_address": 0,
+            "physical_address": 0,
+            "file_size": 0,
+            "memory_size": 0,
+            "alignment": 16,
+            "sections": [],
+        },
+    ]
+    identity = {
+        "class": "ELF64",
+        "byte_order": "little",
+        "abi": 0,
+        "abi_version": 0,
+        "machine": 62,
+        "file_type": 3,
+        "entry_point": 0x401000,
+        "flags": 0,
+        "build_id": "ab" * 20,
+    }
+    return {
+        "schema_version": 1,
+        "target": "x86_64-unknown-linux-gnu",
+        "result": "passed",
+        "transformation_kind": "linuxdeploy-rpath-v1",
+        "pre_bundle": {"sha256": pre_sha256, "runtime_paths": []},
+        "packaged": {
+            "sha256": packaged_sha256,
+            "runtime_paths": [{"tag": "RUNPATH", "value": "$ORIGIN/../lib"}],
+        },
+        "elf_identity": identity,
+        "proof": {
+            "elf_header": {
+                "class": "ELF64",
+                "byte_order": "little",
+                "ident_version": 1,
+                "abi": 0,
+                "abi_version": 0,
+                "file_type": 3,
+                "machine": 62,
+                "version": 1,
+                "entry_point": 0x401000,
+                "program_header_offset": 64,
+                "section_header_offset": 4096,
+                "flags": 0,
+                "elf_header_size": 64,
+                "program_header_entry_size": 56,
+                "program_header_count": 3,
+                "section_header_entry_size": 64,
+                "section_header_count": 6,
+                "section_name_index": 5,
+            },
+            "program_headers": {
+                "pre_bundle": program_headers,
+                "packaged": [dict(header) for header in program_headers],
+                "changed_indices": [],
+            },
+            "stable_sections": {
+                "pre_bundle_sha256": "d" * 64,
+                "packaged_sha256": "d" * 64,
+                "count": 4,
+            },
+            "changed_sections": [
+                {
+                    "name": ".dynamic",
+                    "pre_sha256": "1" * 64,
+                    "packaged_sha256": "2" * 64,
+                    "pre_offset": 2048,
+                    "packaged_offset": 2048,
+                    "pre_size": 64,
+                    "packaged_size": 64,
+                },
+                {
+                    "name": ".dynstr",
+                    "pre_sha256": "3" * 64,
+                    "packaged_sha256": "4" * 64,
+                    "pre_offset": 1024,
+                    "packaged_offset": 1024,
+                    "pre_size": 64,
+                    "packaged_size": 64,
+                },
+            ],
+            "changed_dynamic_tags": ["RUNPATH"],
+            "dynamic_string_sizes": {"pre_bundle": 64, "packaged": 64},
+        },
+    }
+
+
 def write_valid_target(root: Path, target: str) -> Path:
     target_root = root / target
     packages_dir = target_root / "packages"
@@ -186,10 +314,12 @@ def write_valid_target(root: Path, target: str) -> Path:
         "process_stopped": True,
         "platform": platform,
     }
+    if target == "x86_64-unknown-linux-gnu":
+        smoke["packaged_launcher_sha256"] = "9" * 64
     native_backend_smoke = native_backend_receipt(target, provenance)
     signature = signature_receipt(target)
     manifest = {
-        "schema_version": 1,
+        "schema_version": verify_release_artifacts.ARTIFACT_MANIFEST_SCHEMA_VERSION,
         "target": target,
         "app_version": VERSION,
         "source_sha": SOURCE_SHA,
@@ -199,6 +329,14 @@ def write_valid_target(root: Path, target: str) -> Path:
         "packaged_sidecar_smoke": smoke,
         "desktop_shell_smoke": desktop_shell_receipt(target),
         "native_backend_smoke": native_backend_smoke,
+        "launcher_transformation": (
+            linux_transform_receipt(
+                provenance["launcher_sha256"],
+                smoke["packaged_launcher_sha256"],
+            )
+            if target == "x86_64-unknown-linux-gnu"
+            else None
+        ),
         "artifact_count": len(artifacts),
         "artifact_bytes": sum(item["bytes"] for item in artifacts),
         "artifacts": artifacts,
@@ -255,17 +393,84 @@ def test_fail_open_manifest_shapes_are_rejected(tmp_path, mutation, message) -> 
         )
 
 
-def test_unsigned_launcher_hash_must_match_sealed_provenance(tmp_path) -> None:
+def test_linux_launcher_hash_change_requires_matching_transform_receipt(tmp_path) -> None:
     path = write_valid_target(tmp_path, "x86_64-unknown-linux-gnu")
     manifest = json.loads(path.read_text())
-    manifest["packaged_sidecar_smoke"]["packaged_launcher_sha256"] = "9" * 64
+    manifest["launcher_transformation"]["packaged"]["sha256"] = "8" * 64
 
-    with pytest.raises(RuntimeError, match="smoke is inconsistent"):
+    with pytest.raises(RuntimeError, match="does not connect sealed provenance"):
         verify_release_artifacts.verify_manifest(
             path,
             manifest,
             expected_version=VERSION,
             source_sha=SOURCE_SHA,
+        )
+
+
+def test_linux_launcher_transform_receipt_cannot_be_omitted(tmp_path) -> None:
+    path = write_valid_target(tmp_path, "x86_64-unknown-linux-gnu")
+    manifest = json.loads(path.read_text())
+    manifest["launcher_transformation"] = None
+
+    with pytest.raises(RuntimeError, match="launcher transformation"):
+        verify_release_artifacts.verify_manifest(
+            path,
+            manifest,
+            expected_version=VERSION,
+            source_sha=SOURCE_SHA,
+        )
+
+
+def test_non_linux_target_rejects_launcher_transform_receipt(tmp_path) -> None:
+    path = write_valid_target(tmp_path, "aarch64-apple-darwin")
+    manifest = json.loads(path.read_text())
+    manifest["launcher_transformation"] = linux_transform_receipt("4" * 64, "9" * 64)
+
+    with pytest.raises(RuntimeError, match="unexpected launcher transformation"):
+        verify_release_artifacts.verify_manifest(
+            path,
+            manifest,
+            expected_version=VERSION,
+            source_sha=SOURCE_SHA,
+        )
+
+
+def test_linux_launcher_transform_rejects_executable_stack(tmp_path) -> None:
+    path = write_valid_target(tmp_path, "x86_64-unknown-linux-gnu")
+    manifest = json.loads(path.read_text())
+    for side in ("pre_bundle", "packaged"):
+        manifest["launcher_transformation"]["proof"]["program_headers"][side][2]["flags"] = 7
+
+    with pytest.raises(RuntimeError, match="executable PT_GNU_STACK"):
+        verify_release_artifacts.verify_manifest(
+            path,
+            manifest,
+            expected_version=VERSION,
+            source_sha=SOURCE_SHA,
+        )
+
+
+def test_manifest_writer_requires_linux_transform_to_bind_both_launcher_hashes() -> None:
+    provenance = {"launcher_sha256": "4" * 64}
+    smoke = {"packaged_launcher_sha256": "9" * 64}
+    receipt = linux_transform_receipt(provenance["launcher_sha256"], smoke["packaged_launcher_sha256"])
+
+    assert (
+        write_artifact_manifest.validate_launcher_transformation(
+            "x86_64-unknown-linux-gnu",
+            receipt,
+            provenance=provenance,
+            smoke=smoke,
+        )
+        == receipt
+    )
+    receipt["packaged"]["sha256"] = "8" * 64
+    with pytest.raises(RuntimeError, match="connect sealed provenance"):
+        write_artifact_manifest.validate_launcher_transformation(
+            "x86_64-unknown-linux-gnu",
+            receipt,
+            provenance=provenance,
+            smoke=smoke,
         )
 
 

@@ -7,6 +7,8 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from verify_linux_launcher_transform import LINUX_TARGET, validate_receipt
+
 EXPECTED_SIGNING = {
     "aarch64-apple-darwin": "signed-notarized",
     "x86_64-apple-darwin": "signed-notarized",
@@ -51,6 +53,7 @@ MANIFEST_FIELDS = {
     "packaged_sidecar_smoke",
     "desktop_shell_smoke",
     "native_backend_smoke",
+    "launcher_transformation",
     "artifact_count",
     "artifact_bytes",
     "artifacts",
@@ -96,6 +99,7 @@ DESKTOP_SHELL_SMOKE_FIELDS = {
 }
 ARTIFACT_FIELDS = {"path", "bytes", "sha256"}
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+ARTIFACT_MANIFEST_SCHEMA_VERSION = 2
 NATIVE_BACKEND_TARGETS = {
     "aarch64-apple-darwin": {
         "system": "Darwin",
@@ -198,6 +202,29 @@ def verify_signature_evidence(target: str, evidence: Any) -> None:
     )
     if not all(value is True for value in checks.values()):
         raise RuntimeError(f"{target} signature checks did not all pass.")
+
+
+def verify_launcher_transformation(
+    target: str,
+    evidence: Any,
+    *,
+    provenance: dict[str, Any],
+    smoke: dict[str, Any],
+) -> None:
+    if target != LINUX_TARGET:
+        if evidence is not None:
+            raise RuntimeError(
+                f"{target} contains unexpected launcher transformation evidence."
+            )
+        return
+    evidence = validate_receipt(evidence)
+    if (
+        evidence["pre_bundle"]["sha256"] != provenance["launcher_sha256"]
+        or evidence["packaged"]["sha256"] != smoke["packaged_launcher_sha256"]
+    ):
+        raise RuntimeError(
+            "Linux launcher transformation does not connect sealed provenance to packaged smoke."
+        )
 
 
 def verify_native_backend_smoke(
@@ -400,8 +427,10 @@ def verify_manifest(
     source_sha: str,
 ) -> str:
     manifest = require_exact_fields(manifest, MANIFEST_FIELDS, "artifact manifest")
-    if manifest["schema_version"] != 1:
-        raise RuntimeError("Artifact manifest must use schema_version 1.")
+    if manifest["schema_version"] != ARTIFACT_MANIFEST_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Artifact manifest must use schema_version {ARTIFACT_MANIFEST_SCHEMA_VERSION}."
+        )
     target = manifest["target"]
     if target not in EXPECTED_SIGNING:
         raise RuntimeError(f"Unknown release target: {target}.")
@@ -459,6 +488,7 @@ def verify_manifest(
         # smoke's stable hash and required signature/notarization evidence.
         or (
             not target.endswith("apple-darwin")
+            and target != LINUX_TARGET
             and smoke["packaged_launcher_sha256"] != provenance["launcher_sha256"]
         )
         or not isinstance(smoke["startup_ms"], (int, float))
@@ -474,6 +504,12 @@ def verify_manifest(
         raise RuntimeError(
             f"{target} packaged-sidecar smoke is inconsistent or incomplete."
         )
+    verify_launcher_transformation(
+        target,
+        manifest["launcher_transformation"],
+        provenance=provenance,
+        smoke=smoke,
+    )
     verify_native_backend_smoke(
         target,
         manifest["native_backend_smoke"],

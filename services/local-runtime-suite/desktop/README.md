@@ -65,7 +65,9 @@ The manual `desktop-build` GitHub Actions workflow is the supported unsigned, bu
 - creates Tauri packages without publishing;
 - installs or extracts a package and starts its packaged gateway;
 - verifies health, pairing-key authorization, catalog access, and clean shutdown;
-- writes checksummed artifact and provenance manifests;
+- removes generated Python bytecode from the portable runtime so Windows installer paths remain bounded;
+- writes checksummed artifact and provenance manifests, including a fail-closed Linux receipt that
+  binds the pre-bundle launcher to the AppImage launcher after `linuxdeploy` changes its runtime path;
 - can run bounded Qwen and Faster Whisper inference from the packaged Linux payload;
 - uploads checksummed build artifacts and evidence.
 
