@@ -165,6 +165,8 @@ function buildRustLauncher(target) {
       path.resolve(tauriDir, "Cargo.toml"),
       "--bin",
       sidecarName,
+      "--features",
+      "sidecar-launcher",
       "--target",
       target,
     ],

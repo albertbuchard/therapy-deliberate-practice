@@ -29,6 +29,11 @@ const cargoVersion = matchVersion(
   /^\s*version\s*=\s*"([^"]+)"/m,
   "Cargo",
 );
+const cargoManifest = readFileSync(path.resolve(tauriDir, "Cargo.toml"), "utf8");
+const sidecarBuildScript = readFileSync(
+  path.resolve(desktopDir, "scripts", "build-sidecar.mjs"),
+  "utf8",
+);
 const cargoLockVersion = matchVersion(
   path.resolve(tauriDir, "Cargo.lock"),
   /name = "local-runtime-desktop"\r?\nversion = "([^"]+)"/,
@@ -38,6 +43,43 @@ const versions = new Set([packageVersion, tauriVersion, cargoVersion, cargoLockV
 if (versions.size !== 1) {
   throw new Error(
     `Desktop versions disagree: package=${packageVersion}, Tauri=${tauriVersion}, Cargo=${cargoVersion}, Cargo.lock=${cargoLockVersion}.`,
+  );
+}
+
+const windowsSidecarPackagingContract = [
+  "autobins = false",
+  'name = "local-runtime-desktop"',
+  'name = "local-runtime-gateway"',
+  'required-features = ["sidecar-launcher"]',
+  "sidecar-launcher = []",
+];
+const missingSidecarManifestContract = windowsSidecarPackagingContract.filter(
+  (snippet) => !cargoManifest.includes(snippet),
+);
+if (
+  missingSidecarManifestContract.length > 0 ||
+  !sidecarBuildScript.includes('"--features",\n      "sidecar-launcher"')
+) {
+  throw new Error(
+    "The sidecar launcher must require its dedicated Cargo feature so Tauri does not package it twice in Windows MSI.",
+  );
+}
+
+const ciWorkflow = readFileSync(
+  path.resolve(repositoryDir, ".github", "workflows", "ci.yml"),
+  "utf8",
+);
+const sidecarCiContract = [
+  "cargo clippy --locked --all-targets --all-features -- -D warnings",
+  "cargo check --locked --all-features",
+  "cargo test --locked --all-features",
+];
+const missingSidecarCiContract = sidecarCiContract.filter(
+  (command) => !ciWorkflow.includes(command),
+);
+if (missingSidecarCiContract.length > 0) {
+  throw new Error(
+    `Continuous integration must validate the feature-gated sidecar launcher: ${missingSidecarCiContract.join(", ")}`,
   );
 }
 

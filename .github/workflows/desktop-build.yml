@@ -205,6 +205,7 @@ jobs:
             --bundles appimage
             --verbose
       - name: Verify Linux AppImage launcher transformation
+        id: linux_launcher_transform
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -218,10 +219,31 @@ jobs:
           )
           launcher="$(find "$extract_dir/squashfs-root" -type f -name 'local-runtime-gateway*' -print -quit)"
           pre_bundle_launcher="services/local-runtime-suite/desktop/src-tauri/binaries/local-runtime-gateway-${{ matrix.target }}"
+          diagnostic_dir="release-evidence/${{ matrix.target }}/launcher-diagnostic"
+          mkdir -p "$diagnostic_dir"
+          cp "$pre_bundle_launcher" "$diagnostic_dir/pre-bundle-launcher"
+          cp "$launcher" "$diagnostic_dir/packaged-launcher"
+          (
+            cd "$diagnostic_dir"
+            sha256sum pre-bundle-launcher packaged-launcher > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
           python services/local-runtime-suite/desktop/scripts/verify_linux_launcher_transform.py \
             --pre-bundle "$pre_bundle_launcher" \
             --packaged "$launcher" \
             --output "release-evidence/${{ matrix.target }}/launcher-transformation.json"
+      - name: Upload rejected Linux launcher transformation evidence
+        if: >-
+          always() &&
+          runner.os == 'Linux' &&
+          steps.linux_launcher_transform.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: linux-launcher-diagnostic-${{ env.BUILD_SOURCE_SHA }}
+          path: release-evidence/${{ matrix.target }}/launcher-diagnostic
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Build unsigned Linux deb and rpm packages
         if: runner.os == 'Linux'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
