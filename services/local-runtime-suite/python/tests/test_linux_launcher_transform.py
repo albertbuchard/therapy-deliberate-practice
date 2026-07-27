@@ -43,6 +43,7 @@ def build_elf(
     text: bytes = b"stable text code",
     program_headers_offset: int = ELF_HEADER.size,
     section_headers_offset: int = 0x400,
+    program_header_count: int = 3,
 ) -> None:
     base_address = 0x400000
     text_offset = 0x200
@@ -52,7 +53,7 @@ def build_elf(
     names_offset = 0x2D0
     payload_size = max(
         section_headers_offset + 6 * SECTION_HEADER.size,
-        program_headers_offset + 3 * PROGRAM_HEADER.size,
+        program_headers_offset + program_header_count * PROGRAM_HEADER.size,
         0x580,
     )
     payload = bytearray(payload_size)
@@ -71,7 +72,7 @@ def build_elf(
         0,
         ELF_HEADER.size,
         PROGRAM_HEADER.size,
-        3,
+        program_header_count,
         SECTION_HEADER.size,
         6,
         5,
@@ -255,6 +256,23 @@ def test_linuxdeploy_transform_rejects_program_header_table_relocation(tmp_path)
 
     with pytest.raises(RuntimeError, match="moved the program-header table"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
+
+
+def test_linuxdeploy_transform_reports_and_rejects_program_header_count_change(
+    tmp_path,
+) -> None:
+    pre_bundle = tmp_path / "pre-launcher"
+    packaged = tmp_path / "packaged-launcher"
+    build_elf(pre_bundle, runpath=False)
+    build_elf(packaged, runpath=True, program_header_count=4)
+
+    with pytest.raises(RuntimeError) as raised:
+        verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
+
+    assert str(raised.value) == (
+        "linuxdeploy changed the canonical ELF header semantics: "
+        '[{"field":"program_header_count","packaged":4,"pre_bundle":3}]'
+    )
 
 
 def test_linuxdeploy_transform_rejects_pt_load_permission_change(tmp_path) -> None:

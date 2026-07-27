@@ -662,11 +662,31 @@ def _canonical_dynamic_entries(entries: list[dict[str, Any]]) -> list[dict[str, 
     return [entry for entry in entries if entry["tag"] not in ALLOWED_DYNAMIC_TAGS]
 
 
+def _header_differences(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "field": field,
+            "pre_bundle": before.get(field),
+            "packaged": after.get(field),
+        }
+        for field in sorted(set(before) | set(after))
+        if before.get(field) != after.get(field)
+    ]
+
+
 def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
     before = ElfFile(pre_bundle)
     after = ElfFile(packaged)
-    if before.semantic_header() != after.semantic_header():
-        raise RuntimeError("linuxdeploy changed the canonical ELF header semantics.")
+    header_differences = _header_differences(
+        before.semantic_header(), after.semantic_header()
+    )
+    if header_differences:
+        raise RuntimeError(
+            "linuxdeploy changed the canonical ELF header semantics: "
+            f"{json.dumps(header_differences, sort_keys=True, separators=(',', ':'))}"
+        )
     if before.header["program_header_offset"] != after.header["program_header_offset"]:
         raise RuntimeError("linuxdeploy moved the program-header table.")
     if before.identity() != after.identity():

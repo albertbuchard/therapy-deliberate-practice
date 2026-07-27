@@ -190,17 +190,6 @@ jobs:
           services/local-runtime-suite/desktop/scripts/build-macos-dmg.sh \
             "${apps[0]}" \
             "$bundle_root/dmg/Local_Runtime_Suite_${version}_${architecture}.dmg"
-      - name: Build unsigned Linux deb and rpm packages
-        if: runner.os == 'Linux'
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        with:
-          projectPath: services/local-runtime-suite/desktop
-          args: >-
-            --target ${{ matrix.target }}
-            --config src-tauri/tauri.conf.json
-            --config src-tauri/tauri.sidecar.conf.json
-            --bundles deb,rpm
-            --verbose
       # linuxdeploy recursively rewrites ELF files under usr/lib. Keep the
       # packaged Python/model runtime in usr/share for AppImage only.
       - name: Build unsigned Linux AppImage
@@ -214,6 +203,35 @@ jobs:
             --config src-tauri/tauri.sidecar.conf.json
             --config src-tauri/tauri.linux-appimage.conf.json
             --bundles appimage
+            --verbose
+      - name: Verify Linux AppImage launcher transformation
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          appimage="$(find "services/local-runtime-suite/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage" -name '*.AppImage' -print -quit)"
+          chmod +x "$appimage"
+          extract_dir="$RUNNER_TEMP/local-runtime-transform"
+          mkdir -p "$extract_dir"
+          (
+            cd "$extract_dir"
+            "$GITHUB_WORKSPACE/$appimage" --appimage-extract
+          )
+          launcher="$(find "$extract_dir/squashfs-root" -type f -name 'local-runtime-gateway*' -print -quit)"
+          pre_bundle_launcher="services/local-runtime-suite/desktop/src-tauri/binaries/local-runtime-gateway-${{ matrix.target }}"
+          python services/local-runtime-suite/desktop/scripts/verify_linux_launcher_transform.py \
+            --pre-bundle "$pre_bundle_launcher" \
+            --packaged "$launcher" \
+            --output "release-evidence/${{ matrix.target }}/launcher-transformation.json"
+      - name: Build unsigned Linux deb and rpm packages
+        if: runner.os == 'Linux'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: services/local-runtime-suite/desktop
+          args: >-
+            --target ${{ matrix.target }}
+            --config src-tauri/tauri.conf.json
+            --config src-tauri/tauri.sidecar.conf.json
+            --bundles deb,rpm
             --verbose
       - name: Record unsigned build status
         shell: bash
@@ -277,11 +295,6 @@ jobs:
           )
           launcher="$(find "$extract_dir/squashfs-root" -type f -name 'local-runtime-gateway*' -print -quit)"
           runtime="$(find "$extract_dir/squashfs-root" -type d -name 'local-runtime-python' -print -quit)"
-          pre_bundle_launcher="services/local-runtime-suite/desktop/src-tauri/binaries/local-runtime-gateway-${{ matrix.target }}"
-          python services/local-runtime-suite/desktop/scripts/verify_linux_launcher_transform.py \
-            --pre-bundle "$pre_bundle_launcher" \
-            --packaged "$launcher" \
-            --output "release-evidence/${{ matrix.target }}/launcher-transformation.json"
           python services/local-runtime-suite/desktop/scripts/smoke-packaged-sidecar.py \
             --launcher "$launcher" \
             --runtime-root "$runtime" \
