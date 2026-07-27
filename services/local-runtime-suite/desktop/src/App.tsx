@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayLaunchButton } from "./components/GatewayLaunchButton";
 import { useGatewayBoot } from "./hooks/useGatewayBoot";
+import {
+  fetchInferenceWithTimeout,
+  gatewayResponseError
+} from "./lib/inferenceRequest";
 import type { GatewayBootState } from "./hooks/useGatewayBoot";
 
 type ModelSummary = {
@@ -580,16 +584,6 @@ export const App = () => {
     logEvent("Copied text to clipboard.");
   };
 
-  const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = 120_000) => {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(url, { ...init, signal: controller.signal });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  };
-
   const runQuickTests = async () => {
     if (status !== "running") {
       const message = "Gateway is not running. Start it before running tests.";
@@ -640,8 +634,9 @@ export const App = () => {
     const llmStart = performance.now();
     let llmResult: QuickTestResult;
     try {
-      const response = await fetchWithTimeout(
+      const response = await fetchInferenceWithTimeout(
         `${baseUrl}/v1/responses`,
+        pairing.token,
         {
           method: "POST",
           headers: {
@@ -658,7 +653,7 @@ export const App = () => {
       );
       const durationMs = Math.round(performance.now() - llmStart);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw await gatewayResponseError(response);
       }
       const data = await response.json();
       const text =
@@ -686,8 +681,9 @@ export const App = () => {
       formData.append("file", makeSilentWavBlob(), "selftest.wav");
       formData.append("response_format", "json");
       formData.append("language", "en");
-      const response = await fetchWithTimeout(
+      const response = await fetchInferenceWithTimeout(
         `${baseUrl}/v1/audio/transcriptions`,
+        pairing.token,
         {
           method: "POST",
           headers: {
@@ -699,7 +695,7 @@ export const App = () => {
       );
       const durationMs = Math.round(performance.now() - sttStart);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw await gatewayResponseError(response);
       }
       const data = await response.json();
       const text = typeof data?.text === "string" ? data.text : undefined;

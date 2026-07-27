@@ -106,11 +106,48 @@ jobs:
           git diff --exit-code apps/web/public/local-suite/models.json
       - name: Build verified sidecar
         run: npm run sidecar:build -w services/local-runtime-suite/desktop
-      - name: Build unsigned Tauri packages
-        if: runner.os != 'Linux'
+      - name: Prepare short Windows packaging root
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $drive = "T:"
+          if (Test-Path "$drive\") {
+            throw "$drive is already in use on this runner."
+          }
+          subst $drive $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $shortRoot = "$drive\"
+          $resourceRoot = "$drive\services\local-runtime-suite\desktop\src-tauri\resources"
+          $longest = Get-ChildItem $resourceRoot -Recurse -Force -File |
+            ForEach-Object {
+              "$shortRoot$([IO.Path]::GetRelativePath($shortRoot, $_.FullName))"
+            } |
+            Sort-Object Length -Descending |
+            Select-Object -First 1
+          if (-not $longest) {
+            throw "The Tauri resource tree is empty."
+          }
+          if ($longest.Length -gt 240) {
+            throw "A Tauri resource path remains too long for safe NSIS input ($($longest.Length)): $longest"
+          }
+          "WINDOWS_TAURI_PROJECT=$drive\services\local-runtime-suite\desktop" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build unsigned macOS packages
+        if: runner.os == 'macOS'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         with:
           projectPath: services/local-runtime-suite/desktop
+          args: >-
+            --target ${{ matrix.target }}
+            --config src-tauri/tauri.conf.json
+            --config src-tauri/tauri.sidecar.conf.json
+            --bundles ${{ matrix.bundles }}
+            --verbose
+      - name: Build unsigned Windows packages
+        if: runner.os == 'Windows'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: ${{ env.WINDOWS_TAURI_PROJECT }}
           args: >-
             --target ${{ matrix.target }}
             --config src-tauri/tauri.conf.json

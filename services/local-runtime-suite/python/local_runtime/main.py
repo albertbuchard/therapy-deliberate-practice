@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import secrets
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,6 +21,15 @@ from local_runtime.api.openai_compat import (
     format_models_list,
     format_responses_create,
     format_responses_stream,
+)
+from local_runtime.cancellation import (
+    ActiveRequestRegistry,
+    CancellationToken,
+    InferenceCancelledError,
+    InferenceTimeoutError,
+    ModelBusyError,
+    RequestIdInUseError,
+    validate_client_request_id,
 )
 from local_runtime.core.config import RuntimeConfig
 from local_runtime.core.doctor import run_doctor
@@ -42,6 +52,8 @@ from local_runtime.helpers.structured_enforcer import (
 from local_runtime.runtime_types import RunContext, RunRequest
 
 LOGGER = configure_logging()
+CLIENT_DISCONNECT_POLL_SECONDS = 0.1
+DEFAULT_INFERENCE_TIMEOUT_SECONDS = 300.0
 
 
 @asynccontextmanager
@@ -55,6 +67,7 @@ async def lifespan(app: FastAPI):
         config = RuntimeConfig.load()
         config.ensure_dirs()
         app.state.config = config
+        app.state.active_requests = ActiveRequestRegistry()
         platform_id = detect_platform()
         app.state.platform_id = platform_id
         readiness.platform_id = platform_id
@@ -161,7 +174,14 @@ def _parse_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-DEFAULT_ALLOWED_ORIGINS = ["https://therapy-deliberate-practice.com"]
+DEFAULT_ALLOWED_ORIGINS = [
+    "https://therapy-deliberate-practice.com",
+    # Tauri 2 serves packaged frontends from these exact production origins.
+    # The bearer capability and loopback Host check remain the authorization
+    # boundary; this list only permits the packaged WebView to reach it.
+    "http://tauri.localhost",
+    "tauri://localhost",
+]
 LOCAL_ORIGIN_PATTERN = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 
 
@@ -199,7 +219,12 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _build_context(request_id: str, endpoint: str | None = None, model_id: str | None = None) -> RunContext:
+def _build_context(
+    request_id: str,
+    endpoint: str | None = None,
+    model_id: str | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> RunContext:
     config: RuntimeConfig = app.state.config
     return RunContext(
         request_id=request_id,
@@ -209,7 +234,7 @@ def _build_context(request_id: str, endpoint: str | None = None, model_id: str |
         platform=app.state.platform_id,
         registry=app.state.registry,
         http_client=app.state.http_client,
-        cancellation_token=None,
+        cancellation_token=cancellation_token,
     )
 
 
@@ -220,16 +245,24 @@ def _resolve_requested_model(endpoint: str, requested: str | None) -> str | None
     return registry.selected_defaults.get(endpoint)
 
 
-def _ctx_factory(request_id: str, endpoint: str | None = None, model_id: str | None = None) -> RunContext:
-    return _build_context(request_id, endpoint=endpoint, model_id=model_id)
+def _ctx_factory(
+    request_id: str,
+    endpoint: str | None = None,
+    model_id: str | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> RunContext:
+    return _build_context(
+        request_id,
+        endpoint=endpoint,
+        model_id=model_id,
+        cancellation_token=cancellation_token,
+    )
 
 
 def _is_loopback_host(host_header: str | None) -> bool:
     if not host_header:
         return False
     value = host_header.strip().lower()
-    if value == "[::1]" or value.startswith("[::1]:"):
-        return True
     hostname = value.rsplit(":", 1)[0] if ":" in value else value
     return hostname in {"127.0.0.1", "localhost"}
 
@@ -287,7 +320,19 @@ async def home_page() -> HTMLResponse:
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next: Callable):
-    request_id = request.headers.get("x-request-id") or f"req_{uuid.uuid4().hex}"
+    supplied_request_id = request.headers.get("x-request-id")
+    if supplied_request_id:
+        try:
+            request_id = validate_client_request_id(supplied_request_id)
+        except ValueError as exc:
+            return format_error(
+                str(exc),
+                err_type="invalid_request_error",
+                code="invalid_request_id",
+                status_code=400,
+            )
+    else:
+        request_id = f"req_{uuid.uuid4().hex}"
     request.state.request_id = request_id
     token = push_log_context(request_id=request_id, endpoint=str(request.url.path))
     start = time.perf_counter()
@@ -346,6 +391,111 @@ async def request_context_middleware(request: Request, call_next: Callable):
         raise
     finally:
         pop_log_context(token)
+
+
+async def _watch_request_disconnect(request: Request, token: CancellationToken) -> None:
+    while not token.cancelled:
+        if await request.is_disconnected():
+            token.cancel()
+            return
+        await asyncio.sleep(CLIENT_DISCONNECT_POLL_SECONDS)
+
+
+def _begin_inference(
+    request: Request,
+    *,
+    timeout_seconds: float,
+) -> tuple[str, CancellationToken, asyncio.Task[None]]:
+    request_id = getattr(request.state, "request_id", f"req_{uuid.uuid4().hex}")
+    registry: ActiveRequestRegistry = app.state.active_requests
+    token = registry.register(request_id, timeout_seconds=timeout_seconds)
+    watcher = asyncio.create_task(_watch_request_disconnect(request, token))
+    return request_id, token, watcher
+
+
+def _inference_timeout_seconds(selected: LoadedModel) -> float:
+    limits = getattr(selected.spec, "limits", None)
+    configured = getattr(limits, "timeout_sec", None)
+    return float(configured or DEFAULT_INFERENCE_TIMEOUT_SECONDS)
+
+
+async def _finish_inference(
+    request_id: str,
+    token: CancellationToken,
+    watcher: asyncio.Task[None],
+) -> None:
+    token.cancel()
+    watcher.cancel()
+    try:
+        await watcher
+    except asyncio.CancelledError:
+        pass
+    registry: ActiveRequestRegistry = app.state.active_requests
+    registry.finish(request_id)
+
+
+async def _finalize_inference_stream(
+    source: AsyncIterator,
+    request_id: str,
+    token: CancellationToken,
+    watcher: asyncio.Task[None],
+) -> AsyncIterator:
+    try:
+        async for item in source:
+            yield item
+    except InferenceTimeoutError as exc:
+        yield {
+            "event": "error",
+            "data": {
+                "error": {
+                    "type": "inference_timeout",
+                    "code": "inference_timeout",
+                    "message": str(exc),
+                    "status": 504,
+                },
+                "request_id": request_id,
+            },
+        }
+    except InferenceCancelledError as exc:
+        yield {
+            "event": "error",
+            "data": {
+                "error": {
+                    "type": "inference_cancelled",
+                    "code": "inference_cancelled",
+                    "message": str(exc),
+                    "status": 499,
+                },
+                "request_id": request_id,
+            },
+        }
+    finally:
+        await _finish_inference(request_id, token, watcher)
+
+
+def _format_inference_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, ModelBusyError):
+        return format_error(
+            str(exc),
+            err_type="model_busy",
+            code="model_busy",
+            status_code=409,
+        )
+    if isinstance(exc, InferenceTimeoutError):
+        return format_error(
+            str(exc),
+            err_type="inference_timeout",
+            code="inference_timeout",
+            status_code=504,
+        )
+    if isinstance(exc, InferenceCancelledError):
+        return format_error(
+            str(exc),
+            err_type="inference_cancelled",
+            code="inference_cancelled",
+            status_code=499,
+        )
+    raise exc
 
 
 @app.get("/health")
@@ -512,6 +662,42 @@ def _select_model(endpoint: str, requested: str | None) -> LoadedModel:
     return selection.select(models, endpoint, requested=requested_id)
 
 
+@app.post("/v1/requests/cancel")
+async def cancel_inference_request(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    request_id = payload.get("request_id")
+    if not isinstance(request_id, str):
+        return format_error(
+            "request_id is required.",
+            err_type="invalid_request_error",
+            code="invalid_request_id",
+            status_code=400,
+        )
+    try:
+        validate_client_request_id(request_id)
+    except ValueError as exc:
+        return format_error(
+            str(exc),
+            err_type="invalid_request_error",
+            code="invalid_request_id",
+            status_code=400,
+        )
+    registry: ActiveRequestRegistry = app.state.active_requests
+    registry.cancel(request_id)
+    return JSONResponse(
+        {
+            "status": "cancellation_requested",
+            "request_id": request_id,
+        },
+        status_code=202,
+    )
+
+
 @app.post("/v1/responses")
 async def responses(request: Request) -> Response:
     payload = await request.json()
@@ -522,11 +708,28 @@ async def responses(request: Request) -> Response:
     except ModelNotFoundError as exc:
         return format_error(str(exc), err_type="not_found", status_code=404)
     model_id = selected.spec.id
-    ctx = _ctx_factory(request_id, endpoint="responses", model_id=model_id)
     try:
         structured_config = detect_structured_mode(payload)
     except ValueError as exc:
         return format_error(str(exc), err_type="invalid_request_error", status_code=400)
+    try:
+        request_id, cancellation_token, disconnect_watcher = _begin_inference(
+            request,
+            timeout_seconds=_inference_timeout_seconds(selected),
+        )
+    except RequestIdInUseError as exc:
+        return format_error(
+            str(exc),
+            err_type="request_id_in_use",
+            code="request_id_in_use",
+            status_code=409,
+        )
+    ctx = _ctx_factory(
+        request_id,
+        endpoint="responses",
+        model_id=model_id,
+        cancellation_token=cancellation_token,
+    )
     start = time.perf_counter()
     if structured_config:
         enforcer = StructuredOutputEnforcer(
@@ -534,10 +737,14 @@ async def responses(request: Request) -> Response:
         )
         try:
             structured_result = await enforcer.run(payload)
+        except (InferenceCancelledError, ModelBusyError) as exc:
+            return _format_inference_error(exc)
         except StructuredOutputFailure as exc:
             return format_error(str(exc), err_type="invalid_request_error", status_code=422)
         except RuntimeError as exc:  # jsonschema missing or unexpected enforcement failure
             return format_error(str(exc), status_code=500)
+        finally:
+            await _finish_inference(request_id, cancellation_token, disconnect_watcher)
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         app.state.logger.info(
             "responses.run",
@@ -561,15 +768,35 @@ async def responses(request: Request) -> Response:
         )
         return JSONResponse(payload_out)
     run_request = RunRequest(endpoint="responses", model=model_id, json=payload, stream=stream)
-    result = await selected.module.run(run_request, ctx)
-    duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info(
-        "responses.run", extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms}
-    )
-    if stream:
-        return StreamingResponse(format_responses_stream(result), media_type="text/event-stream")
-    payload_out = format_responses_create(result, model_id, request_id=request_id)
-    return JSONResponse(payload_out)
+    stream_owns_cleanup = False
+    try:
+        result = await selected.module.run(run_request, ctx)
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        app.state.logger.info(
+            "responses.run",
+            extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+        )
+        if stream:
+            response = StreamingResponse(
+                format_responses_stream(
+                    _finalize_inference_stream(
+                        result,
+                        request_id,
+                        cancellation_token,
+                        disconnect_watcher,
+                    )
+                ),
+                media_type="text/event-stream",
+            )
+            stream_owns_cleanup = True
+            return response
+        payload_out = format_responses_create(result, model_id, request_id=request_id)
+        return JSONResponse(payload_out)
+    except (InferenceCancelledError, ModelBusyError) as exc:
+        return _format_inference_error(exc)
+    finally:
+        if not stream_owns_cleanup:
+            await _finish_inference(request_id, cancellation_token, disconnect_watcher)
 
 
 @app.post("/v1/audio/speech")
@@ -607,15 +834,52 @@ async def audio_transcriptions(request: Request) -> Response:
         files={"file": files["file"].__dict__},
         stream=stream,
     )
-    ctx = _ctx_factory(request_id, endpoint="audio.transcriptions", model_id=model_id)
-    start = time.perf_counter()
-    result = await selected.module.run(run_request, ctx)
-    duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info(
-        "audio.transcriptions.run",
-        extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+    try:
+        request_id, cancellation_token, disconnect_watcher = _begin_inference(
+            request,
+            timeout_seconds=_inference_timeout_seconds(selected),
+        )
+    except RequestIdInUseError as exc:
+        return format_error(
+            str(exc),
+            err_type="request_id_in_use",
+            code="request_id_in_use",
+            status_code=409,
+        )
+    ctx = _ctx_factory(
+        request_id,
+        endpoint="audio.transcriptions",
+        model_id=model_id,
+        cancellation_token=cancellation_token,
     )
-    return format_audio_transcription_response(result, response_format, stream)
+    start = time.perf_counter()
+    stream_owns_cleanup = False
+    try:
+        result = await selected.module.run(run_request, ctx)
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        app.state.logger.info(
+            "audio.transcriptions.run",
+            extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+        )
+        if stream:
+            response = format_audio_transcription_response(
+                _finalize_inference_stream(
+                    result,
+                    request_id,
+                    cancellation_token,
+                    disconnect_watcher,
+                ),
+                response_format,
+                True,
+            )
+            stream_owns_cleanup = True
+            return response
+        return format_audio_transcription_response(result, response_format, False)
+    except (InferenceCancelledError, ModelBusyError) as exc:
+        return _format_inference_error(exc)
+    finally:
+        if not stream_owns_cleanup:
+            await _finish_inference(request_id, cancellation_token, disconnect_watcher)
 
 
 @app.post("/v1/audio/translations")
@@ -640,15 +904,52 @@ async def audio_translations(request: Request) -> Response:
         files={"file": files["file"].__dict__},
         stream=stream,
     )
-    ctx = _ctx_factory(request_id, endpoint="audio.translations", model_id=model_id)
-    start = time.perf_counter()
-    result = await selected.module.run(run_request, ctx)
-    duration_ms = round((time.perf_counter() - start) * 1000, 2)
-    app.state.logger.info(
-        "audio.translations.run",
-        extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+    try:
+        request_id, cancellation_token, disconnect_watcher = _begin_inference(
+            request,
+            timeout_seconds=_inference_timeout_seconds(selected),
+        )
+    except RequestIdInUseError as exc:
+        return format_error(
+            str(exc),
+            err_type="request_id_in_use",
+            code="request_id_in_use",
+            status_code=409,
+        )
+    ctx = _ctx_factory(
+        request_id,
+        endpoint="audio.translations",
+        model_id=model_id,
+        cancellation_token=cancellation_token,
     )
-    return format_audio_transcription_response(result, response_format, stream)
+    start = time.perf_counter()
+    stream_owns_cleanup = False
+    try:
+        result = await selected.module.run(run_request, ctx)
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        app.state.logger.info(
+            "audio.translations.run",
+            extra={"request_id": request_id, "model_id": model_id, "duration_ms": duration_ms},
+        )
+        if stream:
+            response = format_audio_transcription_response(
+                _finalize_inference_stream(
+                    result,
+                    request_id,
+                    cancellation_token,
+                    disconnect_watcher,
+                ),
+                response_format,
+                True,
+            )
+            stream_owns_cleanup = True
+            return response
+        return format_audio_transcription_response(result, response_format, False)
+    except (InferenceCancelledError, ModelBusyError) as exc:
+        return _format_inference_error(exc)
+    finally:
+        if not stream_owns_cleanup:
+            await _finish_inference(request_id, cancellation_token, disconnect_watcher)
 
 
 @app.get("/doctor")

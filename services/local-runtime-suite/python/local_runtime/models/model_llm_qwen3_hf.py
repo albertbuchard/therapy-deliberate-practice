@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Any
 
+from local_runtime.cancellation import CancellationToken, acquire_model_lock
 from local_runtime.helpers.responses_helpers import new_response
 from local_runtime.runtime_types import RunContext, RunRequest
 
@@ -164,6 +165,18 @@ def _generation_kwargs(params: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def _cancellation_stopping_criteria(token: CancellationToken | None):
+    if token is None:
+        return None
+    from transformers import StoppingCriteria, StoppingCriteriaList  # type: ignore
+
+    class CancellationStoppingCriteria(StoppingCriteria):
+        def __call__(self, *_args, **_kwargs):
+            return token.cancelled
+
+    return StoppingCriteriaList([CancellationStoppingCriteria()])
+
+
 def _select_device() -> str:
     torch, _, _, _ = _load_backend()
     override = os.getenv("LOCAL_RUNTIME_QWEN3_HF_DEVICE")
@@ -247,19 +260,29 @@ def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
         )
 
 
-async def _generate(instance: dict[str, Any], prompt: str, params: dict[str, Any]) -> str:
+async def _generate(
+    instance: dict[str, Any],
+    prompt: str,
+    params: dict[str, Any],
+    token: CancellationToken | None = None,
+) -> str:
     torch, _, _, _ = _load_backend()
     tokenizer = instance["tokenizer"]
     model = instance["model"]
     device = instance["device"]
 
     def _invoke() -> str:
+        if token is not None:
+            token.raise_if_cancelled()
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        with torch.inference_mode(), instance["lock"]:
-            output = model.generate(
-                **inputs,
-                **_generation_kwargs(params),
-            )
+        generation_kwargs = _generation_kwargs(params)
+        stopping_criteria = _cancellation_stopping_criteria(token)
+        if stopping_criteria is not None:
+            generation_kwargs["stopping_criteria"] = stopping_criteria
+        with torch.inference_mode(), acquire_model_lock(instance["lock"], token):
+            output = model.generate(**inputs, **generation_kwargs)
+        if token is not None:
+            token.raise_if_cancelled()
         generated = output[0][inputs.input_ids.shape[-1] :]
         return tokenizer.decode(generated, skip_special_tokens=True)
 
@@ -267,7 +290,10 @@ async def _generate(instance: dict[str, Any], prompt: str, params: dict[str, Any
 
 
 async def _generate_stream(
-    instance: dict[str, Any], prompt: str, params: dict[str, Any]
+    instance: dict[str, Any],
+    prompt: str,
+    params: dict[str, Any],
+    token: CancellationToken | None = None,
 ) -> AsyncIterator[str]:
     torch, _, _, TextIteratorStreamer = _load_backend()
     tokenizer = instance["tokenizer"]
@@ -276,41 +302,67 @@ async def _generate_stream(
     streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[str | Exception | None] = asyncio.Queue()
+    ready: asyncio.Future[None] = loop.create_future()
+
+    def _mark_ready() -> None:
+        if not ready.done():
+            ready.set_result(None)
+
+    def _mark_failed(exc: Exception) -> None:
+        if not ready.done():
+            ready.set_exception(exc)
 
     def _worker() -> None:
         try:
+            if token is not None:
+                token.raise_if_cancelled()
             inputs = tokenizer(prompt, return_tensors="pt").to(device)
             generation_kwargs = dict(
                 **inputs,
                 **_generation_kwargs(params),
                 streamer=streamer,
             )
-            with torch.inference_mode(), instance["lock"]:
+            stopping_criteria = _cancellation_stopping_criteria(token)
+            if stopping_criteria is not None:
+                generation_kwargs["stopping_criteria"] = stopping_criteria
+            with torch.inference_mode(), acquire_model_lock(instance["lock"], token):
+                loop.call_soon_threadsafe(_mark_ready)
                 model.generate(**generation_kwargs)
+            if token is not None:
+                token.raise_if_cancelled()
         except Exception as exc:  # noqa: BLE001 - propagate arbitrary backend errors to the async caller
+            loop.call_soon_threadsafe(_mark_failed, exc)
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
     def _drain_streamer() -> None:
         try:
-            for token in streamer:
-                loop.call_soon_threadsafe(queue.put_nowait, token)
+            for streamed_token in streamer:
+                loop.call_soon_threadsafe(queue.put_nowait, streamed_token)
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
     threading.Thread(target=_worker, daemon=True).start()
+    await ready
     threading.Thread(target=_drain_streamer, daemon=True).start()
 
-    pending_eof = 2
-    while pending_eof:
-        item = await queue.get()
-        if item is None:
-            pending_eof -= 1
-            continue
-        if isinstance(item, Exception):
-            raise item
-        yield item
+    async def _events() -> AsyncIterator[str]:
+        pending_eof = 2
+        try:
+            while pending_eof:
+                item = await queue.get()
+                if item is None:
+                    pending_eof -= 1
+                    continue
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            if pending_eof and token is not None:
+                token.cancel()
+
+    return _events()
 
 
 async def run(req: RunRequest, ctx: RunContext):
@@ -330,13 +382,19 @@ async def run(req: RunRequest, ctx: RunContext):
     start = time.perf_counter()
 
     if req.stream:
+        chunks = await _generate_stream(
+            instance,
+            prompt,
+            params,
+            ctx.cancellation_token,
+        )
 
         async def generator() -> AsyncIterator[dict]:
             response = new_response(model_id, "", request_id=ctx.request_id)
             yield {"event": "response.created", "data": response}
             accumulated = ""
             try:
-                async for chunk in _generate_stream(instance, prompt, params):
+                async for chunk in chunks:
                     if not chunk:
                         continue
                     accumulated += chunk
@@ -364,7 +422,7 @@ async def run(req: RunRequest, ctx: RunContext):
 
         return generator()
 
-    reply = await _generate(instance, prompt, params)
+    reply = await _generate(instance, prompt, params, ctx.cancellation_token)
     payload = new_response(model_id, reply, request_id=ctx.request_id)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     ctx.logger.info(

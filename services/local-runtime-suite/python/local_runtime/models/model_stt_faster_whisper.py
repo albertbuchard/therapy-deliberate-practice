@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from local_runtime.cancellation import CancellationToken, acquire_model_lock
 from local_runtime.helpers.multipart_helpers import UploadedFile
 from local_runtime.runtime_types import RunContext, RunRequest
 
@@ -180,9 +181,12 @@ def _transcribe_sync(
     *,
     language: str | None,
     prompt: str | None,
+    token: CancellationToken | None = None,
 ) -> tuple[str, list[dict[str, Any]], str | None, float | None]:
     beam_size = max(1, int(os.getenv("LOCAL_RUNTIME_FASTER_WHISPER_BEAM_SIZE", "5")))
-    with instance["lock"]:
+    if token is not None:
+        token.raise_if_cancelled()
+    with acquire_model_lock(instance["lock"], token):
         segments_iter, info = instance["model"].transcribe(
             audio_path,
             language=language or None,
@@ -191,7 +195,13 @@ def _transcribe_sync(
             vad_filter=True,
             word_timestamps=True,
         )
-        segments = [_serialize_segment(segment, index) for index, segment in enumerate(segments_iter)]
+        segments = []
+        for index, segment in enumerate(segments_iter):
+            if token is not None:
+                token.raise_if_cancelled()
+            segments.append(_serialize_segment(segment, index))
+    if token is not None:
+        token.raise_if_cancelled()
     text = " ".join(segment["text"] for segment in segments if segment["text"]).strip()
     detected_language = getattr(info, "language", None)
     language_probability = getattr(info, "language_probability", None)
@@ -227,6 +237,7 @@ async def run(req: RunRequest, ctx: RunContext):
             audio_path,
             language=language,
             prompt=prompt,
+            token=ctx.cancellation_token,
         )
     finally:
         try:

@@ -93,12 +93,14 @@ IDENTITY_FIELDS = {
 }
 PROOF_FIELDS = {
     "elf_header",
+    "elf_header_locations",
     "program_headers",
     "stable_sections",
     "changed_sections",
     "changed_dynamic_tags",
     "dynamic_string_sizes",
 }
+ELF_HEADER_LOCATION_FIELDS = {"program_header_offset", "section_header_offset"}
 STABLE_SECTION_FIELDS = {"pre_bundle_sha256", "packaged_sha256", "count"}
 DYNAMIC_STRING_SIZE_FIELDS = {"pre_bundle", "packaged"}
 PROGRAM_PROOF_FIELDS = {"pre_bundle", "packaged", "changed_indices"}
@@ -469,6 +471,16 @@ class ElfFile:
             "build_id": self.build_id,
         }
 
+    def semantic_header(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.header.items()
+            if key not in ELF_HEADER_LOCATION_FIELDS
+        }
+
+    def header_locations(self) -> dict[str, int]:
+        return {key: self.header[key] for key in ELF_HEADER_LOCATION_FIELDS}
+
     def program_records(self) -> list[dict[str, Any]]:
         return [
             {
@@ -653,8 +665,10 @@ def _canonical_dynamic_entries(entries: list[dict[str, Any]]) -> list[dict[str, 
 def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
     before = ElfFile(pre_bundle)
     after = ElfFile(packaged)
-    if before.header != after.header:
-        raise RuntimeError("linuxdeploy changed the canonical ELF header.")
+    if before.semantic_header() != after.semantic_header():
+        raise RuntimeError("linuxdeploy changed the canonical ELF header semantics.")
+    if before.header["program_header_offset"] != after.header["program_header_offset"]:
+        raise RuntimeError("linuxdeploy moved the program-header table.")
     if before.identity() != after.identity():
         raise RuntimeError(
             "linuxdeploy changed the ELF identity or GNU build identity."
@@ -772,7 +786,11 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
         },
         "elf_identity": before.identity(),
         "proof": {
-            "elf_header": before.header,
+            "elf_header": before.semantic_header(),
+            "elf_header_locations": {
+                "pre_bundle": before.header_locations(),
+                "packaged": after.header_locations(),
+            },
             "program_headers": {
                 "pre_bundle": before_programs,
                 "packaged": after_programs,
@@ -905,8 +923,6 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
         "machine",
         "version",
         "entry_point",
-        "program_header_offset",
-        "section_header_offset",
         "flags",
         "elf_header_size",
         "program_header_entry_size",
@@ -933,6 +949,33 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
         )
     ):
         raise RuntimeError("Canonical ELF header is inconsistent with ELF identity.")
+
+    header_locations = _require_exact_fields(
+        proof["elf_header_locations"],
+        {"pre_bundle", "packaged"},
+        "ELF header locations",
+    )
+    pre_header_locations = _require_exact_fields(
+        header_locations["pre_bundle"],
+        ELF_HEADER_LOCATION_FIELDS,
+        "pre-bundle ELF header locations",
+    )
+    packaged_header_locations = _require_exact_fields(
+        header_locations["packaged"],
+        ELF_HEADER_LOCATION_FIELDS,
+        "packaged ELF header locations",
+    )
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for locations in (pre_header_locations, packaged_header_locations)
+        for value in locations.values()
+    ):
+        raise RuntimeError("ELF header-table locations are invalid.")
+    if (
+        pre_header_locations["program_header_offset"]
+        != packaged_header_locations["program_header_offset"]
+    ):
+        raise RuntimeError("Program-header table relocation is not allowed.")
 
     programs = _require_exact_fields(
         proof["program_headers"], PROGRAM_PROOF_FIELDS, "program-header proof"

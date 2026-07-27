@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from local_runtime.cancellation import CancellationToken, acquire_model_lock
 from local_runtime.helpers.multipart_helpers import UploadedFile
 from local_runtime.runtime_types import RunContext, RunRequest
 
@@ -247,12 +248,18 @@ async def _run_transcribe(
     chunk_duration: float,
     overlap_duration: float,
     decoding_config,
+    token: CancellationToken | None = None,
 ) -> Any:
     kwargs = _build_transcribe_kwargs(chunk_duration, overlap_duration, decoding_config)
 
     def _invoke():
-        with instance["lock"]:
-            return instance["model"].transcribe(audio_path, **kwargs)
+        if token is not None:
+            token.raise_if_cancelled()
+        with acquire_model_lock(instance["lock"], token):
+            result = instance["model"].transcribe(audio_path, **kwargs)
+        if token is not None:
+            token.raise_if_cancelled()
+        return result
 
     return await asyncio.to_thread(_invoke)
 
@@ -324,6 +331,7 @@ async def run(req: RunRequest, ctx: RunContext):
             chunk_duration=chunk_duration,
             overlap_duration=overlap_duration,
             decoding_config=decoding_config,
+            token=ctx.cancellation_token,
         )
         transcript, payload_segments = _parse_result(result)
     finally:

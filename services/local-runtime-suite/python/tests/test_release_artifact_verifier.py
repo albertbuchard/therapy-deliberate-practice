@@ -217,8 +217,6 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
                 "machine": 62,
                 "version": 1,
                 "entry_point": 0x401000,
-                "program_header_offset": 64,
-                "section_header_offset": 4096,
                 "flags": 0,
                 "elf_header_size": 64,
                 "program_header_entry_size": 56,
@@ -226,6 +224,16 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
                 "section_header_entry_size": 64,
                 "section_header_count": 6,
                 "section_name_index": 5,
+            },
+            "elf_header_locations": {
+                "pre_bundle": {
+                    "program_header_offset": 64,
+                    "section_header_offset": 4096,
+                },
+                "packaged": {
+                    "program_header_offset": 64,
+                    "section_header_offset": 4352,
+                },
             },
             "program_headers": {
                 "pre_bundle": program_headers,

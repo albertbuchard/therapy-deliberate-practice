@@ -25,7 +25,14 @@ def test_missing_config_creates_stable_private_access_token(tmp_path) -> None:
 
 
 def test_protected_gateway_routes_require_pairing_key(client) -> None:
-    for path in ("/v1/models", "/logs", "/doctor", "/health/details", "/runtime/config"):
+    for path in (
+        "/v1/models",
+        "/v1/requests/cancel",
+        "/logs",
+        "/doctor",
+        "/health/details",
+        "/runtime/config",
+    ):
         missing = client.get(path, headers={"Authorization": ""})
         assert missing.status_code == 401
         assert missing.headers["www-authenticate"] == "Bearer"
@@ -83,6 +90,42 @@ def test_trusted_browser_origin_and_private_network_preflight(client) -> None:
     assert preflight.status_code == 200
     assert preflight.headers["access-control-allow-origin"] == origin
     assert preflight.headers["access-control-allow-private-network"] == "true"
+
+
+def test_packaged_tauri_origins_are_allowed_but_neighbors_are_rejected(client) -> None:
+    for origin in ("http://tauri.localhost", "tauri://localhost"):
+        response = client.get(
+            "/v1/models",
+            headers={
+                "Origin": origin,
+                "Authorization": f"Bearer {TEST_ACCESS_TOKEN}",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
+
+    for origin in (
+        "https://tauri.localhost",
+        "http://tauri.localhost.attacker.example",
+        "tauri://attacker",
+        "null",
+    ):
+        response = client.get(
+            "/v1/models",
+            headers={
+                "Origin": origin,
+                "Authorization": f"Bearer {TEST_ACCESS_TOKEN}",
+            },
+        )
+        assert response.status_code == 403
+
+
+def test_ipv6_loopback_host_is_rejected_until_the_gateway_binds_ipv6(client) -> None:
+    response = client.get(
+        "/v1/models",
+        headers={"Host": "[::1]:8484"},
+    )
+    assert response.status_code == 403
 
 
 def test_pairing_key_is_not_returned_by_gateway_observability(client) -> None:

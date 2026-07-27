@@ -4,9 +4,10 @@ import asyncio
 import os
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from local_runtime.cancellation import CancellationToken, acquire_model_lock
 from local_runtime.helpers.responses_helpers import new_response
 from local_runtime.runtime_types import RunContext, RunRequest
 
@@ -165,64 +166,106 @@ def _extract_response_text(response: Any) -> str:
     return str(response)
 
 
-async def _generate_text(instance: dict, prompt: str, params: dict[str, Any]) -> str:
-    def _invoke() -> str:
-        from mlx_lm import generate  # type: ignore
+def _iterate_generation(
+    instance: dict,
+    prompt: str,
+    params: dict[str, Any],
+    token: CancellationToken | None,
+    on_lock_acquired: Callable[[], None] | None = None,
+):
+    from mlx_lm import stream_generate  # type: ignore
 
-        sampler, logits_processors = _build_sampling_components(params)
-        with instance["lock"]:
-            return generate(
-                instance["model"],
-                instance["tokenizer"],
-                prompt=prompt,
-                max_tokens=params["max_tokens"],
-                sampler=sampler,
-                logits_processors=logits_processors,
-            )
+    if token is not None:
+        token.raise_if_cancelled()
+    sampler, logits_processors = _build_sampling_components(params)
+    previous_text = ""
+    with acquire_model_lock(instance["lock"], token):
+        if on_lock_acquired is not None:
+            on_lock_acquired()
+        for response in stream_generate(
+            instance["model"],
+            instance["tokenizer"],
+            prompt=prompt,
+            max_tokens=params["max_tokens"],
+            sampler=sampler,
+            logits_processors=logits_processors,
+        ):
+            if token is not None:
+                token.raise_if_cancelled()
+            text = _extract_response_text(response)
+            delta = text.removeprefix(previous_text)
+            previous_text = text
+            if delta:
+                yield delta
+    if token is not None:
+        token.raise_if_cancelled()
+
+
+async def _generate_text(
+    instance: dict,
+    prompt: str,
+    params: dict[str, Any],
+    token: CancellationToken | None = None,
+) -> str:
+    def _invoke() -> str:
+        return "".join(_iterate_generation(instance, prompt, params, token))
 
     return await asyncio.to_thread(_invoke)
 
 
-async def _generate_stream(instance: dict, prompt: str, params: dict[str, Any]) -> AsyncIterator[str]:
+async def _generate_stream(
+    instance: dict,
+    prompt: str,
+    params: dict[str, Any],
+    token: CancellationToken | None = None,
+) -> AsyncIterator[str]:
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[str | Exception | None] = asyncio.Queue()
+    ready: asyncio.Future[None] = loop.create_future()
+
+    def _mark_ready() -> None:
+        if not ready.done():
+            ready.set_result(None)
+
+    def _mark_failed(exc: Exception) -> None:
+        if not ready.done():
+            ready.set_exception(exc)
 
     def _reader() -> None:
-        from mlx_lm import stream_generate  # type: ignore
-
         try:
-            sampler, logits_processors = _build_sampling_components(params)
-            prev_text = ""
-            with instance["lock"]:
-                for response in stream_generate(
-                    instance["model"],
-                    instance["tokenizer"],
-                    prompt=prompt,
-                    max_tokens=params["max_tokens"],
-                    sampler=sampler,
-                    logits_processors=logits_processors,
-                ):
-                    text = _extract_response_text(response)
-                    delta = text
-                    if text.startswith(prev_text):
-                        delta = text[len(prev_text) :]
-                    prev_text = text
-                    if delta:
-                        loop.call_soon_threadsafe(queue.put_nowait, delta)
+            for delta in _iterate_generation(
+                instance,
+                prompt,
+                params,
+                token,
+                lambda: loop.call_soon_threadsafe(_mark_ready),
+            ):
+                loop.call_soon_threadsafe(queue.put_nowait, delta)
         except Exception as exc:  # noqa: BLE001 - propagate arbitrary backend errors to the async caller
+            loop.call_soon_threadsafe(_mark_failed, exc)
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
     threading.Thread(target=_reader, daemon=True).start()
+    await ready
 
-    while True:
-        item = await queue.get()
-        if item is None:
-            break
-        if isinstance(item, Exception):
-            raise item
-        yield item
+    async def _events() -> AsyncIterator[str]:
+        completed = False
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    completed = True
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            if not completed and token is not None:
+                token.cancel()
+
+    return _events()
 
 
 def load(ctx: RunContext) -> dict[str, Any]:
@@ -297,13 +340,19 @@ async def run(req: RunRequest, ctx: RunContext):
     start = time.perf_counter()
 
     if req.stream:
+        chunks = await _generate_stream(
+            instance,
+            prompt,
+            params,
+            ctx.cancellation_token,
+        )
 
         async def generator() -> AsyncIterator[dict]:
             response = new_response(model_id, "", request_id=ctx.request_id)
             yield {"event": "response.created", "data": response}
             accumulated = ""
             try:
-                async for chunk in _generate_stream(instance, prompt, params):
+                async for chunk in chunks:
                     if not chunk:
                         continue
                     accumulated += chunk
@@ -331,7 +380,7 @@ async def run(req: RunRequest, ctx: RunContext):
 
         return generator()
 
-    reply = await _generate_text(instance, prompt, params)
+    reply = await _generate_text(instance, prompt, params, ctx.cancellation_token)
     payload = new_response(model_id, reply, request_id=ctx.request_id)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     ctx.logger.info(

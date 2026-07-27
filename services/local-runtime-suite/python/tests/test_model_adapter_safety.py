@@ -21,11 +21,21 @@ class TrackingLock:
         self.held = False
 
     def __enter__(self):
-        assert not self.held
-        self.held = True
+        assert self.acquire()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
+        self.release()
+
+    def acquire(self, timeout: float | None = None) -> bool:
+        del timeout
+        if self.held:
+            return False
+        self.held = True
+        return True
+
+    def release(self) -> None:
+        assert self.held
         self.held = False
 
 
@@ -167,11 +177,11 @@ def test_qwen_mlx_load_applies_the_pinned_revision(monkeypatch, tmp_path) -> Non
 async def test_qwen_mlx_non_streaming_generation_holds_the_model_lock(monkeypatch) -> None:
     lock = TrackingLock()
 
-    def generate(*_args, **_kwargs):
+    def stream_generate(*_args, **_kwargs):
         assert lock.held
-        return "safe response"
+        yield SimpleNamespace(text="safe response")
 
-    monkeypatch.setitem(sys.modules, "mlx_lm", SimpleNamespace(generate=generate))
+    monkeypatch.setitem(sys.modules, "mlx_lm", SimpleNamespace(stream_generate=stream_generate))
     monkeypatch.setattr(
         model_llm_qwen3_mlx,
         "_build_sampling_components",
@@ -205,14 +215,12 @@ async def test_qwen_mlx_streaming_generation_holds_the_model_lock(monkeypatch) -
         lambda _params: ("sampler", ["processor"]),
     )
 
-    chunks = [
-        chunk
-        async for chunk in model_llm_qwen3_mlx._generate_stream(
-            {"model": object(), "tokenizer": object(), "lock": lock},
-            "prompt",
-            model_llm_qwen3_mlx._generation_params({}),
-        )
-    ]
+    stream = await model_llm_qwen3_mlx._generate_stream(
+        {"model": object(), "tokenizer": object(), "lock": lock},
+        "prompt",
+        model_llm_qwen3_mlx._generation_params({}),
+    )
+    chunks = [chunk async for chunk in stream]
 
     assert chunks == ["safe", " response"]
     assert not lock.held

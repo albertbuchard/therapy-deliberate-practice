@@ -10,10 +10,11 @@ const STORAGE_PREFIX = "therapy.localRuntimePairingKey";
 const GATEWAY_SERVICE_ID = "therapy-local-runtime";
 const GATEWAY_PROTOCOL_VERSION = "1";
 const REQUEST_TIMEOUT_MS = 120_000;
+const CANCELLATION_TIMEOUT_MS = 2_000;
 
 export class LocalRuntimeRequestError extends Error {
   readonly status: number | null;
-  readonly code: "PAIRING_REQUIRED" | "HTTP_ERROR" | "TIMEOUT";
+  readonly code: "PAIRING_REQUIRED" | "HTTP_ERROR" | "TIMEOUT" | "CANCELLED" | "BUSY";
 
   constructor(
     message: string,
@@ -23,7 +24,7 @@ export class LocalRuntimeRequestError extends Error {
       cause
     }: {
       status?: number | null;
-      code?: "PAIRING_REQUIRED" | "HTTP_ERROR" | "TIMEOUT";
+      code?: "PAIRING_REQUIRED" | "HTTP_ERROR" | "TIMEOUT" | "CANCELLED" | "BUSY";
       cause?: unknown;
     } = {}
   ) {
@@ -39,7 +40,7 @@ export const isLocalRuntimePairingError = (error: unknown) =>
   (error.code === "PAIRING_REQUIRED" || error.status === 401);
 
 const isLoopbackHostname = (hostname: string) =>
-  hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+  hostname === "127.0.0.1" || hostname === "localhost";
 
 export const normalizeLocalRuntimeBaseUrl = (value: string): string => {
   const parsed = new URL(value.trim());
@@ -140,8 +141,47 @@ const readError = async (response: Response) => {
 export const localRuntimeResponseError = async (response: Response) =>
   new LocalRuntimeRequestError(await readError(response), {
     status: response.status,
-    code: response.status === 401 ? "PAIRING_REQUIRED" : "HTTP_ERROR"
+    code:
+      response.status === 401
+        ? "PAIRING_REQUIRED"
+        : response.status === 409
+          ? "BUSY"
+          : response.status === 499
+            ? "CANCELLED"
+            : response.status === 504
+              ? "TIMEOUT"
+              : "HTTP_ERROR"
   });
+
+export const createLocalRuntimeRequestId = () =>
+  `lrq_${crypto.randomUUID().replaceAll("-", "").toLowerCase()}`;
+
+const requestLocalRuntimeCancellation = async (
+  baseUrl: string,
+  token: string,
+  requestId: string
+) => {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), CANCELLATION_TIMEOUT_MS);
+  try {
+    await fetch(buildUrl(baseUrl, "/v1/requests/cancel"), {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      mode: "cors",
+      signal: controller.signal,
+      body: JSON.stringify({ request_id: requestId })
+    });
+  } catch {
+    // The original timeout remains authoritative. A failed best-effort
+    // cancellation request must not hide it or expose the pairing key.
+  } finally {
+    window.clearTimeout(timeout);
+  }
+};
 
 const localFetch = async (
   baseUrl: string,
@@ -151,23 +191,57 @@ const localFetch = async (
   timeoutMs = REQUEST_TIMEOUT_MS
 ) => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let abortCause: "caller" | "timeout" | null = null;
+  const timeout = window.setTimeout(() => {
+    if (abortCause === null) {
+      abortCause = "timeout";
+      controller.abort();
+    }
+  }, timeoutMs);
+  const callerSignal = init.signal;
+  const forwardCallerAbort = () => {
+    if (abortCause === null) {
+      abortCause = "caller";
+      controller.abort(callerSignal?.reason);
+    }
+  };
+  if (callerSignal?.aborted) {
+    forwardCallerAbort();
+  } else {
+    callerSignal?.addEventListener("abort", forwardCallerAbort, { once: true });
+  }
   const headers = new Headers(init.headers);
+  const requestId = createLocalRuntimeRequestId();
+  headers.set("X-Request-ID", requestId);
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  const requestInit = { ...init };
+  delete requestInit.signal;
   try {
     return await fetch(buildUrl(baseUrl, path), {
-      ...init,
+      ...requestInit,
       cache: "no-store",
       headers,
       mode: "cors",
       signal: controller.signal
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (controller.signal.aborted) {
+      if (token) {
+        await requestLocalRuntimeCancellation(baseUrl, token, requestId);
+      }
+      if (abortCause === "caller") {
+        throw new LocalRuntimeRequestError(
+          "The local model request was cancelled. Completed earlier work was preserved.",
+          {
+            code: "CANCELLED",
+            cause: error
+          }
+        );
+      }
       throw new LocalRuntimeRequestError(
-        "The local runtime did not respond before the timeout.",
+        "The local runtime timed out. Cancellation was requested; retry when the model is ready.",
         {
           code: "TIMEOUT",
           cause: error
@@ -177,6 +251,7 @@ const localFetch = async (
     throw error;
   } finally {
     window.clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", forwardCallerAbort);
   }
 };
 
@@ -238,12 +313,14 @@ export const transcribeWithLocalRuntime = async ({
   baseUrl,
   token,
   audio,
-  language
+  language,
+  signal
 }: {
   baseUrl: string;
   token: string;
   audio: Blob;
   language?: string;
+  signal?: AbortSignal;
 }): Promise<LocalTranscription> => {
   const form = new FormData();
   const extension = audio.type.includes("wav")
@@ -262,7 +339,7 @@ export const transcribeWithLocalRuntime = async ({
     baseUrl,
     "/v1/audio/transcriptions",
     token,
-    { method: "POST", body: form }
+    { method: "POST", body: form, signal }
   );
   if (!response.ok) {
     throw await localRuntimeResponseError(response);
@@ -329,7 +406,8 @@ export const evaluateWithLocalRuntime = async ({
   task,
   example,
   attemptId,
-  transcript
+  transcript,
+  signal
 }: {
   baseUrl: string;
   token: string;
@@ -337,11 +415,13 @@ export const evaluateWithLocalRuntime = async ({
   example: TaskExample;
   attemptId: string;
   transcript: string;
+  signal?: AbortSignal;
 }): Promise<LocalEvaluation> => {
   const startedAt = performance.now();
   const response = await localFetch(baseUrl, "/v1/responses", token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       instructions:
         "You are an evaluator for psychotherapy deliberate practice tasks. Return strict JSON only matching EvaluationResult. Score every supplied criterion exactly once. Use only the supplied transcript as evidence.",

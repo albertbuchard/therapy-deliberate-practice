@@ -41,6 +41,8 @@ def build_elf(
     string_table_size: int = 64,
     build_id: bytes = bytes.fromhex("ab" * 20),
     text: bytes = b"stable text code",
+    program_headers_offset: int = ELF_HEADER.size,
+    section_headers_offset: int = 0x400,
 ) -> None:
     base_address = 0x400000
     text_offset = 0x200
@@ -48,8 +50,12 @@ def build_elf(
     dynamic_offset = 0x260
     note_offset = 0x2A0
     names_offset = 0x2D0
-    section_headers_offset = 0x400
-    payload = bytearray(section_headers_offset + 6 * SECTION_HEADER.size)
+    payload_size = max(
+        section_headers_offset + 6 * SECTION_HEADER.size,
+        program_headers_offset + 3 * PROGRAM_HEADER.size,
+        0x580,
+    )
+    payload = bytearray(payload_size)
 
     ident = b"\x7fELF" + bytes([2, 1, 1, 0, 0]) + bytes(7)
     ELF_HEADER.pack_into(
@@ -60,7 +66,7 @@ def build_elf(
         62,
         1,
         base_address + text_offset,
-        ELF_HEADER.size,
+        program_headers_offset,
         section_headers_offset,
         0,
         ELF_HEADER.size,
@@ -72,7 +78,7 @@ def build_elf(
     )
     PROGRAM_HEADER.pack_into(
         payload,
-        ELF_HEADER.size,
+        program_headers_offset,
         1,
         load_flags,
         load_offset,
@@ -84,7 +90,7 @@ def build_elf(
     )
     PROGRAM_HEADER.pack_into(
         payload,
-        ELF_HEADER.size + PROGRAM_HEADER.size,
+        program_headers_offset + PROGRAM_HEADER.size,
         2,
         6,
         dynamic_segment_offset or dynamic_offset,
@@ -96,7 +102,7 @@ def build_elf(
     )
     PROGRAM_HEADER.pack_into(
         payload,
-        ELF_HEADER.size + 2 * PROGRAM_HEADER.size,
+        program_headers_offset + 2 * PROGRAM_HEADER.size,
         0x6474E551,
         stack_flags,
         stack_offset,
@@ -219,6 +225,36 @@ def test_linuxdeploy_runtime_path_transform_is_attested(tmp_path) -> None:
     }
     assert receipt["proof"]["changed_dynamic_tags"] == ["RUNPATH"]
     verify_linux_launcher_transform.validate_receipt(receipt)
+
+
+def test_linuxdeploy_transform_allows_only_section_header_table_relocation(tmp_path) -> None:
+    pre_bundle = tmp_path / "pre-launcher"
+    packaged = tmp_path / "packaged-launcher"
+    build_elf(pre_bundle, runpath=False, section_headers_offset=0x400)
+    build_elf(packaged, runpath=True, section_headers_offset=0x500)
+
+    receipt = verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
+
+    assert receipt["proof"]["elf_header_locations"] == {
+        "pre_bundle": {
+            "program_header_offset": ELF_HEADER.size,
+            "section_header_offset": 0x400,
+        },
+        "packaged": {
+            "program_header_offset": ELF_HEADER.size,
+            "section_header_offset": 0x500,
+        },
+    }
+
+
+def test_linuxdeploy_transform_rejects_program_header_table_relocation(tmp_path) -> None:
+    pre_bundle = tmp_path / "pre-launcher"
+    packaged = tmp_path / "packaged-launcher"
+    build_elf(pre_bundle, runpath=False)
+    build_elf(packaged, runpath=True, program_headers_offset=0x80)
+
+    with pytest.raises(RuntimeError, match="moved the program-header table"):
+        verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
 def test_linuxdeploy_transform_rejects_pt_load_permission_change(tmp_path) -> None:
@@ -360,6 +396,11 @@ def test_receipt_rejects_wrong_identity_hash_path_and_stable_digest(tmp_path) ->
             ("proof", "dynamic_string_sizes", "packaged"),
             65_535,
             "Dynamic string-table size proof is invalid",
+        ),
+        (
+            ("proof", "elf_header_locations", "packaged", "program_header_offset"),
+            0x80,
+            "Program-header table relocation is not allowed",
         ),
     ]
     for keys, value, message in cases:
