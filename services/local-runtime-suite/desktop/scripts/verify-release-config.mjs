@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tauriDir = path.resolve(desktopDir, "src-tauri");
 const pythonDir = path.resolve(desktopDir, "..", "python");
+const repositoryDir = path.resolve(desktopDir, "..", "..", "..");
 
 function readJson(pathname) {
   return JSON.parse(readFileSync(pathname, "utf8"));
@@ -94,6 +95,33 @@ for (const wheel of requiredNativeWheels) {
 }
 if (uvLock.includes("numba-0.53.1") || uvLock.includes("llvmlite-0.36.0")) {
   throw new Error("The dependency lock still contains obsolete Python-incompatible Numba wheels.");
+}
+
+const windowsPackagingContract = [
+  '$projectRoot = Join-Path $env:GITHUB_WORKSPACE "services\\local-runtime-suite\\desktop"',
+  "New-Item -ItemType Junction -Path $projectNodeModules -Target $workspaceNodeModules",
+  "subst $drive $projectRoot",
+  '$resourceRoot = "$drive\\src-tauri\\resources"',
+  '"WINDOWS_TAURI_PROJECT=$drive\\"',
+  "projectPath: ${{ env.WINDOWS_TAURI_PROJECT }}",
+  "tauriScript: npm run tauri",
+];
+for (const workflowName of ["desktop-build.yml", "desktop-signed-build.yml"]) {
+  const workflow = readFileSync(
+    path.resolve(repositoryDir, ".github", "workflows", workflowName),
+    "utf8",
+  );
+  const missing = windowsPackagingContract.filter((snippet) => !workflow.includes(snippet));
+  if (missing.length > 0) {
+    throw new Error(
+      `${workflowName} is missing the short Windows packaging contract: ${missing.join(", ")}`,
+    );
+  }
+  if (workflow.includes("subst $drive $env:GITHUB_WORKSPACE")) {
+    throw new Error(
+      `${workflowName} maps the short Windows drive too high in the repository to protect NSIS paths.`,
+    );
+  }
 }
 
 const expectedTag = process.argv[2] ?? process.env.RELEASE_TAG;
