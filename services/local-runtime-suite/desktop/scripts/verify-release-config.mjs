@@ -33,7 +33,7 @@ const cargoManifest = readFileSync(path.resolve(tauriDir, "Cargo.toml"), "utf8")
 const sidecarBuildScript = readFileSync(
   path.resolve(desktopDir, "scripts", "build-sidecar.mjs"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 const cargoLockVersion = matchVersion(
   path.resolve(tauriDir, "Cargo.lock"),
   /name = "local-runtime-desktop"\r?\nversion = "([^"]+)"/,

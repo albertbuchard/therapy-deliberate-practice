@@ -35,7 +35,7 @@ def build_elf(
     load_file_size: int | None = None,
     load_memory_size: int | None = None,
     dynamic_segment_offset: int | None = None,
-    dynamic_segment_file_size: int = 64,
+    dynamic_segment_file_size: int | None = None,
     stack_offset: int = 0,
     needed_library: bytes = b"libc.so.6",
     string_table_size: int = 64,
@@ -43,14 +43,15 @@ def build_elf(
     text: bytes = b"stable text code",
     program_headers_offset: int = ELF_HEADER.size,
     section_headers_offset: int = 0x400,
-    program_header_count: int = 3,
+    program_header_count: int = 4,
 ) -> None:
-    base_address = 0x400000
+    base_address = 0
     text_offset = 0x200
     dynstr_offset = 0x220
     dynamic_offset = 0x260
-    note_offset = 0x2A0
-    names_offset = 0x2D0
+    dynamic_size = 96
+    note_offset = 0x2D0
+    names_offset = 0x310
     payload_size = max(
         section_headers_offset + 6 * SECTION_HEADER.size,
         program_headers_offset + program_header_count * PROGRAM_HEADER.size,
@@ -77,9 +78,22 @@ def build_elf(
         6,
         5,
     )
+    dynamic_segment_size = dynamic_segment_file_size or dynamic_size
     PROGRAM_HEADER.pack_into(
         payload,
         program_headers_offset,
+        6,
+        4,
+        program_headers_offset,
+        program_headers_offset,
+        program_headers_offset,
+        program_header_count * PROGRAM_HEADER.size,
+        program_header_count * PROGRAM_HEADER.size,
+        8,
+    )
+    PROGRAM_HEADER.pack_into(
+        payload,
+        program_headers_offset + PROGRAM_HEADER.size,
         1,
         load_flags,
         load_offset,
@@ -91,19 +105,19 @@ def build_elf(
     )
     PROGRAM_HEADER.pack_into(
         payload,
-        program_headers_offset + PROGRAM_HEADER.size,
+        program_headers_offset + 2 * PROGRAM_HEADER.size,
         2,
         6,
         dynamic_segment_offset or dynamic_offset,
         base_address + dynamic_offset,
         base_address + dynamic_offset,
-        dynamic_segment_file_size,
-        64,
+        dynamic_segment_size,
+        dynamic_segment_size,
         8,
     )
     PROGRAM_HEADER.pack_into(
         payload,
-        program_headers_offset + 2 * PROGRAM_HEADER.size,
+        program_headers_offset + 3 * PROGRAM_HEADER.size,
         0x6474E551,
         stack_flags,
         stack_offset,
@@ -119,12 +133,16 @@ def build_elf(
     runtime_path_offset = len(base_strings)
     dynamic_strings = (base_strings + b"$ORIGIN/../lib\0" if runpath else base_strings).ljust(64, b"\0")
     payload[dynstr_offset : dynstr_offset + 64] = dynamic_strings
-    entries = [(1, 1), (10, string_table_size)]
+    entries = [
+        (1, 1),
+        (5, base_address + dynstr_offset),
+        (10, string_table_size),
+    ]
     if runpath:
         entries.append((29, runtime_path_offset))
     entries.append((0, 0))
-    dynamic_payload = b"".join(DYNAMIC_ENTRY.pack(*entry) for entry in entries).ljust(64, b"\0")
-    payload[dynamic_offset : dynamic_offset + 64] = dynamic_payload
+    dynamic_payload = b"".join(DYNAMIC_ENTRY.pack(*entry) for entry in entries).ljust(dynamic_size, b"\0")
+    payload[dynamic_offset : dynamic_offset + dynamic_size] = dynamic_payload
 
     note = NOTE_HEADER.pack(4, len(build_id), 3) + b"GNU\0" + build_id
     payload[note_offset : note_offset + len(note)] = note
@@ -169,7 +187,7 @@ def build_elf(
             0x3,
             base_address + dynamic_offset,
             dynamic_offset,
-            64,
+            dynamic_size,
             2,
             0,
             8,
@@ -228,6 +246,19 @@ def test_linuxdeploy_runtime_path_transform_is_attested(tmp_path) -> None:
     verify_linux_launcher_transform.validate_receipt(receipt)
 
 
+def test_linuxdeploy_transform_rejects_unrelated_dynstr_corruption(tmp_path) -> None:
+    pre_bundle = tmp_path / "pre-launcher"
+    packaged = tmp_path / "packaged-launcher"
+    build_elf(pre_bundle, runpath=False)
+    build_elf(packaged, runpath=True)
+    payload = bytearray(packaged.read_bytes())
+    payload[0x220 + 50] = 1
+    packaged.write_bytes(payload)
+
+    with pytest.raises(RuntimeError, match="outside the exact expected runtime-path"):
+        verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
+
+
 def test_linuxdeploy_transform_allows_only_section_header_table_relocation(tmp_path) -> None:
     pre_bundle = tmp_path / "pre-launcher"
     packaged = tmp_path / "packaged-launcher"
@@ -236,14 +267,20 @@ def test_linuxdeploy_transform_allows_only_section_header_table_relocation(tmp_p
 
     receipt = verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
-    assert receipt["proof"]["elf_header_locations"] == {
+    assert receipt["proof"]["elf_header_transform"] == {
         "pre_bundle": {
             "program_header_offset": ELF_HEADER.size,
             "section_header_offset": 0x400,
+            "program_header_count": 4,
+            "section_name_index": 5,
+            "shstrtab_index": 5,
         },
         "packaged": {
             "program_header_offset": ELF_HEADER.size,
             "section_header_offset": 0x500,
+            "program_header_count": 4,
+            "section_name_index": 5,
+            "shstrtab_index": 5,
         },
     }
 
@@ -254,25 +291,20 @@ def test_linuxdeploy_transform_rejects_program_header_table_relocation(tmp_path)
     build_elf(pre_bundle, runpath=False)
     build_elf(packaged, runpath=True, program_headers_offset=0x80)
 
-    with pytest.raises(RuntimeError, match="moved the program-header table"):
+    with pytest.raises(RuntimeError, match="PT_PHDR without adding"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
-def test_linuxdeploy_transform_reports_and_rejects_program_header_count_change(
+def test_linuxdeploy_transform_rejects_unauthorized_extra_program_header(
     tmp_path,
 ) -> None:
     pre_bundle = tmp_path / "pre-launcher"
     packaged = tmp_path / "packaged-launcher"
     build_elf(pre_bundle, runpath=False)
-    build_elf(packaged, runpath=True, program_header_count=4)
+    build_elf(packaged, runpath=True, program_header_count=5)
 
-    with pytest.raises(RuntimeError) as raised:
+    with pytest.raises(RuntimeError, match="unauthorized program header"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
-
-    assert str(raised.value) == (
-        "linuxdeploy changed the canonical ELF header semantics: "
-        '[{"field":"program_header_count","packaged":4,"pre_bundle":3}]'
-    )
 
 
 def test_linuxdeploy_transform_rejects_pt_load_permission_change(tmp_path) -> None:
@@ -281,7 +313,7 @@ def test_linuxdeploy_transform_rejects_pt_load_permission_change(tmp_path) -> No
     build_elf(pre_bundle, runpath=False)
     build_elf(packaged, runpath=True, load_flags=7)
 
-    with pytest.raises(RuntimeError, match="PT_LOAD permissions"):
+    with pytest.raises(RuntimeError, match="writable executable PT_LOAD"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
@@ -291,7 +323,7 @@ def test_linuxdeploy_transform_rejects_executable_gnu_stack(tmp_path) -> None:
     build_elf(pre_bundle, runpath=False)
     build_elf(packaged, runpath=True, stack_flags=7)
 
-    with pytest.raises(RuntimeError, match="PT_GNU_STACK executability"):
+    with pytest.raises(RuntimeError, match="executable or ambiguous GNU stack"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
@@ -331,7 +363,7 @@ def test_linuxdeploy_transform_rejects_section_to_segment_change(tmp_path) -> No
     build_elf(pre_bundle, runpath=False)
     build_elf(packaged, runpath=True, load_file_size=0x2A0)
 
-    with pytest.raises(RuntimeError, match="section-to-segment mapping"):
+    with pytest.raises(RuntimeError, match="beyond runtime-section remapping"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
@@ -341,7 +373,7 @@ def test_linuxdeploy_transform_rejects_unapproved_program_offset_change(tmp_path
     build_elf(pre_bundle, runpath=False)
     build_elf(packaged, runpath=True, stack_offset=8)
 
-    with pytest.raises(RuntimeError, match="offset or file size outside"):
+    with pytest.raises(RuntimeError, match="beyond runtime-section remapping"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
@@ -376,7 +408,7 @@ def test_linuxdeploy_transform_rejects_unattributed_dynamic_segment_coverage(
         dynamic_segment_file_size=80,
     )
 
-    with pytest.raises(RuntimeError, match="coverage beyond"):
+    with pytest.raises(RuntimeError, match="does not exactly map"):
         verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
 
 
@@ -416,9 +448,9 @@ def test_receipt_rejects_wrong_identity_hash_path_and_stable_digest(tmp_path) ->
             "Dynamic string-table size proof is invalid",
         ),
         (
-            ("proof", "elf_header_locations", "packaged", "program_header_offset"),
+            ("proof", "elf_header_transform", "packaged", "program_header_offset"),
             0x80,
-            "Program-header table relocation is not allowed",
+            "program-header table moved without an added relocation segment",
         ),
     ]
     for keys, value, message in cases:
@@ -429,3 +461,15 @@ def test_receipt_rejects_wrong_identity_hash_path_and_stable_digest(tmp_path) ->
         target[keys[-1]] = value
         with pytest.raises(RuntimeError, match=message):
             verify_linux_launcher_transform.validate_receipt(receipt)
+
+
+def test_receipt_rejects_unauthorized_section_name_table_change(tmp_path) -> None:
+    pre_bundle = tmp_path / "pre-launcher"
+    packaged = tmp_path / "packaged-launcher"
+    build_elf(pre_bundle, runpath=False)
+    build_elf(packaged, runpath=True)
+    receipt = verify_linux_launcher_transform.create_receipt(pre_bundle, packaged)
+    receipt["proof"]["elf_header_transform"]["packaged"]["section_name_index"] = 4
+
+    with pytest.raises(RuntimeError, match=r"\.shstrtab"):
+        verify_linux_launcher_transform.validate_receipt(receipt)

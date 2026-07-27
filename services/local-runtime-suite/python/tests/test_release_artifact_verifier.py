@@ -146,6 +146,19 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
     program_headers = [
         {
             "index": 0,
+            "type": 6,
+            "type_name": "PT_PHDR",
+            "flags": 4,
+            "offset": 64,
+            "virtual_address": 64,
+            "physical_address": 64,
+            "file_size": 224,
+            "memory_size": 224,
+            "alignment": 8,
+            "sections": [],
+        },
+        {
+            "index": 1,
             "type": 1,
             "type_name": "PT_LOAD",
             "flags": 5,
@@ -158,20 +171,20 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
             "sections": [".text", ".dynstr", ".dynamic"],
         },
         {
-            "index": 1,
+            "index": 2,
             "type": 2,
             "type_name": "PT_DYNAMIC",
             "flags": 6,
             "offset": 2048,
             "virtual_address": 0x400800,
             "physical_address": 0x400800,
-            "file_size": 256,
-            "memory_size": 256,
+            "file_size": 64,
+            "memory_size": 64,
             "alignment": 8,
             "sections": [".dynamic"],
         },
         {
-            "index": 2,
+            "index": 3,
             "type": 0x6474E551,
             "type_name": "PT_GNU_STACK",
             "flags": 6,
@@ -196,10 +209,10 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
         "build_id": "ab" * 20,
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "target": "x86_64-unknown-linux-gnu",
         "result": "passed",
-        "transformation_kind": "linuxdeploy-rpath-v1",
+        "transformation_kind": "linuxdeploy-rpath-v2",
         "pre_bundle": {"sha256": pre_sha256, "runtime_paths": []},
         "packaged": {
             "sha256": packaged_sha256,
@@ -220,25 +233,29 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
                 "flags": 0,
                 "elf_header_size": 64,
                 "program_header_entry_size": 56,
-                "program_header_count": 3,
                 "section_header_entry_size": 64,
                 "section_header_count": 6,
-                "section_name_index": 5,
             },
-            "elf_header_locations": {
+            "elf_header_transform": {
                 "pre_bundle": {
                     "program_header_offset": 64,
                     "section_header_offset": 4096,
+                    "program_header_count": 4,
+                    "section_name_index": 5,
+                    "shstrtab_index": 5,
                 },
                 "packaged": {
                     "program_header_offset": 64,
                     "section_header_offset": 4352,
+                    "program_header_count": 4,
+                    "section_name_index": 5,
+                    "shstrtab_index": 5,
                 },
             },
             "program_headers": {
                 "pre_bundle": program_headers,
                 "packaged": [dict(header) for header in program_headers],
-                "changed_indices": [],
+                "changed_indices": [0, 2],
             },
             "stable_sections": {
                 "pre_bundle_sha256": "d" * 64,
@@ -248,25 +265,45 @@ def linux_transform_receipt(pre_sha256: str, packaged_sha256: str) -> dict:
             "changed_sections": [
                 {
                     "name": ".dynamic",
+                    "pre_index": 3,
+                    "packaged_index": 3,
                     "pre_sha256": "1" * 64,
                     "packaged_sha256": "2" * 64,
+                    "pre_address": 0x400800,
+                    "packaged_address": 0x400800,
                     "pre_offset": 2048,
                     "packaged_offset": 2048,
                     "pre_size": 64,
                     "packaged_size": 64,
+                    "pre_alignment": 8,
+                    "packaged_alignment": 8,
                 },
                 {
                     "name": ".dynstr",
+                    "pre_index": 2,
+                    "packaged_index": 2,
                     "pre_sha256": "3" * 64,
                     "packaged_sha256": "4" * 64,
+                    "pre_address": 0x400400,
+                    "packaged_address": 0x400400,
                     "pre_offset": 1024,
                     "packaged_offset": 1024,
                     "pre_size": 64,
                     "packaged_size": 64,
+                    "pre_alignment": 1,
+                    "packaged_alignment": 1,
                 },
             ],
             "changed_dynamic_tags": ["RUNPATH"],
             "dynamic_string_sizes": {"pre_bundle": 64, "packaged": 64},
+            "runtime_path_string": {
+                "tag": "RUNPATH",
+                "value": "$ORIGIN/../lib",
+                "offset": 11,
+                "byte_length": 15,
+                "mode": "zero-padding-replacement",
+                "preserved_sha256": "e" * 64,
+            },
         },
     }
 
@@ -447,9 +484,9 @@ def test_linux_launcher_transform_rejects_executable_stack(tmp_path) -> None:
     path = write_valid_target(tmp_path, "x86_64-unknown-linux-gnu")
     manifest = json.loads(path.read_text())
     for side in ("pre_bundle", "packaged"):
-        manifest["launcher_transformation"]["proof"]["program_headers"][side][2]["flags"] = 7
+        manifest["launcher_transformation"]["proof"]["program_headers"][side][3]["flags"] = 7
 
-    with pytest.raises(RuntimeError, match="executable PT_GNU_STACK"):
+    with pytest.raises(RuntimeError, match="executable or ambiguous GNU stack"):
         verify_release_artifacts.verify_manifest(
             path,
             manifest,

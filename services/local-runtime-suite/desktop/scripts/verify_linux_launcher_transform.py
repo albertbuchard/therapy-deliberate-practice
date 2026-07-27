@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 LINUX_TARGET = "x86_64-unknown-linux-gnu"
-TRANSFORMATION_KIND = "linuxdeploy-rpath-v1"
+TRANSFORMATION_KIND = "linuxdeploy-rpath-v2"
 EXPECTED_RUNTIME_PATH = "$ORIGIN/../lib"
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
@@ -19,13 +19,20 @@ PROGRAM_HEADER = struct.Struct("<IIQQQQQQ")
 SECTION_HEADER = struct.Struct("<IIQQQQIIQQ")
 DYNAMIC_ENTRY = struct.Struct("<qQ")
 NOTE_HEADER = struct.Struct("<III")
+SYMBOL_ENTRY = struct.Struct("<IBBHQQ")
 
 PT_LOAD = 1
 PT_DYNAMIC = 2
+PT_PHDR = 6
 PT_GNU_STACK = 0x6474E551
+SHT_SYMTAB = 2
+SHT_STRTAB = 3
+SHT_RELA = 4
 SHT_NOBITS = 8
 SHT_DYNAMIC = 6
 SHT_NOTE = 7
+SHT_REL = 9
+SHT_DYNSYM = 11
 DT_NULL = 0
 DT_NEEDED = 1
 DT_STRTAB = 5
@@ -43,7 +50,7 @@ PROGRAM_TYPE_NAMES = {
     PT_DYNAMIC: "PT_DYNAMIC",
     3: "PT_INTERP",
     4: "PT_NOTE",
-    6: "PT_PHDR",
+    PT_PHDR: "PT_PHDR",
     7: "PT_TLS",
     0x6474E550: "PT_GNU_EH_FRAME",
     PT_GNU_STACK: "PT_GNU_STACK",
@@ -68,7 +75,7 @@ STRING_DYNAMIC_TAGS = {
     DT_AUXILIARY,
     DT_FILTER,
 }
-ALLOWED_DYNAMIC_TAGS = {DT_STRSZ, DT_RPATH, DT_RUNPATH}
+ALLOWED_DYNAMIC_TAGS = {DT_STRTAB, DT_STRSZ, DT_RPATH, DT_RUNPATH}
 TOP_LEVEL_FIELDS = {
     "schema_version",
     "target",
@@ -93,16 +100,32 @@ IDENTITY_FIELDS = {
 }
 PROOF_FIELDS = {
     "elf_header",
-    "elf_header_locations",
+    "elf_header_transform",
     "program_headers",
     "stable_sections",
     "changed_sections",
     "changed_dynamic_tags",
     "dynamic_string_sizes",
+    "runtime_path_string",
 }
-ELF_HEADER_LOCATION_FIELDS = {"program_header_offset", "section_header_offset"}
+ELF_HEADER_TRANSFORM_FIELDS = {
+    "program_header_offset",
+    "section_header_offset",
+    "program_header_count",
+    "section_name_index",
+    "shstrtab_index",
+}
+ELF_HEADER_TRANSFORM_KEYS = ELF_HEADER_TRANSFORM_FIELDS - {"shstrtab_index"}
 STABLE_SECTION_FIELDS = {"pre_bundle_sha256", "packaged_sha256", "count"}
 DYNAMIC_STRING_SIZE_FIELDS = {"pre_bundle", "packaged"}
+RUNTIME_PATH_STRING_FIELDS = {
+    "tag",
+    "value",
+    "offset",
+    "byte_length",
+    "mode",
+    "preserved_sha256",
+}
 PROGRAM_PROOF_FIELDS = {"pre_bundle", "packaged", "changed_indices"}
 PROGRAM_FIELDS = {
     "index",
@@ -119,12 +142,18 @@ PROGRAM_FIELDS = {
 }
 CHANGED_SECTION_FIELDS = {
     "name",
+    "pre_index",
+    "packaged_index",
     "pre_sha256",
     "packaged_sha256",
+    "pre_address",
+    "packaged_address",
     "pre_offset",
     "packaged_offset",
     "pre_size",
     "packaged_size",
+    "pre_alignment",
+    "packaged_alignment",
 }
 
 
@@ -348,6 +377,10 @@ class ElfFile:
                     data=data,
                 )
             )
+        if sections[self.header["section_name_index"]].name != ".shstrtab":
+            raise RuntimeError(
+                "ELF section-name index does not identify the .shstrtab section."
+            )
         return sections
 
     def _parse_program_headers(self) -> list[ProgramHeader]:
@@ -372,6 +405,8 @@ class ElfFile:
             raise RuntimeError("Launcher contains no PT_LOAD segment.")
         if not any(header.type == PT_DYNAMIC for header in headers):
             raise RuntimeError("Launcher contains no PT_DYNAMIC segment.")
+        if not any(header.type == PT_PHDR for header in headers):
+            raise RuntimeError("Launcher contains no PT_PHDR segment.")
         if not any(header.type == PT_GNU_STACK for header in headers):
             raise RuntimeError("Launcher contains no PT_GNU_STACK declaration.")
         for header in headers:
@@ -419,7 +454,7 @@ class ElfFile:
                 if tag in STRING_DYNAMIC_TAGS
                 else value
             )
-            entries.append({"tag": tag, "value": semantic_value})
+            entries.append({"tag": tag, "value": semantic_value, "raw_value": value})
         if not saw_null:
             raise RuntimeError(
                 "Launcher dynamic section has no terminating DT_NULL entry."
@@ -475,11 +510,96 @@ class ElfFile:
         return {
             key: value
             for key, value in self.header.items()
-            if key not in ELF_HEADER_LOCATION_FIELDS
+            if key not in ELF_HEADER_TRANSFORM_KEYS
         }
 
-    def header_locations(self) -> dict[str, int]:
-        return {key: self.header[key] for key in ELF_HEADER_LOCATION_FIELDS}
+    def header_transform(self) -> dict[str, int]:
+        transform = {key: self.header[key] for key in ELF_HEADER_TRANSFORM_KEYS}
+        transform["shstrtab_index"] = next(
+            section.index for section in self.sections if section.name == ".shstrtab"
+        )
+        return transform
+
+    def semantic_section_record(self, section: Section) -> dict[str, Any]:
+        link_name = None
+        if section.link:
+            if section.link >= len(self.sections):
+                raise RuntimeError(
+                    f"ELF section {section.name} has an invalid linked-section index."
+                )
+            link_name = self.sections[section.link].name
+        info: int | str = section.info
+        if section.type in {SHT_REL, SHT_RELA} and section.info:
+            if section.info >= len(self.sections):
+                raise RuntimeError(
+                    f"ELF relocation section {section.name} has an invalid target index."
+                )
+            info = self.sections[section.info].name
+        digest = (
+            self._semantic_symbol_digest(section)
+            if section.type in {SHT_SYMTAB, SHT_DYNSYM}
+            else _sha256_bytes(section.data)
+        )
+        return {
+            "name": section.name,
+            "type": section.type,
+            "flags": section.flags,
+            "address": section.address,
+            "offset": section.offset,
+            "size": section.size,
+            "link_name": link_name,
+            "info": info,
+            "alignment": section.alignment,
+            "entry_size": section.entry_size,
+            "semantic_sha256": digest,
+        }
+
+    def _semantic_symbol_digest(self, section: Section) -> str:
+        if (
+            section.entry_size != SYMBOL_ENTRY.size
+            or section.size % section.entry_size
+            or section.link >= len(self.sections)
+        ):
+            raise RuntimeError(
+                f"ELF symbol table {section.name} has an unsupported layout."
+            )
+        strings = self.sections[section.link]
+        if strings.type != SHT_STRTAB:
+            raise RuntimeError(
+                f"ELF symbol table {section.name} is not linked to a string table."
+            )
+        records = []
+        for offset in range(0, section.size, section.entry_size):
+            name_offset, info, other, section_index, value, size = (
+                SYMBOL_ENTRY.unpack_from(section.data, offset)
+            )
+            name = (
+                ""
+                if name_offset == 0
+                else _read_c_string(
+                    strings.data, name_offset, f"ELF symbol in {section.name}"
+                )
+            )
+            section_reference: int | str = section_index
+            if 0 < section_index < 0xFF00:
+                if section_index >= len(self.sections):
+                    raise RuntimeError(
+                        f"ELF symbol in {section.name} has an invalid section index."
+                    )
+                section_reference = self.sections[section_index].name
+            records.append(
+                {
+                    "name": name,
+                    "info": info,
+                    "other": other,
+                    "section": section_reference,
+                    "value": value,
+                    "size": size,
+                }
+            )
+        return _sha256_bytes(
+            json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
+        )
 
     def program_records(self) -> list[dict[str, Any]]:
         return [
@@ -529,14 +649,13 @@ class ElfFile:
         return members
 
 
-def _stable_sections_digest(
-    sections: list[Section], changed_names: set[str]
-) -> tuple[str, int]:
+def _stable_sections_digest(elf: ElfFile, changed_names: set[str]) -> tuple[str, int]:
     records = [
-        section.stable_record()
-        for section in sections
+        elf.semantic_section_record(section)
+        for section in elf.sections
         if section.index != 0 and section.name not in changed_names
     ]
+    records.sort(key=lambda item: item["name"])
     encoded = json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
     return _sha256_bytes(encoded), len(records)
 
@@ -545,121 +664,239 @@ def _compare_program_headers(
     before: list[dict[str, Any]],
     after: list[dict[str, Any]],
     changed_sections: list[dict[str, Any]],
+    header_transform: dict[str, dict[str, int]],
 ) -> list[int]:
-    if len(before) != len(after):
-        raise RuntimeError("linuxdeploy changed the program-header count.")
-    changed_indices = []
     changed_section_names = {section["name"] for section in changed_sections}
-    before_allowed_ranges = [
-        interval
-        for section in changed_sections
-        for interval in _interval_difference(
-            (section["pre_offset"], section["pre_offset"] + section["pre_size"]),
-            (
-                section["packaged_offset"],
-                section["packaged_offset"] + section["packaged_size"],
-            ),
+    if changed_section_names != {".dynamic", ".dynstr"}:
+        raise RuntimeError("Program-header comparison requires both runtime sections.")
+    if len(after) not in {len(before), len(before) + 1}:
+        raise RuntimeError(
+            "linuxdeploy added more than the single approved runtime relocation segment."
         )
-    ]
-    after_allowed_ranges = [
-        interval
-        for section in changed_sections
-        for interval in _interval_difference(
-            (
-                section["packaged_offset"],
-                section["packaged_offset"] + section["packaged_size"],
-            ),
-            (section["pre_offset"], section["pre_offset"] + section["pre_size"]),
-        )
-    ]
-    exact_fields = {
-        "index",
-        "type",
-        "type_name",
-        "flags",
-        "virtual_address",
-        "physical_address",
-        "memory_size",
-        "alignment",
-        "sections",
-    }
-    for left, right in zip(before, after, strict=True):
-        if any(left[field] != right[field] for field in exact_fields):
-            if left["type"] == PT_LOAD and left["flags"] != right["flags"]:
-                raise RuntimeError("linuxdeploy changed PT_LOAD permissions.")
-            if left["type"] == PT_GNU_STACK and left["flags"] != right["flags"]:
-                raise RuntimeError("linuxdeploy changed PT_GNU_STACK executability.")
-            if left["sections"] != right["sections"]:
-                raise RuntimeError("linuxdeploy changed a section-to-segment mapping.")
+    for label, records in (("pre-bundle", before), ("packaged", after)):
+        if any(
+            record["type"] == PT_LOAD and record["flags"] & 0x3 == 0x3
+            for record in records
+        ):
             raise RuntimeError(
-                "linuxdeploy changed an unapproved program-header semantic."
+                f"{label} launcher contains a writable executable PT_LOAD."
             )
-        if left["offset"] != right["offset"] or left["file_size"] != right["file_size"]:
-            if not changed_section_names.intersection(left["sections"]):
-                raise RuntimeError(
-                    "linuxdeploy changed a program-header offset or file size outside "
-                    "the runtime-path relocation segment."
-                )
-            removed_ranges = _interval_difference(
-                (left["offset"], left["offset"] + left["file_size"]),
-                (right["offset"], right["offset"] + right["file_size"]),
+        stacks = [record for record in records if record["type"] == PT_GNU_STACK]
+        if len(stacks) != 1 or stacks[0]["flags"] & 0x1:
+            raise RuntimeError(
+                f"{label} launcher has an executable or ambiguous GNU stack."
             )
-            added_ranges = _interval_difference(
-                (right["offset"], right["offset"] + right["file_size"]),
-                (left["offset"], left["offset"] + left["file_size"]),
+
+    def one(records: list[dict[str, Any]], kind: int, label: str) -> dict[str, Any]:
+        matches = [record for record in records if record["type"] == kind]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"{label} launcher must contain exactly one {PROGRAM_TYPE_NAMES[kind]}."
             )
-            if not _ranges_are_covered(
-                removed_ranges, before_allowed_ranges
-            ) or not _ranges_are_covered(added_ranges, after_allowed_ranges):
-                raise RuntimeError(
-                    "linuxdeploy changed program-header file coverage beyond the "
-                    "approved runtime-path byte ranges."
-                )
-            changed_indices.append(left["index"])
-    return changed_indices
+        return matches[0]
 
+    def normalized(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: (
+                sorted(set(value) - changed_section_names)
+                if key == "sections"
+                else value
+            )
+            for key, value in record.items()
+            if key != "index"
+        }
 
-def _interval_difference(
-    primary: tuple[int, int], subtract: tuple[int, int]
-) -> list[tuple[int, int]]:
-    start, end = primary
-    other_start, other_end = subtract
-    if end <= start:
-        return []
-    overlap_start = max(start, other_start)
-    overlap_end = min(end, other_end)
-    if overlap_start >= overlap_end:
-        return [(start, end)]
-    difference = []
-    if start < overlap_start:
-        difference.append((start, overlap_start))
-    if overlap_end < end:
-        difference.append((overlap_end, end))
-    return difference
+    before_phdr = one(before, PT_PHDR, "Pre-bundle")
+    after_phdr = one(after, PT_PHDR, "Packaged")
+    before_dynamic = one(before, PT_DYNAMIC, "Pre-bundle")
+    after_dynamic = one(after, PT_DYNAMIC, "Packaged")
+    before_regular = [
+        record for record in before if record["type"] not in {PT_PHDR, PT_DYNAMIC}
+    ]
+    after_regular = [
+        record for record in after if record["type"] not in {PT_PHDR, PT_DYNAMIC}
+    ]
+    unmatched_after = list(after_regular)
+    matched_pairs = []
+    for left in before_regular:
+        candidates = [
+            right for right in unmatched_after if normalized(left) == normalized(right)
+        ]
+        if len(candidates) != 1:
+            raise RuntimeError(
+                "linuxdeploy changed an existing program header beyond runtime-section remapping."
+            )
+        right = candidates[0]
+        unmatched_after.remove(right)
+        matched_pairs.append((left, right))
 
-
-def _ranges_are_covered(
-    required: list[tuple[int, int]], allowed: list[tuple[int, int]]
-) -> bool:
-    merged: list[list[int]] = []
-    for start, end in sorted(allowed):
-        if end <= start:
-            continue
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)
-        else:
-            merged.append([start, end])
-    return all(
-        any(
-            allowed_start <= start and end <= allowed_end
-            for allowed_start, allowed_end in merged
+    added_count = len(after) - len(before)
+    if len(unmatched_after) != added_count:
+        raise RuntimeError(
+            "linuxdeploy program-header inventory does not match one optional relocation segment."
         )
-        for start, end in required
+
+    transforms = {
+        "pre_bundle": header_transform["pre_bundle"],
+        "packaged": header_transform["packaged"],
+    }
+    for label, record, transform in (
+        ("pre-bundle", before_phdr, transforms["pre_bundle"]),
+        ("packaged", after_phdr, transforms["packaged"]),
+    ):
+        expected_size = transform["program_header_count"] * PROGRAM_HEADER.size
+        if (
+            record["flags"] != 4
+            or record["alignment"] != 8
+            or record["sections"]
+            or record["offset"] != transform["program_header_offset"]
+            or record["virtual_address"] != record["offset"]
+            or record["physical_address"] != record["offset"]
+            or record["file_size"] != expected_size
+            or record["memory_size"] != expected_size
+        ):
+            raise RuntimeError(
+                f"{label} PT_PHDR does not exactly attest its program-header table."
+            )
+    if not added_count and normalized(before_phdr) != normalized(after_phdr):
+        raise RuntimeError(
+            "linuxdeploy changed PT_PHDR without adding a relocation segment."
+        )
+
+    changed_by_name = {section["name"]: section for section in changed_sections}
+    dynamic = changed_by_name[".dynamic"]
+    for label, record, prefix in (
+        ("pre-bundle", before_dynamic, "pre"),
+        ("packaged", after_dynamic, "packaged"),
+    ):
+        if (
+            record["flags"] != 6
+            or record["alignment"] != 8
+            or record["offset"] != dynamic[f"{prefix}_offset"]
+            or record["virtual_address"] != dynamic[f"{prefix}_address"]
+            or record["physical_address"] != dynamic[f"{prefix}_address"]
+            or record["file_size"] != dynamic[f"{prefix}_size"]
+            or record["memory_size"] != dynamic[f"{prefix}_size"]
+            or record["sections"] != [".dynamic"]
+        ):
+            raise RuntimeError(
+                f"{label} PT_DYNAMIC does not exactly map the .dynamic section."
+            )
+
+    added_indices = []
+    if added_count:
+        added = unmatched_after[0]
+        runtime_sections = [changed_by_name[".dynamic"], changed_by_name[".dynstr"]]
+        start = transforms["packaged"]["program_header_offset"]
+        table_end = (
+            start + transforms["packaged"]["program_header_count"] * PROGRAM_HEADER.size
+        )
+        file_end = max(
+            table_end,
+            *(
+                section["packaged_offset"] + section["packaged_size"]
+                for section in runtime_sections
+            ),
+        )
+        memory_end = max(
+            table_end,
+            *(
+                section["packaged_address"] + section["packaged_size"]
+                for section in runtime_sections
+            ),
+        )
+        section_alignment = max(
+            section["packaged_alignment"] for section in runtime_sections
+        )
+        expected_file_size = _align_up(file_end - start, section_alignment)
+        expected_memory_size = _align_up(memory_end - start, section_alignment)
+        if (
+            added["type"] != PT_LOAD
+            or added["flags"] != 6
+            or added["alignment"] < 4096
+            or added["alignment"] & (added["alignment"] - 1)
+            or added["offset"] != start
+            or added["virtual_address"] != start
+            or added["physical_address"] != start
+            or added["file_size"] != expected_file_size
+            or added["memory_size"] != expected_memory_size
+            or set(added["sections"]) != changed_section_names
+            or len(added["sections"]) != 2
+        ):
+            raise RuntimeError(
+                "linuxdeploy added an unauthorized program header instead of the exact "
+                "read/write runtime relocation segment."
+            )
+        added_indices.append(added["index"])
+    elif unmatched_after:
+        raise RuntimeError("linuxdeploy produced an unexplained program header.")
+
+    changed_indices = {
+        after_phdr["index"],
+        after_dynamic["index"],
+        *added_indices,
+    }
+    changed_indices.update(
+        right["index"] for left, right in matched_pairs if left != right
     )
+    return sorted(changed_indices)
+
+
+def _align_up(value: int, alignment: int) -> int:
+    if value < 0 or alignment < 1 or alignment & (alignment - 1):
+        raise RuntimeError("ELF alignment evidence is invalid.")
+    return (value + alignment - 1) & -alignment
 
 
 def _canonical_dynamic_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [entry for entry in entries if entry["tag"] not in ALLOWED_DYNAMIC_TAGS]
+
+
+def _attest_runtime_path_string(
+    before: Section,
+    after: Section,
+    path_entry: dict[str, Any],
+) -> dict[str, Any]:
+    expected = EXPECTED_RUNTIME_PATH.encode("utf-8") + b"\0"
+    offset = path_entry["raw_value"]
+    if (
+        not isinstance(offset, int)
+        or isinstance(offset, bool)
+        or offset < 0
+        or offset > len(after.data)
+        or len(expected) > len(after.data) - offset
+        or after.data[offset : offset + len(expected)] != expected
+    ):
+        raise RuntimeError(
+            "Packaged runtime-path dynamic entry does not identify the exact expected "
+            ".dynstr bytes."
+        )
+
+    if offset == len(before.data) and after.data == before.data + expected:
+        mode = "append"
+        preserved = before.data
+    elif (
+        len(after.data) == len(before.data)
+        and before.data[offset : offset + len(expected)] == b"\0" * len(expected)
+        and after.data
+        == before.data[:offset] + expected + before.data[offset + len(expected) :]
+    ):
+        mode = "zero-padding-replacement"
+        preserved = before.data[:offset] + before.data[offset + len(expected) :]
+    else:
+        raise RuntimeError(
+            "linuxdeploy changed .dynstr outside the exact expected runtime-path "
+            "string span."
+        )
+
+    return {
+        "tag": DYNAMIC_TAG_NAMES[path_entry["tag"]],
+        "value": EXPECTED_RUNTIME_PATH,
+        "offset": offset,
+        "byte_length": len(expected),
+        "mode": mode,
+        "preserved_sha256": _sha256_bytes(preserved),
+    }
 
 
 def _header_differences(
@@ -687,8 +924,6 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
             "linuxdeploy changed the canonical ELF header semantics: "
             f"{json.dumps(header_differences, sort_keys=True, separators=(',', ':'))}"
         )
-    if before.header["program_header_offset"] != after.header["program_header_offset"]:
-        raise RuntimeError("linuxdeploy moved the program-header table.")
     if before.identity() != after.identity():
         raise RuntimeError(
             "linuxdeploy changed the ELF identity or GNU build identity."
@@ -697,6 +932,8 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
         raise RuntimeError(
             "linuxdeploy did not produce a distinct runtime-path transformation."
         )
+    if before.runtime_paths:
+        raise RuntimeError("Pre-bundle launcher must not contain an RPATH or RUNPATH.")
     if (
         len(after.runtime_paths) != 1
         or after.runtime_paths[0]["tag"] not in {"RPATH", "RUNPATH"}
@@ -712,57 +949,112 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
 
     before_sections = {section.name: section for section in before.sections}
     after_sections = {section.name: section for section in after.sections}
-    if list(before_sections) != list(after_sections):
-        raise RuntimeError("linuxdeploy changed the ELF section inventory or order.")
+    if set(before_sections) != set(after_sections):
+        raise RuntimeError("linuxdeploy changed the ELF section inventory.")
     dynamic = next(
         section for section in before.sections if section.type == SHT_DYNAMIC
     )
     linked_strings = before.sections[dynamic.link]
+    after_dynamic = after_sections[dynamic.name]
+    if (
+        after_dynamic.type != SHT_DYNAMIC
+        or after_dynamic.link >= len(after.sections)
+        or after.sections[after_dynamic.link].name != linked_strings.name
+    ):
+        raise RuntimeError("linuxdeploy changed the dynamic-section string-table link.")
     allowed_section_names = {dynamic.name, linked_strings.name}
+    after_linked_strings = after_sections[linked_strings.name]
+    packaged_path_entries = [
+        entry
+        for entry in after.dynamic_entries
+        if entry["tag"] in {DT_RPATH, DT_RUNPATH}
+    ]
+    if len(packaged_path_entries) != 1:
+        raise RuntimeError(
+            "Packaged launcher must contain exactly one runtime-path dynamic entry."
+        )
+    runtime_path_string = _attest_runtime_path_string(
+        linked_strings,
+        after_linked_strings,
+        packaged_path_entries[0],
+    )
     changed_sections = []
     for name, left in before_sections.items():
         right = after_sections[name]
         if name in allowed_section_names:
-            if left.transform_record() != right.transform_record():
+            left_record = before.semantic_section_record(left)
+            right_record = after.semantic_section_record(right)
+            fixed_fields = {
+                "name",
+                "type",
+                "flags",
+                "link_name",
+                "info",
+                "entry_size",
+            }
+            if any(left_record[field] != right_record[field] for field in fixed_fields):
                 raise RuntimeError(
                     f"linuxdeploy changed unapproved metadata for runtime-linking section {name}."
                 )
+            if name == dynamic.name and left.alignment != right.alignment:
+                raise RuntimeError("linuxdeploy changed .dynamic alignment.")
+            if name == linked_strings.name and (
+                right.alignment < left.alignment
+                or right.alignment not in {left.alignment, 8}
+                or right.alignment & (right.alignment - 1)
+            ):
+                raise RuntimeError(
+                    "linuxdeploy changed .dynstr to an unapproved alignment."
+                )
             if (
                 left.data != right.data
+                or left.address != right.address
                 or left.offset != right.offset
                 or left.size != right.size
+                or left.alignment != right.alignment
+                or left.index != right.index
             ):
                 changed_sections.append(
                     {
                         "name": name,
+                        "pre_index": left.index,
+                        "packaged_index": right.index,
                         "pre_sha256": _sha256_bytes(left.data),
                         "packaged_sha256": _sha256_bytes(right.data),
+                        "pre_address": left.address,
+                        "packaged_address": right.address,
                         "pre_offset": left.offset,
                         "packaged_offset": right.offset,
                         "pre_size": left.size,
                         "packaged_size": right.size,
+                        "pre_alignment": left.alignment,
+                        "packaged_alignment": right.alignment,
                     }
                 )
-        elif left.stable_record() != right.stable_record():
+        elif before.semantic_section_record(left) != after.semantic_section_record(
+            right
+        ):
             raise RuntimeError(f"linuxdeploy changed stable ELF section {name}.")
     if {item["name"] for item in changed_sections} != allowed_section_names:
         raise RuntimeError(
             "linuxdeploy did not limit the transformation to .dynamic and its linked string table."
         )
 
-    stable_before, stable_count = _stable_sections_digest(
-        before.sections, allowed_section_names
-    )
+    stable_before, stable_count = _stable_sections_digest(before, allowed_section_names)
     stable_after, stable_after_count = _stable_sections_digest(
-        after.sections, allowed_section_names
+        after, allowed_section_names
     )
     if stable_before != stable_after or stable_count != stable_after_count:
         raise RuntimeError("linuxdeploy changed the canonical stable-section digest.")
 
     before_programs = before.program_records()
     after_programs = after.program_records()
+    header_transform = {
+        "pre_bundle": before.header_transform(),
+        "packaged": after.header_transform(),
+    }
     changed_program_indices = _compare_program_headers(
-        before_programs, after_programs, changed_sections
+        before_programs, after_programs, changed_sections, header_transform
     )
     before_allowed_dynamic = [
         entry
@@ -790,9 +1082,20 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
         raise RuntimeError(
             "linuxdeploy receipt does not contain a runtime-path dynamic change."
         )
+    for label, elf, strings in (
+        ("pre-bundle", before, linked_strings),
+        ("packaged", after, after_linked_strings),
+    ):
+        string_table_addresses = [
+            entry["value"] for entry in elf.dynamic_entries if entry["tag"] == DT_STRTAB
+        ]
+        if string_table_addresses != [strings.address]:
+            raise RuntimeError(
+                f"{label} DT_STRTAB does not exactly identify the linked .dynstr section."
+            )
 
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "target": LINUX_TARGET,
         "result": "passed",
         "transformation_kind": TRANSFORMATION_KIND,
@@ -807,10 +1110,7 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
         "elf_identity": before.identity(),
         "proof": {
             "elf_header": before.semantic_header(),
-            "elf_header_locations": {
-                "pre_bundle": before.header_locations(),
-                "packaged": after.header_locations(),
-            },
+            "elf_header_transform": header_transform,
             "program_headers": {
                 "pre_bundle": before_programs,
                 "packaged": after_programs,
@@ -827,6 +1127,7 @@ def create_receipt(pre_bundle: Path, packaged: Path) -> dict[str, Any]:
                 "pre_bundle": before_string_size,
                 "packaged": after_string_size,
             },
+            "runtime_path_string": runtime_path_string,
         },
     }
     validate_receipt(receipt)
@@ -853,7 +1154,8 @@ def _validate_program_record(value: Any, label: str) -> dict[str, Any]:
         for field in integer_fields
     ):
         raise RuntimeError(f"{label} contains a non-integer ELF field.")
-    if not isinstance(value["type_name"], str) or not value["type_name"]:
+    expected_type_name = PROGRAM_TYPE_NAMES.get(value["type"], f"PT_{value['type']:#x}")
+    if value["type_name"] != expected_type_name:
         raise RuntimeError(f"{label} has an invalid type name.")
     if (
         not isinstance(value["sections"], list)
@@ -876,7 +1178,7 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
         receipt, TOP_LEVEL_FIELDS, "launcher transformation"
     )
     if (
-        receipt["schema_version"] != 1
+        receipt["schema_version"] != 2
         or receipt["target"] != LINUX_TARGET
         or receipt["result"] != "passed"
         or receipt["transformation_kind"] != TRANSFORMATION_KIND
@@ -900,8 +1202,10 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
         == launchers["packaged"]["runtime_paths"]
     ):
         raise RuntimeError("Launcher transformation runtime paths are unchanged.")
-    if len(launchers["pre_bundle"]["runtime_paths"]) > 1:
-        raise RuntimeError("Pre-bundle launcher has ambiguous runtime-path evidence.")
+    if launchers["pre_bundle"]["runtime_paths"]:
+        raise RuntimeError(
+            "Pre-bundle launcher must not contain runtime-path evidence."
+        )
     packaged_paths = launchers["packaged"]["runtime_paths"]
     if (
         len(packaged_paths) != 1
@@ -946,10 +1250,8 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
         "flags",
         "elf_header_size",
         "program_header_entry_size",
-        "program_header_count",
         "section_header_entry_size",
         "section_header_count",
-        "section_name_index",
     }
     header = _require_exact_fields(
         header, required_header_fields, "canonical ELF header"
@@ -970,32 +1272,52 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
     ):
         raise RuntimeError("Canonical ELF header is inconsistent with ELF identity.")
 
-    header_locations = _require_exact_fields(
-        proof["elf_header_locations"],
+    header_transform = _require_exact_fields(
+        proof["elf_header_transform"],
         {"pre_bundle", "packaged"},
-        "ELF header locations",
+        "ELF header transformation",
     )
-    pre_header_locations = _require_exact_fields(
-        header_locations["pre_bundle"],
-        ELF_HEADER_LOCATION_FIELDS,
-        "pre-bundle ELF header locations",
+    pre_header_transform = _require_exact_fields(
+        header_transform["pre_bundle"],
+        ELF_HEADER_TRANSFORM_FIELDS,
+        "pre-bundle ELF header transformation",
     )
-    packaged_header_locations = _require_exact_fields(
-        header_locations["packaged"],
-        ELF_HEADER_LOCATION_FIELDS,
-        "packaged ELF header locations",
+    packaged_header_transform = _require_exact_fields(
+        header_transform["packaged"],
+        ELF_HEADER_TRANSFORM_FIELDS,
+        "packaged ELF header transformation",
     )
     if any(
         not isinstance(value, int) or isinstance(value, bool) or value < 0
-        for locations in (pre_header_locations, packaged_header_locations)
-        for value in locations.values()
+        for transform in (pre_header_transform, packaged_header_transform)
+        for value in transform.values()
     ):
-        raise RuntimeError("ELF header-table locations are invalid.")
+        raise RuntimeError("ELF header transformation fields are invalid.")
     if (
-        pre_header_locations["program_header_offset"]
-        != packaged_header_locations["program_header_offset"]
+        pre_header_transform["section_name_index"]
+        != pre_header_transform["shstrtab_index"]
+        or packaged_header_transform["section_name_index"]
+        != packaged_header_transform["shstrtab_index"]
     ):
-        raise RuntimeError("Program-header table relocation is not allowed.")
+        raise RuntimeError(
+            "ELF section-name index does not attest the .shstrtab section."
+        )
+    program_count_change = (
+        packaged_header_transform["program_header_count"]
+        - pre_header_transform["program_header_count"]
+    )
+    if program_count_change not in {0, 1}:
+        raise RuntimeError(
+            "ELF program-header count exceeds the one-segment relocation boundary."
+        )
+    if (
+        program_count_change == 0
+        and pre_header_transform["program_header_offset"]
+        != packaged_header_transform["program_header_offset"]
+    ):
+        raise RuntimeError(
+            "ELF program-header table moved without an added relocation segment."
+        )
 
     programs = _require_exact_fields(
         proof["program_headers"], PROGRAM_PROOF_FIELDS, "program-header proof"
@@ -1019,21 +1341,19 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
     if (
         not before_programs
         or not after_programs
-        or len(before_programs) != header["program_header_count"]
+        or len(before_programs) != pre_header_transform["program_header_count"]
+        or len(after_programs) != packaged_header_transform["program_header_count"]
     ):
         raise RuntimeError("Program-header proof is incomplete.")
-    if [item["index"] for item in before_programs] != list(range(len(before_programs))):
+    if [item["index"] for item in before_programs] != list(
+        range(len(before_programs))
+    ) or [item["index"] for item in after_programs] != list(range(len(after_programs))):
         raise RuntimeError("Program-header indices are not canonical.")
-    required_program_types = {PT_LOAD, PT_DYNAMIC, PT_GNU_STACK}
+    required_program_types = {PT_LOAD, PT_DYNAMIC, PT_PHDR, PT_GNU_STACK}
     if not required_program_types.issubset({item["type"] for item in before_programs}):
         raise RuntimeError(
             "Program-header proof omits a required load, dynamic, or stack segment."
         )
-    if any(
-        item["type"] == PT_GNU_STACK and item["flags"] & 0x1 for item in before_programs
-    ):
-        raise RuntimeError("Program-header proof contains an executable PT_GNU_STACK.")
-
     changed_sections = proof["changed_sections"]
     if not isinstance(changed_sections, list):
         raise TypeError("Changed-section proof must be a list.")
@@ -1045,18 +1365,25 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
     if changed_names != {".dynamic", ".dynstr"} or len(validated_sections) != 2:
         raise RuntimeError("Changed sections must be exactly .dynamic and .dynstr.")
     for section in validated_sections:
+        integer_fields = CHANGED_SECTION_FIELDS - {
+            "name",
+            "pre_sha256",
+            "packaged_sha256",
+        }
         if (
             not isinstance(section["name"], str)
-            or not isinstance(section["pre_offset"], int)
-            or isinstance(section["pre_offset"], bool)
-            or not isinstance(section["packaged_offset"], int)
-            or isinstance(section["packaged_offset"], bool)
-            or section["pre_offset"] < 0
-            or section["packaged_offset"] < 0
-            or not isinstance(section["pre_size"], int)
-            or not isinstance(section["packaged_size"], int)
+            or any(
+                not isinstance(section[field], int)
+                or isinstance(section[field], bool)
+                or section[field] < 0
+                for field in integer_fields
+            )
             or section["pre_size"] <= 0
             or section["packaged_size"] <= 0
+            or section["pre_alignment"] <= 0
+            or section["packaged_alignment"] <= 0
+            or section["pre_alignment"] & (section["pre_alignment"] - 1)
+            or section["packaged_alignment"] & (section["packaged_alignment"] - 1)
             or any(
                 not isinstance(section[field], str)
                 or not SHA256.fullmatch(section[field])
@@ -1067,7 +1394,13 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
             raise RuntimeError("Changed-section proof is invalid.")
 
     expected_changed_indices = _compare_program_headers(
-        before_programs, after_programs, validated_sections
+        before_programs,
+        after_programs,
+        validated_sections,
+        {
+            "pre_bundle": pre_header_transform,
+            "packaged": packaged_header_transform,
+        },
     )
     if (
         not isinstance(programs["changed_indices"], list)
@@ -1113,6 +1446,40 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
         )
     ):
         raise RuntimeError("Dynamic string-table size proof is invalid.")
+    runtime_path_string = _require_exact_fields(
+        proof["runtime_path_string"],
+        RUNTIME_PATH_STRING_FIELDS,
+        "runtime-path string proof",
+    )
+    expected_path_bytes = len(EXPECTED_RUNTIME_PATH.encode("utf-8")) + 1
+    if (
+        runtime_path_string["tag"] != packaged_paths[0]["tag"]
+        or runtime_path_string["value"] != EXPECTED_RUNTIME_PATH
+        or not isinstance(runtime_path_string["offset"], int)
+        or isinstance(runtime_path_string["offset"], bool)
+        or runtime_path_string["offset"] < 0
+        or runtime_path_string["byte_length"] != expected_path_bytes
+        or not isinstance(runtime_path_string["preserved_sha256"], str)
+        or not SHA256.fullmatch(runtime_path_string["preserved_sha256"])
+    ):
+        raise RuntimeError("Runtime-path string proof is invalid.")
+    if runtime_path_string["mode"] == "append":
+        valid_string_boundary = (
+            runtime_path_string["offset"] == dynstr["pre_size"]
+            and dynstr["packaged_size"] == dynstr["pre_size"] + expected_path_bytes
+        )
+    elif runtime_path_string["mode"] == "zero-padding-replacement":
+        valid_string_boundary = (
+            dynstr["packaged_size"] == dynstr["pre_size"]
+            and runtime_path_string["offset"] + expected_path_bytes
+            <= dynstr["pre_size"]
+        )
+    else:
+        valid_string_boundary = False
+    if not valid_string_boundary:
+        raise RuntimeError(
+            "Runtime-path string proof exceeds the bounded .dynstr transformation."
+        )
     expected_dynamic_tags = {
         tag
         for tag in ("RPATH", "RUNPATH")
@@ -1129,6 +1496,8 @@ def validate_receipt(receipt: Any) -> dict[str, Any]:
     }
     if string_size_changed:
         expected_dynamic_tags.add("STRSZ")
+    if dynstr["pre_address"] != dynstr["packaged_address"]:
+        expected_dynamic_tags.add("STRTAB")
     if (
         not isinstance(proof["changed_dynamic_tags"], list)
         or proof["changed_dynamic_tags"] != sorted(set(proof["changed_dynamic_tags"]))
