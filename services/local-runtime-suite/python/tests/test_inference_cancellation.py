@@ -20,7 +20,7 @@ from local_runtime.cancellation import (
     acquire_model_lock,
     validate_client_request_id,
 )
-from local_runtime.main import _finalize_inference_stream, app
+from local_runtime.main import _finalize_inference_stream, _select_model, app
 from local_runtime.models import (
     model_llm_qwen3_hf,
     model_llm_qwen3_mlx,
@@ -346,7 +346,7 @@ def test_live_gateway_cancellation_returns_499_and_cleans_registry(client, monke
             context.cancellation_token.raise_if_cancelled()
             await asyncio.sleep(0.01)
 
-    selected = app.state.registry.models_by_endpoint["responses"][0]
+    selected = _select_model("responses", None)
     monkeypatch.setattr(selected.module, "run", cancellable_fixture)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -418,7 +418,7 @@ def test_inference_request_registry_is_cleaned_after_success(client, monkeypatch
         assert app.state.active_requests.is_active(context.request_id)
         return "fixture response"
 
-    selected = app.state.registry.models_by_endpoint["responses"][0]
+    selected = _select_model("responses", None)
     monkeypatch.setattr(selected.module, "run", run_fixture)
 
     response = client.post(
@@ -435,7 +435,7 @@ def test_model_busy_is_returned_as_typed_409(client, monkeypatch) -> None:
     async def busy_fixture(_request, _context):
         raise ModelBusyError("The previous local model request is still finishing. Retry in a moment.")
 
-    selected = app.state.registry.models_by_endpoint["responses"][0]
+    selected = _select_model("responses", None)
     monkeypatch.setattr(selected.module, "run", busy_fixture)
 
     response = client.post(
@@ -453,7 +453,7 @@ def test_inference_deadline_is_returned_as_typed_504(client, monkeypatch) -> Non
     async def timeout_fixture(_request, _context):
         raise InferenceTimeoutError("The local inference request exceeded its deadline.")
 
-    selected = app.state.registry.models_by_endpoint["responses"][0]
+    selected = _select_model("responses", None)
     monkeypatch.setattr(selected.module, "run", timeout_fixture)
 
     response = client.post(
