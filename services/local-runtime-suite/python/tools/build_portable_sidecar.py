@@ -298,6 +298,20 @@ def prune_generated_bytecode(root: Path) -> None:
         raise RuntimeError(f"Generated Python bytecode remains in the portable runtime: {relative}")
 
 
+def prune_windows_torch_headers(pylibs: Path, target: str) -> None:
+    if target != "x86_64-pc-windows-msvc":
+        return
+    torch_headers = pylibs / "torch" / "include"
+    if torch_headers.is_symlink():
+        raise RuntimeError(f"Refusing to prune symlinked Torch headers: {torch_headers}")
+    if torch_headers.exists():
+        if not torch_headers.is_dir():
+            raise RuntimeError(f"Torch headers path is not a directory: {torch_headers}")
+        shutil.rmtree(torch_headers)
+    if torch_headers.exists() or torch_headers.is_symlink():
+        raise RuntimeError(f"Torch headers remain in the Windows portable runtime: {torch_headers}")
+
+
 def embedded_python_environment() -> dict[str, str]:
     environment = {
         key: value for key, value in os.environ.items() if key.upper() not in EMBEDDED_ENVIRONMENT_BLOCKLIST
@@ -480,6 +494,7 @@ def build_runtime(
             ],
             env=environment,
         )
+        prune_windows_torch_headers(pylibs, target)
         prune_generated_bytecode(runtime_root)
 
     stamp_path.write_text(json.dumps(stamp, indent=2, sort_keys=True) + "\n", "utf-8")

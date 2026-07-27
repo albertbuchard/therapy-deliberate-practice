@@ -220,6 +220,64 @@ def test_bytecode_cleanup_fails_closed_when_generated_files_remain(monkeypatch, 
         build_portable_sidecar.prune_generated_bytecode(runtime_root)
 
 
+def test_windows_torch_header_cleanup_removes_nsis_long_path_and_keeps_runtime_files(
+    tmp_path,
+) -> None:
+    pylibs = tmp_path / "pylibs"
+    long_header = (
+        pylibs
+        / "torch"
+        / "include"
+        / "ATen"
+        / "native"
+        / "transformers"
+        / "cuda"
+        / "mem_eff_attention"
+        / "iterators"
+        / "predicated_tile_access_iterator_residual_last.h"
+    )
+    long_header.parent.mkdir(parents=True)
+    long_header.write_text("development header\n")
+    runtime_module = pylibs / "torch" / "__init__.py"
+    runtime_module.write_text("runtime module\n")
+    runtime_library = pylibs / "torch" / "lib" / "torch_cpu.dll"
+    runtime_library.parent.mkdir()
+    runtime_library.write_bytes(b"runtime library")
+
+    build_portable_sidecar.prune_windows_torch_headers(pylibs, "x86_64-pc-windows-msvc")
+
+    assert not (pylibs / "torch" / "include").exists()
+    assert runtime_module.read_text() == "runtime module\n"
+    assert runtime_library.read_bytes() == b"runtime library"
+
+
+def test_windows_torch_header_cleanup_fails_closed_for_external_symlink(tmp_path) -> None:
+    pylibs = tmp_path / "pylibs"
+    external_headers = tmp_path / "external-headers"
+    external_headers.mkdir()
+    external_header = external_headers / "keep.h"
+    external_header.write_text("must remain\n")
+    torch_root = pylibs / "torch"
+    torch_root.mkdir(parents=True)
+    (torch_root / "include").symlink_to(external_headers, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Refusing to prune symlinked Torch headers"):
+        build_portable_sidecar.prune_windows_torch_headers(pylibs, "x86_64-pc-windows-msvc")
+
+    assert external_header.read_text() == "must remain\n"
+
+
+def test_torch_header_cleanup_is_windows_only(tmp_path) -> None:
+    pylibs = tmp_path / "pylibs"
+    linux_header = pylibs / "torch" / "include" / "torch" / "extension.h"
+    linux_header.parent.mkdir(parents=True)
+    linux_header.write_text("retain on non-Windows targets\n")
+
+    build_portable_sidecar.prune_windows_torch_headers(pylibs, "x86_64-unknown-linux-gnu")
+
+    assert linux_header.read_text() == "retain on non-Windows targets\n"
+
+
 def test_macos_wheel_floor_rejects_newer_platform_tag(tmp_path) -> None:
     wheel = tmp_path / "mlx-0.32.0.dist-info" / "WHEEL"
     wheel.parent.mkdir()
