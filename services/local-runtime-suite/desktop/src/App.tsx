@@ -55,6 +55,8 @@ type GatewayRuntimeState = {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+type DoctorRunState = "idle" | "running" | "error";
+
 type QuickTestStatus = "idle" | "running" | "ok" | "error";
 
 type QuickTestResult = {
@@ -209,6 +211,8 @@ export const App = () => {
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [doctorChecks, setDoctorChecks] = useState<DoctorCheck[]>([]);
+  const [doctorRunState, setDoctorRunState] = useState<DoctorRunState>("idle");
+  const [doctorRunError, setDoctorRunError] = useState<string | null>(null);
   const [defaults, setDefaults] = useState({ llm: "", stt: "" });
   const [preferLocal, setPreferLocal] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -280,29 +284,35 @@ export const App = () => {
     setModels(result.data ?? []);
   }, [logEvent, t]);
 
-  const refreshRuntimeState = useCallback(async () => {
-    const result = await invoke<GatewayRuntimeState>("gateway_runtime_state");
-    setRuntimeState(result);
-    if (result.defaults.responses || result.defaults["audio.transcriptions"]) {
-      setDefaults((current) => ({
-        llm: current.llm || result.defaults.responses || "",
-        stt: current.stt || result.defaults["audio.transcriptions"] || ""
-      }));
-    }
-    return result;
-  }, []);
+  const refreshRuntimeState = useCallback(
+    async (shouldApply: () => boolean = () => true) => {
+      const result = await invoke<GatewayRuntimeState>("gateway_runtime_state");
+      if (!shouldApply()) return result;
+      setRuntimeState(result);
+      if (result.defaults.responses || result.defaults["audio.transcriptions"]) {
+        setDefaults((current) => ({
+          llm: current.llm || result.defaults.responses || "",
+          stt: current.stt || result.defaults["audio.transcriptions"] || ""
+        }));
+      }
+      return result;
+    },
+    []
+  );
 
   const trackModelLoadJob = async (
     jobId: string,
     initialJob: ModelLoadJob,
     runId: number
   ) => {
+    const isCurrentRun = () => runId === modelLoadRunRef.current;
+    if (!isCurrentRun()) return;
     let job = initialJob;
     setModelLoad({ phase: job.status === "pending" ? "starting" : "running", job });
     const deadline = Date.now() + 15 * 60_000;
 
     while (job.status === "pending" || job.status === "running") {
-      if (runId !== modelLoadRunRef.current) return;
+      if (!isCurrentRun()) return;
       if (Date.now() >= deadline) {
         setModelLoad({
           phase: "timed_out",
@@ -313,13 +323,20 @@ export const App = () => {
         return;
       }
       await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 1_000));
-      job = await invoke<ModelLoadJob>("gateway_model_load_status", {
+      if (!isCurrentRun()) return;
+      const latestJob = await invoke<ModelLoadJob>("gateway_model_load_status", {
         payload: { job_id: jobId }
       });
-      setModelLoad({ phase: job.status === "completed" ? "completed" : job.status, job });
+      if (!isCurrentRun()) return;
+      job = latestJob;
+      setModelLoad({
+        phase: job.status === "pending" ? "starting" : job.status,
+        job
+      });
     }
 
-    await refreshRuntimeState();
+    await refreshRuntimeState(isCurrentRun);
+    if (!isCurrentRun()) return;
     if (job.status === "completed") {
       setModelLoad({ phase: "completed", job });
       setSaveState("saved");
@@ -340,7 +357,7 @@ export const App = () => {
         })
       );
     }
-    await refreshLogs();
+    await refreshLogs(isCurrentRun);
   };
 
   const loadSelectedModels = async () => {
@@ -369,10 +386,12 @@ export const App = () => {
           prefer_local: preferLocal
         }
       });
+      if (runId !== modelLoadRunRef.current) return;
       const created = await invoke<{ job_id: string; status: ModelLoadJob }>(
         "gateway_load_models",
         { payload: { models: selectedModels } }
       );
+      if (runId !== modelLoadRunRef.current) return;
       activeJob = created.status;
       await trackModelLoadJob(created.job_id, created.status, runId);
     } catch (error) {
@@ -401,6 +420,7 @@ export const App = () => {
       const latest = await invoke<ModelLoadJob>("gateway_model_load_status", {
         payload: { job_id: existingJob.id }
       });
+      if (runId !== modelLoadRunRef.current) return;
       await trackModelLoadJob(existingJob.id, latest, runId);
     } catch (error) {
       if (runId !== modelLoadRunRef.current) return;
@@ -414,14 +434,18 @@ export const App = () => {
     }
   };
 
-  const refreshLogs = useCallback(async () => {
-    const result = await invoke<{ logs: string[] }>("gateway_logs");
-    setLogs((prev) => {
-      const gatewayLogs = result.logs ?? [];
-      const localLogs = prev.filter((line) => line.startsWith("[UI "));
-      return [...localLogs, ...gatewayLogs];
-    });
-  }, []);
+  const refreshLogs = useCallback(
+    async (shouldApply: () => boolean = () => true) => {
+      const result = await invoke<{ logs: string[] }>("gateway_logs");
+      if (!shouldApply()) return;
+      setLogs((prev) => {
+        const gatewayLogs = result.logs ?? [];
+        const localLogs = prev.filter((line) => line.startsWith("[UI "));
+        return [...localLogs, ...gatewayLogs];
+      });
+    },
+    []
+  );
 
   const refreshConnectionInfo = async () => {
     const result = await invoke<GatewayConnectionInfo>("gateway_connection_info");
@@ -549,10 +573,22 @@ export const App = () => {
   };
 
   const refreshDoctorChecks = useCallback(async () => {
-    const result = await invoke<{ checks: DoctorCheck[] }>("gateway_doctor");
-    setDoctorChecks(result.checks ?? []);
-    await refreshLogs();
-  }, [refreshLogs]);
+    setDoctorRunState("running");
+    setDoctorRunError(null);
+    try {
+      const result = await invoke<{ checks: DoctorCheck[] }>("gateway_doctor");
+      setDoctorChecks(result.checks ?? []);
+      await Promise.allSettled([refreshLogs()]);
+      setDoctorRunState("idle");
+    } catch (error) {
+      const message = t("doctor.runFailed", {
+        details: formatErrorMessage(error, t)
+      });
+      setDoctorRunState("error");
+      setDoctorRunError(message);
+      logEvent(t("events.doctorFailed", { details: message }));
+    }
+  }, [logEvent, refreshLogs, t]);
 
   const runDoctor = useCallback(async () => {
     logEvent(t("events.doctorRunning"));
@@ -1239,7 +1275,11 @@ export const App = () => {
               {doctorBlockingView ? (
                 <div className="inline-row">
                   <div className="helper-text">{t("hero.doctorRecovery")}</div>
-                  <button className="btn ghost" onClick={runDoctor}>
+                  <button
+                    className="btn ghost"
+                    onClick={runDoctor}
+                    disabled={doctorRunState === "running"}
+                  >
                     {t("wizard.doctor")}
                   </button>
                 </div>
@@ -1256,6 +1296,7 @@ export const App = () => {
                   <div className="label">{t("model.language")}</div>
                   <select
                     className="select"
+                    aria-label={t("model.language")}
                     value={defaults.llm}
                     onChange={(event) =>
                       setDefaults((previous) => ({ ...previous, llm: event.target.value }))
@@ -1274,6 +1315,7 @@ export const App = () => {
                   <div className="label">{t("model.speech")}</div>
                   <select
                     className="select"
+                    aria-label={t("model.speech")}
                     value={defaults.stt}
                     onChange={(event) =>
                       setDefaults((previous) => ({ ...previous, stt: event.target.value }))
@@ -1614,6 +1656,7 @@ export const App = () => {
                 <div className="label">{t("port.label")}</div>
                 <input
                   className="port-input"
+                  aria-label={t("port.label")}
                   type="number"
                   min={1024}
                   max={65535}
@@ -1702,7 +1745,11 @@ export const App = () => {
                       {t("common.fix", { details: doctorBlockingView.fix })}
                     </div>
                   ) : null}
-                  <button className="btn" onClick={runDoctor}>
+                  <button
+                    className="btn"
+                    onClick={runDoctor}
+                    disabled={doctorRunState === "running"}
+                  >
                     {t("wizard.doctor")}
                   </button>
                 </div>
@@ -1714,7 +1761,11 @@ export const App = () => {
                 <button className="btn" onClick={stopGateway} disabled={!isGatewayActive}>
                   {t("wizard.stop")}
                 </button>
-                <button className="btn" onClick={runDoctor}>
+                <button
+                  className="btn"
+                  onClick={runDoctor}
+                  disabled={doctorRunState === "running"}
+                >
                   {t("wizard.doctor")}
                 </button>
               </div>
@@ -1766,6 +1817,7 @@ export const App = () => {
                   <div className="label">{t("wizard.defaultLlm")}</div>
                   <select
                     className="select"
+                    aria-label={t("model.language")}
                     value={defaults.llm}
                     onChange={(event) => setDefaults((prev) => ({ ...prev, llm: event.target.value }))}
                     disabled={!canChooseDefaults}
@@ -1782,6 +1834,7 @@ export const App = () => {
                   <div className="label">{t("wizard.defaultStt")}</div>
                   <select
                     className="select"
+                    aria-label={t("model.speech")}
                     value={defaults.stt}
                     onChange={(event) => setDefaults((prev) => ({ ...prev, stt: event.target.value }))}
                     disabled={!canChooseDefaults}
@@ -1824,7 +1877,7 @@ export const App = () => {
                 </button>
                 <button
                   className="btn"
-                  onClick={refreshRuntimeState}
+                  onClick={() => void refreshRuntimeState()}
                   disabled={!isGatewayRunning || modelLoadBusy}
                 >
                   {t("model.refreshReadiness")}
@@ -1902,7 +1955,7 @@ export const App = () => {
                 <div className="helper-text">{t("logs.privacy")}</div>
               </div>
               <div className="button-row">
-                <button className="btn" onClick={refreshLogs}>
+                <button className="btn" onClick={() => void refreshLogs()}>
                   {t("logs.refresh")}
                 </button>
                 <button className="btn" onClick={() => copyText(logs.join("\n"))} disabled={!logs.length}>
@@ -1922,7 +1975,11 @@ export const App = () => {
               <div className="error-banner">
                 <div>{t("logs.importFailure")}</div>
                 <div className="button-row">
-                  <button className="btn" onClick={runDoctor}>
+                  <button
+                    className="btn"
+                    onClick={runDoctor}
+                    disabled={doctorRunState === "running"}
+                  >
                     {t("wizard.doctor")}
                   </button>
                   <button
@@ -1947,10 +2004,28 @@ export const App = () => {
                 <div className="kicker">{t("doctor.kicker")}</div>
                 <div className="title">{t("doctor.title")}</div>
               </div>
-              <button className="btn" onClick={runDoctor}>
-                {t("wizard.doctor")}
+              <button
+                className="btn"
+                onClick={runDoctor}
+                disabled={doctorRunState === "running"}
+              >
+                {doctorRunState === "running"
+                  ? t("doctor.running")
+                  : t("wizard.doctor")}
               </button>
             </div>
+            {doctorRunError ? (
+              <div className="error-banner" role="alert">
+                <div>{doctorRunError}</div>
+                <button
+                  className="btn"
+                  onClick={runDoctor}
+                  disabled={doctorRunState === "running"}
+                >
+                  {t("doctor.retry")}
+                </button>
+              </div>
+            ) : null}
             <div className="grid">
               {!doctorChecks.length ? (
                 <div className="helper-text">{t("doctor.none")}</div>

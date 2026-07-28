@@ -161,6 +161,9 @@ const findRawUserFacingStrings = (relativePath: string) => {
     "placeholder",
     "title",
   ]);
+  const isUserFacingAttributeName = (name: string) =>
+    visibleAttributeNames.has(name) ||
+    /(?:Label|Title|Subtitle|Description|Message|Reason)$/.test(name);
   const userFacingPropertyNames = new Set([
     "description",
     "helper",
@@ -292,7 +295,7 @@ const findRawUserFacingStrings = (relativePath: string) => {
     }
     if (
       ts.isJsxAttribute(node) &&
-      visibleAttributeNames.has(node.name.getText(file)) &&
+      isUserFacingAttributeName(node.name.getText(file)) &&
       node.initializer &&
       ts.isStringLiteral(node.initializer) &&
       !isTranslationArgument(node.initializer)
@@ -310,13 +313,16 @@ const findRawUserFacingStrings = (relativePath: string) => {
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
       /(?:copy|labels?)$/i.test(node.name.text) &&
-      node.initializer &&
-      ts.isObjectLiteralExpression(node.initializer)
+      node.initializer
     ) {
-      for (const property of node.initializer.properties) {
-        if (ts.isPropertyAssignment(property)) {
-          inspectExpression(property.initializer);
+      if (ts.isObjectLiteralExpression(node.initializer)) {
+        for (const property of node.initializer.properties) {
+          if (ts.isPropertyAssignment(property)) {
+            inspectExpression(property.initializer);
+          }
         }
+      } else {
+        inspectExpression(node.initializer);
       }
     }
     if (
@@ -345,7 +351,7 @@ const findRawUserFacingStrings = (relativePath: string) => {
     if (ts.isJsxExpression(node) && node.expression) {
       if (
         ts.isJsxAttribute(node.parent) &&
-        !visibleAttributeNames.has(node.parent.name.getText(file))
+        !isUserFacingAttributeName(node.parent.name.getText(file))
       ) {
         ts.forEachChild(node, visit);
         return;

@@ -1812,7 +1812,7 @@ export const PracticePage = () => {
                     aria-label={t("practice.nextExample")}
                     className={`group relative flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br from-teal-400/30 via-white/5 to-transparent text-slate-100 shadow-[0_0_15px_rgba(45,212,191,0.35)] transition hover:border-teal-200/80 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 ${
                       nextArrowAttention
-                        ? "animate-[pulse_3s_ease-in-out_infinite]"
+                        ? "animate-[pulse_3s_ease-in-out_infinite] motion-reduce:animate-none"
                         : ""
                     }`}
                     onClick={handleNextExample}
@@ -1880,7 +1880,7 @@ export const PracticePage = () => {
                     aria-label={t("practice.nextPatientTurn")}
                     className={`group relative flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br from-teal-400/30 via-white/5 to-transparent text-slate-100 shadow-[0_0_15px_rgba(45,212,191,0.35)] transition hover:border-teal-200/80 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 ${
                       nextArrowAttention
-                        ? "animate-[pulse_3s_ease-in-out_infinite]"
+                        ? "animate-[pulse_3s_ease-in-out_infinite] motion-reduce:animate-none"
                         : ""
                     }`}
                     onClick={handleNextExample}
@@ -2428,7 +2428,9 @@ export const PracticePage = () => {
         open={Boolean(pendingDeleteSessionId)}
         sessionLabel={
           pendingDeleteSession
-            ? `session ${pendingDeleteSession.id.slice(0, 6).toUpperCase()}`
+            ? t("minigameUi.sessionCode", {
+                code: pendingDeleteSession.id.slice(0, 6).toUpperCase(),
+              })
             : undefined
         }
         onConfirm={confirmDeleteSession}

@@ -118,6 +118,7 @@ export const LocalSuite = () => {
       setDownloads(mapped);
     };
 
+    let cachedAssets: ReleaseAsset[] | null = null;
     const cached = localStorage.getItem(RELEASE_CACHE_KEY);
     if (cached) {
       try {
@@ -125,7 +126,13 @@ export const LocalSuite = () => {
           timestamp: number;
           assets: ReleaseAsset[];
         };
-        if (Date.now() - parsed.timestamp < RELEASE_CACHE_TTL_MS) {
+        if (Number.isFinite(parsed.timestamp) && Array.isArray(parsed.assets)) {
+          cachedAssets = parsed.assets;
+        }
+        if (
+          cachedAssets &&
+          Date.now() - parsed.timestamp < RELEASE_CACHE_TTL_MS
+        ) {
           applyAssets(parsed.assets);
         }
       } catch {
@@ -136,6 +143,7 @@ export const LocalSuite = () => {
     fetch(`https://api.github.com/repos/${repo}/releases/latest`)
       .then((response) => {
         if (response.status === 404) {
+          localStorage.removeItem(RELEASE_CACHE_KEY);
           setReleaseError(t("help.localSuite.downloads.empty"));
           return { assets: [] } satisfies ReleaseResponse;
         }
@@ -157,6 +165,11 @@ export const LocalSuite = () => {
         }
       })
       .catch(() => {
+        if (cachedAssets?.length) {
+          applyAssets(cachedAssets);
+          setReleaseError(t("help.localSuite.downloads.staleCache"));
+          return;
+        }
         setReleaseError(t("help.localSuite.downloads.error"));
       });
   }, [baseDownloads, t]);

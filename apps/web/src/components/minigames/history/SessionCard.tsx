@@ -1,11 +1,8 @@
 import type { MinigameSessionSummary } from "../../../store/api";
 import { useTranslation } from "react-i18next";
 
-const formatDate = (timestamp?: number | null) =>
-  timestamp ? new Date(timestamp).toLocaleString() : "—";
-
-const formatMode = (mode: MinigameSessionSummary["game_type"]) =>
-  mode === "tdm" ? "TDM" : "FFA";
+const formatDate = (timestamp: number | null | undefined, locale: string) =>
+  timestamp ? new Date(timestamp).toLocaleString(locale) : "—";
 
 type SessionCardProps = {
   session: MinigameSessionSummary;
@@ -18,30 +15,32 @@ export const SessionCard = ({
   onOpen,
   onDelete,
 }: SessionCardProps) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en";
   const isActive = !session.ended_at;
-  const progressLabel = `${session.progress.completed} / ${session.progress.total} rounds`;
+  const modeLabel = t(
+    session.game_type === "tdm"
+      ? "minigameUi.teamDeathmatch"
+      : "minigameUi.freeForAll",
+  );
+  const progressLabel = t("minigameUi.sessionProgress", {
+    completed: session.progress.completed,
+    total: session.progress.total,
+    count: session.progress.total,
+  });
   const winnerLabel = session.winner?.label
-    ? `${session.winner.label} · ${session.winner.score.toFixed(2)}`
+    ? `${session.winner.label} · ${new Intl.NumberFormat(locale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(session.winner.score)}`
     : "—";
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-      className="w-full rounded-3xl border border-white/10 bg-slate-900/60 p-5 text-left shadow-[0_0_30px_rgba(15,23,42,0.4)] transition hover:border-white/20"
-    >
+    <article className="w-full rounded-3xl border border-white/10 bg-slate-900/60 p-5 text-left shadow-[0_0_30px_rgba(15,23,42,0.4)] transition hover:border-white/20">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.3em] text-white/70">
-            {formatMode(session.game_type)}
+            {modeLabel}
           </span>
           <span
             className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.3em] ${
@@ -55,6 +54,7 @@ export const SessionCard = ({
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={(event) => {
               event.stopPropagation();
               onDelete();
@@ -64,6 +64,7 @@ export const SessionCard = ({
             {t("minigameUi.delete")}
           </button>
           <button
+            type="button"
             onClick={(event) => {
               event.stopPropagation();
               onOpen();
@@ -80,7 +81,7 @@ export const SessionCard = ({
             {t("minigameUi.created")}
           </p>
           <p className="mt-1 text-sm text-white">
-            {formatDate(session.created_at)}
+            {formatDate(session.created_at, locale)}
           </p>
         </div>
         <div>
@@ -88,7 +89,7 @@ export const SessionCard = ({
             {t("minigameUi.ended")}
           </p>
           <p className="mt-1 text-sm text-white">
-            {formatDate(session.ended_at)}
+            {formatDate(session.ended_at, locale)}
           </p>
         </div>
         <div>
@@ -116,6 +117,6 @@ export const SessionCard = ({
           <p className="mt-1 text-sm text-white">{winnerLabel}</p>
         </div>
       </div>
-    </div>
+    </article>
   );
 };

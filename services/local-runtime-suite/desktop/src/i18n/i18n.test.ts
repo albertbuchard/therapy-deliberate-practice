@@ -90,4 +90,54 @@ describe("desktop locale resources", () => {
       ).details
     ).toContain("/opt/runtime/local_runtime/__init__.py");
   });
+
+  it.each([
+    [
+      "gateway_configuration",
+      { status: "error", details: "missing config" },
+      "Gateway configuration"
+    ],
+    [
+      "python_executable",
+      { status: "error", details: "python missing" },
+      "Python executable"
+    ],
+    [
+      "local_runtime_import",
+      { status: "error", details: "module missing" },
+      "local_runtime import"
+    ],
+    [
+      "gateway_sidecar_binary",
+      { status: "error", details: "/missing/sidecar" },
+      "Gateway sidecar binary"
+    ],
+    [
+      "gateway_sidecar_permissions",
+      { status: "error", details: "/non-executable/sidecar" },
+      "Gateway sidecar permissions"
+    ],
+    [
+      "port_availability",
+      { status: "error", port: 8484, gateway_status: "foreign" },
+      "Port availability"
+    ],
+    [
+      "gateway_health",
+      { status: "error", details: "HTTP 503", gateway_status: "running" },
+      "Gateway health"
+    ]
+  ] as const)(
+    "maps the native Doctor category %s to recoverable presentation",
+    (code, check, title) => {
+      const view = describeDoctorCheck(
+        { code, ...check },
+        (key, values) => translate("en", key, values)
+      );
+
+      expect(view.title).toBe(title);
+      expect(view.details).not.toBe("");
+      expect(view.fix).not.toBe("");
+    }
+  );
 });

@@ -296,6 +296,7 @@ export const en = {
     portStarting: "Starting the gateway on port {port}.",
     portRecovery: "Port save failed; restarting the previous gateway configuration.",
     doctorRunning: "Running preflight diagnostic checks.",
+    doctorFailed: "Doctor checks failed: {details}",
     gatewayStarting: "Starting the local gateway.",
     gatewayStartFailed: "Gateway failed to start: {details}",
     gatewayStopped: "Stopped the local gateway.",
@@ -324,6 +325,9 @@ export const en = {
     kicker: "Doctor",
     title: "Preflight checks",
     none: "Run Doctor to inspect configuration, ports, dependencies, and storage.",
+    running: "Running doctor…",
+    retry: "Retry doctor",
+    runFailed: "Doctor could not complete: {details}",
     noTechnicalDetail: "No technical detail was provided.",
     gatewayConfiguration: {
       title: "Gateway configuration",

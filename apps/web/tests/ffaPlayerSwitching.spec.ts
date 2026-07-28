@@ -2,8 +2,35 @@ import type { Page } from "@playwright/test";
 import {
   expect,
   expectNoSeriousAccessibilityViolations,
+  fulfillJson,
   test,
 } from "./fixtures";
+
+const minigameTask = {
+  id: "task-1",
+  slug: "player-switching-task",
+  title: "Player switching task",
+  description: "A deterministic minigame task.",
+  skill_domain: "reflection",
+  base_difficulty: 2,
+  general_objective: "Reflect the concern.",
+  tags: ["test"],
+  language: "en",
+  is_published: true,
+  parent_task_id: null,
+  created_at: 1,
+  updated_at: 1,
+  criteria: [
+    {
+      id: "criterion-1",
+      task_id: "task-1",
+      label: "Reflect",
+      description: "Reflect the concern.",
+      rubric: null,
+      sort_order: 0,
+    },
+  ],
+};
 
 const mockAuth = async (page: Page) => {
   await page.route("**/api/v1/me", async (route) => {
@@ -45,6 +72,48 @@ const mockAuth = async (page: Page) => {
       }),
     });
   });
+  await page.route("**/api/v1/tasks?*", (route) =>
+    fulfillJson(route, [minigameTask]),
+  );
+  await page.route("**/api/v1/tasks/task-1*", (route) =>
+    fulfillJson(route, minigameTask),
+  );
+  await page.route(
+    "**/api/v1/minigames/sessions/*/rounds/*/start",
+    (route) => fulfillJson(route, { ok: true }),
+  );
+  await page.route(
+    "**/api/v1/practice/patient-audio/prefetch-batch",
+    (route) =>
+      fulfillJson(route, {
+        items: [
+          {
+            statement_id: "example-1",
+            cache_key: "player-switching-audio",
+            status: "ready",
+            audio_url: "/api/v1/tts/player-switching-audio",
+          },
+        ],
+        ready_count: 1,
+        total_count: 1,
+      }),
+  );
+  await page.route(
+    "**/api/v1/practice/patient-audio/prefetch",
+    (route) =>
+      fulfillJson(route, {
+        cache_key: "player-switching-audio",
+        status: "ready",
+        audio_url: "/api/v1/tts/player-switching-audio",
+      }),
+  );
+  await page.route("**/api/v1/tts/player-switching-audio", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "audio/wav",
+      body: "RIFF-test-audio",
+    }),
+  );
 };
 
 test.describe("ffa player switching", () => {

@@ -300,6 +300,7 @@ export const fr = {
     portStarting: "Démarrage de la passerelle sur le port {port}.",
     portRecovery: "Échec de l’enregistrement du port ; redémarrage de la configuration précédente.",
     doctorRunning: "Exécution des contrôles diagnostiques préalables.",
+    doctorFailed: "Échec du diagnostic : {details}",
     gatewayStarting: "Démarrage de la passerelle locale.",
     gatewayStartFailed: "Échec du démarrage de la passerelle : {details}",
     gatewayStopped: "Passerelle locale arrêtée.",
@@ -328,6 +329,9 @@ export const fr = {
     kicker: "Diagnostic",
     title: "Contrôles préalables",
     none: "Lancez le diagnostic pour vérifier la configuration, les ports, les dépendances et le stockage.",
+    running: "Diagnostic en cours…",
+    retry: "Relancer le diagnostic",
+    runFailed: "Le diagnostic n’a pas pu aboutir : {details}",
     noTechnicalDetail: "Aucun détail technique n’a été fourni.",
     gatewayConfiguration: {
       title: "Configuration de la passerelle",

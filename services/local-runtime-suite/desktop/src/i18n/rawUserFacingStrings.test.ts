@@ -122,7 +122,31 @@ describe("bounded desktop raw user-facing string guard", () => {
     expect(app).toContain('aria-modal="true"');
     expect(app).toContain('aria-label={t("accessibility.languageSelect")}');
     expect(app).toContain('<div className="error-banner" role="alert">');
-    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    const reducedMotionRule = styles.slice(
+      styles.lastIndexOf("@media (prefers-reduced-motion: reduce)")
+    );
+    expect(reducedMotionRule).toMatch(/\*,\s*\*::before,\s*\*::after\s*\{/);
+    expect(reducedMotionRule).toContain(
+      "transition-duration: 0.01ms !important"
+    );
+    expect(reducedMotionRule).toContain(
+      "animation-duration: 0.01ms !important"
+    );
+    expect(reducedMotionRule).toContain(
+      "animation-iteration-count: 1 !important"
+    );
+    for (const animationBearingControl of [
+      ".hero-glow",
+      ".simple-step",
+      ".launch-btn",
+      ".launch-btn--busy::before",
+      ".launch-btn--busy .launch-btn__shimmer",
+      ".launch-btn__message",
+      ".launch-gradientText",
+      ".launch-spinner-head"
+    ]) {
+      expect(styles, animationBearingControl).toContain(animationBearingControl);
+    }
     expect(styles).toContain("@media (max-width: 640px)");
     expect(styles).toContain("overflow-wrap: anywhere");
   });

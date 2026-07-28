@@ -22,8 +22,17 @@ export const PublicProfilePage = () => {
   const { t, i18n } = useTranslation();
   const { id } = useParams();
   const profileId = id ?? "";
-  const { data, isLoading, isError } = useGetPublicProfileQuery(profileId, { skip: !profileId });
+  const { data, isLoading, isError, error } = useGetPublicProfileQuery(
+    profileId,
+    { skip: !profileId },
+  );
   const profile = data?.profile;
+  const isMissingProfile =
+    isError &&
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    error.status === 404;
 
   const joinedDate = useMemo(() => {
     if (!profile?.created_at) return null;
@@ -42,16 +51,16 @@ export const PublicProfilePage = () => {
       <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-slate-950 via-slate-900/90 to-slate-950 p-8 shadow-[0_30px_120px_-60px_rgba(15,23,42,0.9)]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.15),_transparent_60%)]" />
         <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-5">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-2xl font-semibold text-teal-100">
+          <div className="flex min-w-0 items-center gap-5">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-2xl font-semibold text-teal-100">
               {initials}
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-xs uppercase tracking-[0.3em] text-teal-300">{t("publicProfile.tagline")}</p>
-              <h1 className="mt-2 text-3xl font-semibold text-white">
+              <h1 className="mt-2 break-words text-3xl font-semibold text-white">
                 {profile?.display_name ?? t("publicProfile.loadingTitle")}
               </h1>
-              <p className="mt-2 max-w-xl text-sm text-slate-300">
+              <p className="mt-2 max-w-xl break-words text-sm text-slate-300">
                 {profile?.bio || t("publicProfile.bioEmpty")}
               </p>
             </div>
@@ -72,7 +81,14 @@ export const PublicProfilePage = () => {
 
       <section className="rounded-3xl border border-white/10 bg-slate-950/60 p-6">
         {isLoading && <p className="text-sm text-slate-400">{t("publicProfile.loading")}</p>}
-        {isError && <p className="text-sm text-rose-300">{t("publicProfile.error")}</p>}
+        {isError && (
+          <p
+            className={isMissingProfile ? "text-sm text-slate-400" : "text-sm text-rose-300"}
+            role={isMissingProfile ? "status" : "alert"}
+          >
+            {t(isMissingProfile ? "publicProfile.missing" : "publicProfile.error")}
+          </p>
+        )}
         {!isLoading && !isError && !profile && (
           <p className="text-sm text-slate-400">{t("publicProfile.missing")}</p>
         )}

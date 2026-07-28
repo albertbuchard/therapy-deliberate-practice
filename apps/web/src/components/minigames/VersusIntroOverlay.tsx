@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
 
 type VersusIntroOverlayProps = {
   open: boolean;
@@ -22,26 +23,54 @@ export const VersusIntroOverlay = ({
   const [canDismiss, setCanDismiss] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const handledRef = useRef(false);
+  const completionTimeoutRef = useRef<number | null>(null);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     if (!open) return;
     handledRef.current = false;
     setIsExiting(false);
     setCanDismiss(false);
-    const timeout = window.setTimeout(() => setCanDismiss(true), 1200);
+    const timeout = window.setTimeout(
+      () => setCanDismiss(true),
+      prefersReducedMotion ? 0 : 1200,
+    );
     return () => window.clearTimeout(timeout);
-  }, [onComplete, open]);
+  }, [open, prefersReducedMotion]);
+
+  useEffect(
+    () => () => {
+      if (completionTimeoutRef.current !== null) {
+        window.clearTimeout(completionTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   if (!open) return null;
 
+  const completeIntro = () => {
+    if (!canDismiss || handledRef.current) return;
+    handledRef.current = true;
+    setIsExiting(true);
+    completionTimeoutRef.current = window.setTimeout(() => {
+      completionTimeoutRef.current = null;
+      onComplete();
+    }, prefersReducedMotion ? 0 : 600);
+  };
+
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={t("minigameUi.dismissVersus")}
+      aria-disabled={!canDismiss}
       className="fixed inset-0 z-30 flex items-center justify-center bg-black/70"
-      onClick={() => {
-        if (!canDismiss || handledRef.current) return;
-        handledRef.current = true;
-        setIsExiting(true);
-        window.setTimeout(() => onComplete(), 600);
+      onClick={completeIntro}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        completeIntro();
       }}
     >
       <div className="relative flex w-full max-w-3xl items-center justify-center gap-6 px-8">
@@ -54,8 +83,8 @@ export const VersusIntroOverlay = ({
         <div
           className={`relative flex w-full items-center justify-between rounded-[32px] border border-white/15 bg-slate-950/70 px-8 py-10 text-center shadow-[0_0_60px_rgba(15,23,42,0.6)] backdrop-blur ${
             isExiting
-              ? "animate-versus-intro-exit"
-              : "animate-versus-intro-enter"
+              ? "animate-versus-intro-exit motion-reduce:animate-none"
+              : "animate-versus-intro-enter motion-reduce:animate-none"
           }`}
         >
           <div className="flex-1 text-left">

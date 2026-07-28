@@ -58,7 +58,10 @@ export const MinigameSessionDetailPage = () => {
 
   if (isError || !data) {
     return (
-      <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-slate-200">
+      <div
+        role="alert"
+        className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-slate-200"
+      >
         <p className="text-lg font-semibold text-white">
           {t("minigameDetail.notFound")}
         </p>
@@ -180,13 +183,16 @@ export const MinigameSessionDetailPage = () => {
 
       <DeleteSessionConfirmDialog
         open={confirmDelete}
-        sessionLabel="this session"
+        sessionLabel={t("minigameUi.thisSession")}
         onCancel={() => setConfirmDelete(false)}
         onConfirm={handleDelete}
       />
 
       {deleteState.isError && (
-        <div className="rounded-2xl border border-rose-300/40 bg-rose-500/10 p-4 text-sm text-rose-100">
+        <div
+          role="alert"
+          className="rounded-2xl border border-rose-300/40 bg-rose-500/10 p-4 text-sm text-rose-100"
+        >
           {t("minigameDetail.deleteError")}
         </div>
       )}

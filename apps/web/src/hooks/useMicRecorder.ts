@@ -123,6 +123,7 @@ export const classifyMicError = (error: unknown): MicRecorderError => {
         isRetryable: true,
       };
     case "OverconstrainedError":
+    case "NotSupportedError":
       return {
         kind: "unsupported",
         rawName,

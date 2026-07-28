@@ -74,15 +74,22 @@ export const MinigameHubPage = () => {
           onStatusChange={setStatus}
           onSortChange={setSort}
         />
-        {isError && (
+      </div>
+
+      {isError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-rose-300/40 bg-rose-500/10 p-4 text-sm text-rose-100"
+        >
+          <p>{t("minigameHub.loadError")}</p>
           <button
             onClick={() => refetch()}
             className="rounded-full border border-rose-300/40 bg-rose-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-rose-100"
           >
             {t("minigameHub.retry")}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {isLoading ? (
         <SessionListSkeleton />
@@ -97,7 +104,7 @@ export const MinigameHubPage = () => {
             />
           ))}
         </div>
-      ) : (
+      ) : !isError ? (
         <EmptyState
           title={t("minigameHub.emptyTitle")}
           description={t("minigameHub.emptyDescription")}
@@ -106,13 +113,19 @@ export const MinigameHubPage = () => {
             navigate("/minigames/play", { state: { fromHub: true } })
           }
         />
-      )}
+      ) : null}
 
       <DeleteSessionConfirmDialog
         open={Boolean(pendingDelete)}
         sessionLabel={
           pendingDelete
-            ? `${pendingDelete.game_type.toUpperCase()} session`
+            ? t("minigameUi.sessionModeLabel", {
+                mode: t(
+                  pendingDelete.game_type === "tdm"
+                    ? "minigameUi.teamDeathmatch"
+                    : "minigameUi.freeForAll",
+                ),
+              })
             : undefined
         }
         onCancel={() => setPendingDelete(null)}
@@ -120,7 +133,10 @@ export const MinigameHubPage = () => {
       />
 
       {deleteState.isError && (
-        <div className="rounded-2xl border border-rose-300/40 bg-rose-500/10 p-4 text-sm text-rose-100">
+        <div
+          role="alert"
+          className="rounded-2xl border border-rose-300/40 bg-rose-500/10 p-4 text-sm text-rose-100"
+        >
           {t("minigameHub.deleteError")}
         </div>
       )}

@@ -140,6 +140,7 @@ const REQUEST_BODY_LIMITS = {
   audioPractice: 24 * 1024 * 1024,
   localPrepare: 256 * 1024,
   localCommit: 2 * 1024 * 1024,
+  openAiKey: 16 * 1024,
 } as const;
 
 const readBoundedJson = async (
@@ -2977,15 +2978,30 @@ export const createApiApp = ({ env, db, tts, adminSourceFetch }: ApiDependencies
   app.put("/api/v1/me/openai-key", async (c) => {
     const user = c.get("user");
     const log = logger.child({ requestId: c.get("requestId"), endpoint: "me_openai_key_update" });
-    const body = await c.req.json();
+    let body: unknown;
+    try {
+      body = await readBoundedJson(c, REQUEST_BODY_LIMITS.openAiKey);
+    } catch (error) {
+      log.warn("Invalid JSON body for OpenAI key", { error: safeError(error) });
+      if (error instanceof RequestBodyTooLargeError) {
+        return c.json({ error: "OpenAI key payload is too large" }, 413);
+      }
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
     const schema = z.object({
       openaiApiKey: z
         .string()
         .trim()
         .min(20)
+        .max(512)
         .refine((value) => value.startsWith("sk-"), { message: "Invalid OpenAI key" })
     });
-    const data = schema.parse(body);
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      log.warn("OpenAI key payload failed validation", { userId: user.id });
+      return c.json({ error: "Invalid OpenAI key" }, 400);
+    }
+    const data = parsed.data;
     if (!env.openaiKeyEncryptionSecret) {
       logServerError(
         "me.openai_key.update.missing_secret",
@@ -3031,8 +3047,25 @@ export const createApiApp = ({ env, db, tts, adminSourceFetch }: ApiDependencies
       log.warn("OpenAI key validation rate limited", { userId: user.id });
       return c.json({ ok: false, error: "Too many validation attempts. Try again shortly." }, 429);
     }
-    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
-    const provided = typeof body.openaiApiKey === "string" ? body.openaiApiKey.trim() : "";
+    let body: unknown;
+    try {
+      body = (await readBoundedJson(c, REQUEST_BODY_LIMITS.openAiKey)) ?? {};
+    } catch (error) {
+      log.warn("Invalid JSON body for OpenAI key validation", { error: safeError(error) });
+      if (error instanceof RequestBodyTooLargeError) {
+        return c.json({ ok: false, error: "OpenAI key payload is too large" }, 413);
+      }
+      return c.json({ ok: false, error: "Invalid JSON body" }, 400);
+    }
+    const parsed = z
+      .object({
+        openaiApiKey: z.string().trim().max(512).optional()
+      })
+      .safeParse(body);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: "Invalid OpenAI key payload" }, 400);
+    }
+    const provided = parsed.data.openaiApiKey ?? "";
 
     let keyToValidate = provided;
 

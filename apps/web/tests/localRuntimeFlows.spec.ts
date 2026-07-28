@@ -243,6 +243,10 @@ const installBrowserState = async (
       email: "dev@example.com",
     }),
   );
+  await page.route("**/api/v1/sessions/*/attempts", (route) => {
+    expect(route.request().method()).toBe("GET");
+    return json(route, []);
+  });
 };
 
 const installReadyGateway = async (page: Page, attemptId: string) => {
@@ -433,6 +437,179 @@ const dismissSetupWizard = async (page: Page) => {
 };
 
 test.describe("browser-to-loopback local practice", () => {
+  test("standard sessions restore partial state, recover stale or corrupt state, and preserve a failed selected-session delete", async ({
+    page,
+    baseURL,
+  }) => {
+    await installBrowserState(page);
+    await page.setViewportSize({ width: 360, height: 900 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "practiceSessionProgress:partial-session",
+        "1",
+      );
+    });
+
+    const firstItem = {
+      session_item_id: "partial-item-1",
+      task_id: task.id,
+      example_id: example.id,
+      target_difficulty: 2,
+      patient_text: example.patient_text,
+    };
+    const secondItem = {
+      session_item_id: "partial-item-2",
+      task_id: task.id,
+      example_id: "example-partial-second",
+      target_difficulty: 2,
+      patient_text: "I keep returning to the same difficult thought.",
+    };
+    const recoveredItem = {
+      session_item_id: "recovered-item",
+      task_id: task.id,
+      example_id: "example-recovered",
+      target_difficulty: 2,
+      patient_text: "I need a fresh example after that broken session.",
+    };
+    const partialSession = {
+      id: "partial-session",
+      task_id: task.id,
+      item_count: 2,
+      completed_count: 1,
+      created_at: "2026-07-28T12:00:00.000Z",
+      items: [firstItem, secondItem],
+    };
+    const corruptSession = {
+      id: "corrupt-session",
+      task_id: task.id,
+      item_count: 2,
+      completed_count: 0,
+      created_at: "2026-07-28T11:00:00.000Z",
+      items: [],
+    };
+    const recoveredSession = {
+      id: "recovered-session",
+      task_id: task.id,
+      item_count: 1,
+      completed_count: 0,
+      created_at: "2026-07-28T13:00:00.000Z",
+      items: [recoveredItem],
+    };
+    let sessions = [partialSession];
+    let deleteShouldFail = true;
+    let startRequests = 0;
+    let deleteRequests = 0;
+
+    await page.route(`**/api/v1/tasks/${task.id}*`, (route) =>
+      json(route, task),
+    );
+    await page.route("**/api/v1/sessions?*", (route) => json(route, sessions));
+    await page.route("**/api/v1/sessions/start", async (route) => {
+      startRequests += 1;
+      sessions = [recoveredSession, corruptSession, partialSession];
+      await json(route, {
+        session_id: recoveredSession.id,
+        items: recoveredSession.items,
+      });
+    });
+    await page.route(
+      `**/api/v1/sessions/${recoveredSession.id}`,
+      async (route) => {
+        expect(route.request().method()).toBe("DELETE");
+        deleteRequests += 1;
+        if (deleteShouldFail) {
+          await json(route, { error: "Temporary delete failure." }, 503);
+          return;
+        }
+        sessions = sessions.filter(
+          (session) => session.id !== recoveredSession.id,
+        );
+        await json(route, { ok: true });
+      },
+    );
+
+    await page.goto(
+      `${baseURL ?? "http://localhost:5173"}/practice/${task.id}?session=${partialSession.id}`,
+    );
+    await dismissSetupWizard(page);
+    await expect(page.getByText(secondItem.patient_text)).toBeVisible();
+    await expect(
+      page.getByText("Example 2 of 2", { exact: true }),
+    ).toBeVisible();
+
+    await page.evaluate(() =>
+      window.localStorage.setItem(
+        "practiceSessionProgress:partial-session",
+        "999",
+      ),
+    );
+    await page.reload();
+    await expect(page.getByText(secondItem.patient_text)).toBeVisible();
+
+    sessions = [corruptSession, partialSession];
+    await page.goto(
+      `${baseURL ?? "http://localhost:5173"}/practice/${task.id}?session=${corruptSession.id}`,
+    );
+    await expect(page.getByText(recoveredItem.patient_text)).toBeVisible();
+    expect(startRequests).toBe(1);
+
+    await page.goto(
+      `${baseURL ?? "http://localhost:5173"}/practice/${task.id}?session=${recoveredSession.id}`,
+    );
+    await page.getByRole("radio", { name: /type/i }).check();
+    const response = page.getByLabel("Written response");
+    await response.fill("A draft that must survive a failed delete.");
+    const sessionHistory = page.getByText("Session history", { exact: true });
+    await sessionHistory.click();
+    await page.getByRole("button", { name: "Delete" }).first().click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Delete session" })
+      .click();
+
+    await expect(
+      page.getByText("Unable to delete this session. Please try again."),
+    ).toBeVisible();
+    await expect(response).toHaveValue(
+      "A draft that must survive a failed delete.",
+    );
+    expect(
+      await page.evaluate(() =>
+        Object.keys(window.localStorage).some((key) =>
+          key.startsWith(
+            "practiceTypedDraft:user-1:recovered-session:recovered-item",
+          ),
+        ),
+      ),
+    ).toBe(true);
+
+    deleteShouldFail = false;
+    await page.getByRole("button", { name: "Delete" }).first().click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Delete session" })
+      .click();
+    await expect(page.getByText("Session RECOVE", { exact: true })).toHaveCount(
+      0,
+    );
+    expect(deleteRequests).toBe(2);
+    expect(
+      await page.evaluate(() =>
+        Object.keys(window.localStorage).some((key) =>
+          key.startsWith(
+            "practiceTypedDraft:user-1:recovered-session:recovered-item",
+          ),
+        ),
+      ),
+    ).toBe(false);
+    await expectNoSeriousAccessibilityViolations(page);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+      ),
+    ).toBe(true);
+  });
+
   test("typed standard practice uses local prepare/evaluate/commit without speech metadata", async ({
     page,
     baseURL,

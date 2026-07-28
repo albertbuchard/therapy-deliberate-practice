@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
 
 type AudioReactiveBackgroundProps = {
   audioElement?: HTMLAudioElement | null;
@@ -13,7 +14,11 @@ type Particle = {
   phase: number;
 };
 
-export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReactiveBackgroundProps) => {
+export const AudioReactiveBackground = ({
+  audioElement,
+  isPlaying,
+}: AudioReactiveBackgroundProps) => {
+  const prefersReducedMotion = usePrefersReducedMotion();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
@@ -35,13 +40,16 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
       canvas.style.height = `${window.innerHeight}px`;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(ratio, ratio);
-      const count = Math.min(900, Math.max(400, Math.floor(window.innerWidth / 2)));
+      const count = Math.min(
+        900,
+        Math.max(400, Math.floor(window.innerWidth / 2)),
+      );
       particlesRef.current = Array.from({ length: count }).map(() => ({
         x: Math.random() * window.innerWidth,
         y: Math.random() * window.innerHeight,
         size: 1 + Math.random() * 2,
         speed: 0.1 + Math.random() * 0.4,
-        phase: Math.random() * Math.PI * 2
+        phase: Math.random() * Math.PI * 2,
       }));
     };
 
@@ -61,6 +69,14 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
     analyserRef.current = analyser;
     dataRef.current = new Uint8Array(analyser.frequencyBinCount);
     audioContextRef.current = audioContext;
+    return () => {
+      source.disconnect();
+      analyser.disconnect();
+      analyserRef.current = null;
+      dataRef.current = null;
+      audioContextRef.current = null;
+      void audioContext.close().catch(() => undefined);
+    };
   }, [audioElement]);
 
   useEffect(() => {
@@ -68,7 +84,7 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
-    const draw = () => {
+    const draw = (timestamp = 0) => {
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       ctx.clearRect(0, 0, width, height);
@@ -78,7 +94,8 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
       let intensity = 0.2;
       if (analyser && dataArray) {
         analyser.getByteFrequencyData(dataArray);
-        const avg = dataArray.reduce((sum, val) => sum + val, 0) / dataArray.length;
+        const avg =
+          dataArray.reduce((sum, val) => sum + val, 0) / dataArray.length;
         intensity = Math.min(1, avg / 200);
       }
 
@@ -89,7 +106,11 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
       ctx.beginPath();
       ctx.moveTo(0, height * 0.5);
       for (let x = 0; x <= width; x += 20) {
-        const offset = Math.sin((x / width) * Math.PI * 4 + Date.now() / 1200) * waveAmplitude;
+        const offset =
+          Math.sin(
+            (x / width) * Math.PI * 4 +
+              (prefersReducedMotion ? 0 : timestamp / 1200),
+          ) * waveAmplitude;
         ctx.lineTo(x, height * 0.5 + offset);
       }
       ctx.strokeStyle = `rgba(94, 234, 212, ${0.2 + intensity * 0.4})`;
@@ -98,11 +119,13 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
 
       const particles = particlesRef.current;
       particles.forEach((particle) => {
-        particle.y -= particle.speed + intensity * 0.6;
-        particle.x += Math.sin(Date.now() / 2000 + particle.phase) * 0.3;
-        if (particle.y < -20) {
-          particle.y = height + 20;
-          particle.x = Math.random() * width;
+        if (!prefersReducedMotion) {
+          particle.y -= particle.speed + intensity * 0.6;
+          particle.x += Math.sin(timestamp / 2000 + particle.phase) * 0.3;
+          if (particle.y < -20) {
+            particle.y = height + 20;
+            particle.x = Math.random() * width;
+          }
         }
         ctx.fillStyle = `rgba(148, 163, 184, ${0.15 + intensity * 0.25})`;
         ctx.fillRect(particle.x, particle.y, particle.size, particle.size);
@@ -115,14 +138,27 @@ export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReacti
         ctx.fill();
       }
 
-      rafRef.current = requestAnimationFrame(draw);
+      if (!prefersReducedMotion) {
+        rafRef.current = requestAnimationFrame(draw);
+      }
     };
 
-    rafRef.current = requestAnimationFrame(draw);
+    if (prefersReducedMotion) {
+      draw();
+    } else {
+      rafRef.current = requestAnimationFrame(draw);
+    }
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isPlaying]);
+  }, [isPlaying, prefersReducedMotion]);
 
-  return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      data-motion={prefersReducedMotion ? "reduced" : "full"}
+      className="pointer-events-none absolute inset-0 h-full w-full"
+    />
+  );
 };

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint src --ext ts,tsx",
+    "typecheck": "tsc -p tsconfig.json --pretty false",
     "test": "vitest run",
     "sidecar:build": "node scripts/build-sidecar.mjs",
     "sidecar:build:force": "node scripts/build-sidecar.mjs --force",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.10.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",

@@ -63,19 +63,21 @@ export const BigMicButton = ({
         }
       }}
       disabled={isDisabled}
-      className={`group relative flex h-36 w-36 items-center justify-center rounded-full border text-white transition-all duration-300 ${baseStyles} ${
+      className={`group relative flex h-36 w-36 items-center justify-center rounded-full border text-white transition-all duration-300 motion-reduce:transform-none motion-reduce:transition-none ${baseStyles} ${
         isDisabled
           ? "cursor-not-allowed opacity-40"
           : "hover:-translate-y-1 hover:shadow-[0_0_60px_rgba(56,189,248,0.35)]"
       }`}
     >
       {attention && !isRecording && (
-        <span className="absolute inset-0 rounded-full border border-rose-400/60 animate-ping" />
+        <span className="absolute inset-0 animate-ping rounded-full border border-rose-400/60 motion-reduce:animate-none" />
       )}
       <span className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.08),rgba(15,23,42,0.6))]" />
       <span
         className={`absolute inset-0 rounded-full ring-2 ring-white/10 ${
-          isRecording || attention ? "animate-pulse" : "opacity-60"
+          isRecording || attention
+            ? "animate-pulse motion-reduce:animate-none"
+            : "opacity-60"
         }`}
       />
       <svg className="absolute h-[110px] w-[110px] -rotate-90">
@@ -98,7 +100,7 @@ export const BigMicButton = ({
             strokeDasharray={circumference}
             strokeDashoffset={dashOffset}
             strokeLinecap="round"
-            className="transition-[stroke-dashoffset] duration-200 ease-linear"
+            className="transition-[stroke-dashoffset] duration-200 ease-linear motion-reduce:transition-none"
           />
         )}
       </svg>

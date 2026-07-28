@@ -73,6 +73,20 @@ const installLearnerRoutes = async (page: Page) => {
           played: 8,
           last_active_at: 1_753_697_600_000,
         },
+        {
+          user_id: "user-tied",
+          display_name: "Taylor Learner",
+          score: 3.8,
+          played: 6,
+          last_active_at: 1_753_697_500_000,
+        },
+        {
+          user_id: "user-third",
+          display_name: "Morgan Learner",
+          score: 3.7,
+          played: 5,
+          last_active_at: 1_753_697_400_000,
+        },
       ],
       generated_at: 1_753_697_600_000,
     }),
@@ -229,8 +243,41 @@ test.describe("requirements-mapped learner routes", () => {
     await expectNoSeriousAccessibilityViolations(page);
     await expectNoHorizontalOverflow(page);
 
+    await page.setViewportSize({ width: 360, height: 800 });
     await page.goto("/leaderboard");
     await expect(page.getByText("Alex Learner")).toBeVisible();
+    await expect(
+      page
+        .getByRole("link", { name: "Alex Learner" })
+        .locator("xpath=../..")
+        .getByText("1", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("link", { name: "Taylor Learner" })
+        .locator("xpath=../..")
+        .getByText("1", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("link", { name: "Morgan Learner" })
+        .locator("xpath=../..")
+        .getByText("3", { exact: true }),
+    ).toBeVisible();
+
+    const filtersToggle = page.getByRole("button", { name: "Filters" });
+    await filtersToggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(filtersToggle).toHaveAttribute("aria-expanded", "true");
+    const skillDomain = page.getByLabel("Skill domain");
+    await skillDomain.focus();
+    await page.keyboard.type("reflection");
+    await page.keyboard.press("Enter");
+    await expect(skillDomain).toHaveValue("reflection");
+    await expect(page).toHaveURL(/skill_domain=reflection/);
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 768, height: 900 });
+    await expectNoHorizontalOverflow(page);
     await page.getByRole("link", { name: "Alex Learner" }).click();
     await expect(
       page.getByRole("heading", { name: "Alex Learner" }),
@@ -251,6 +298,162 @@ test.describe("requirements-mapped learner routes", () => {
       page.getByText(/no verified desktop release has been published yet/i),
     ).toBeVisible();
     await expectNoHorizontalOverflow(page);
+  });
+
+  test("history and leaderboard distinguish failures from empty results and recover by keyboard", async ({
+    page,
+  }) => {
+    await installLearnerRoutes(page);
+    await page.setViewportSize({ width: 360, height: 800 });
+    let historyShouldFail = true;
+    await page.route("**/api/v1/attempts?*", (route) =>
+      historyShouldFail
+        ? fulfillJson(route, { error: "Temporary history failure." }, 503)
+        : fulfillJson(route, []),
+    );
+
+    await page.goto("/history");
+    await expect(page.getByRole("alert")).toContainText(
+      "We couldn't load your practice history.",
+    );
+    await expect(
+      page.getByText("No attempts yet. Start a practice session."),
+    ).toHaveCount(0);
+    const historyRetry = page.getByRole("button", { name: "Try again" });
+    await historyRetry.focus();
+    historyShouldFail = false;
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByText("No attempts yet. Start a practice session."),
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 1100, height: 800 });
+    let leaderboardShouldFail = true;
+    await page.route("**/api/v1/leaderboard?*", (route) =>
+      leaderboardShouldFail
+        ? fulfillJson(route, { error: "Temporary leaderboard failure." }, 503)
+        : fulfillJson(route, {
+            query: {
+              tags: [],
+              skill_domain: null,
+              language: null,
+              limit: 25,
+            },
+            entries: [],
+            generated_at: 1_753_697_600_000,
+          }),
+    );
+
+    await page.goto("/leaderboard");
+    await expect(page.getByRole("alert")).toContainText(
+      "We couldn't load the leaderboard.",
+    );
+    await expect(page.getByText("No players match these filters.")).toHaveCount(
+      0,
+    );
+    const leaderboardRetry = page.getByRole("button", { name: "Try again" });
+    await leaderboardRetry.focus();
+    leaderboardShouldFail = false;
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByText("No players match these filters."),
+    ).toBeVisible();
+    await expectNoSeriousAccessibilityViolations(page);
+  });
+
+  test("installer discovery covers releases, absence, throttling, offline cache, and wrong-platform assets", async ({
+    page,
+  }) => {
+    const releaseUrl = "https://downloads.example/therapy-linux.AppImage";
+    const matchingAsset = {
+      name: "Therapy.Local.Runtime_0.1.5_amd64.AppImage",
+      browser_download_url: releaseUrl,
+    };
+    let releaseMode:
+      | "success"
+      | "missing"
+      | "rate-limit"
+      | "offline"
+      | "wrong-platform" = "success";
+
+    await page.route(
+      "https://api.github.com/repos/**/releases/latest",
+      async (route) => {
+        if (releaseMode === "offline") {
+          await route.abort("internetdisconnected");
+          return;
+        }
+        if (releaseMode === "missing") {
+          await fulfillJson(route, { message: "Not Found" }, 404);
+          return;
+        }
+        if (releaseMode === "rate-limit") {
+          await fulfillJson(route, { message: "API rate limit exceeded" }, 429);
+          return;
+        }
+        await fulfillJson(route, {
+          assets:
+            releaseMode === "wrong-platform"
+              ? [
+                  {
+                    name: "Therapy.Local.Runtime_0.1.5_aarch64.dmg",
+                    browser_download_url:
+                      "https://downloads.example/therapy-macos.dmg",
+                  },
+                ]
+              : [matchingAsset],
+        });
+      },
+    );
+
+    await page.goto("/help/local-suite");
+    await expect(
+      page.getByRole("link", { name: /Linux Download/i }),
+    ).toHaveAttribute("href", releaseUrl);
+
+    releaseMode = "missing";
+    await page.reload();
+    await expect(
+      page.getByText(/no verified desktop release has been published yet/i),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Linux Download/i }),
+    ).toHaveCount(0);
+
+    releaseMode = "rate-limit";
+    await page.reload();
+    await expect(
+      page.getByText(/unable to check verified GitHub Releases/i),
+    ).toBeVisible();
+
+    await page.evaluate(
+      ({ asset }) => {
+        window.localStorage.setItem(
+          "local-suite-release-assets",
+          JSON.stringify({
+            timestamp: Date.now() - 11 * 60 * 1000,
+            assets: [asset],
+          }),
+        );
+      },
+      { asset: matchingAsset },
+    );
+    releaseMode = "offline";
+    await page.reload();
+    await expect(
+      page.getByText(/showing the last verified release found on this device/i),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Linux Download/i }),
+    ).toHaveAttribute("href", releaseUrl);
+
+    releaseMode = "wrong-platform";
+    await page.reload();
+    await expect(
+      page.getByRole("link", { name: /Linux Download/i }),
+    ).toHaveCount(0);
+    await expect(page.getByText("No verified release")).toHaveCount(3);
   });
 
   test("language choice is scoped, keyboard reachable, and preserves the current route", async ({
@@ -293,36 +496,60 @@ test.describe("requirements-mapped learner routes", () => {
       .toBe("none");
   });
 
-  test("profile keeps edits after a failed save and remains accessible", async ({
+  test("profile keeps edits after a failed save, retries, and reloads the saved values", async ({
     page,
   }) => {
+    let shouldFail = true;
+    let storedProfile = {
+      display_name: "Dev User",
+      bio: "Initial biography.",
+    };
     await page.route("**/api/v1/me/profile", async (route) => {
-      await fulfillJson(route, { error: "Temporary profile failure." }, 503);
-    });
-    await page.route("**/api/v1/me", async (route) => {
-      if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as {
+        displayName: string;
+        bio: string | null;
+      };
+      if (shouldFail) {
         await fulfillJson(route, { error: "Temporary profile failure." }, 503);
         return;
       }
+      storedProfile = {
+        display_name: body.displayName,
+        bio: body.bio ?? "",
+      };
+      await fulfillJson(route, { ok: true, ...storedProfile });
+    });
+    await page.route("**/api/v1/me", async (route) => {
       await fulfillJson(route, {
         id: "user-1",
         email: "dev@example.com",
-        display_name: "Dev User",
-        bio: "Initial biography.",
+        ...storedProfile,
         created_at: "2026-01-01T00:00:00.000Z",
         hasOpenAiKey: false,
       });
     });
 
+    await page.setViewportSize({ width: 768, height: 900 });
     await page.goto("/profile");
     const displayName = page.getByLabel("Display name");
+    const bio = page.getByLabel("Short bio");
     await displayName.fill("Edited learner");
+    await bio.fill("Practising calm reflection.");
     await page.getByRole("button", { name: "Save profile" }).click();
 
     await expect(
       page.getByText("We couldn't save your profile. Try again."),
     ).toBeVisible();
     await expect(displayName).toHaveValue("Edited learner");
+    await expect(bio).toHaveValue("Practising calm reflection.");
+
+    shouldFail = false;
+    await page.getByRole("button", { name: "Save profile" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Profile saved")).toBeVisible();
+    await page.reload();
+    await expect(displayName).toHaveValue("Edited learner");
+    await expect(bio).toHaveValue("Practising calm reflection.");
     await expectNoSeriousAccessibilityViolations(page);
   });
 });

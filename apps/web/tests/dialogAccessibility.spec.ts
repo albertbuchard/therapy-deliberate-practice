@@ -1,6 +1,7 @@
 import {
   expect,
   expectNoSeriousAccessibilityViolations,
+  fulfillJson,
   installAuthenticatedBrowser,
   test,
 } from "./fixtures";
@@ -33,6 +34,7 @@ test.describe("learner dialog accessibility", () => {
     page,
     baseURL,
   }) => {
+    await page.route("**/api/v1/tasks?*", (route) => fulfillJson(route, []));
     await page.goto(`${baseURL ?? "http://localhost:5173"}/minigames/play`);
 
     const selectDialog = page.getByRole("dialog", {

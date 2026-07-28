@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { eq } from "drizzle-orm";
@@ -79,8 +79,9 @@ const installOpenAiEvaluationMock = (attemptId: string) => {
 };
 
 test("local practice is validated, private in history, and safely committed to a minigame", async () => {
-  const testDirectory = path.dirname(fileURLToPath(import.meta.url));
-  const tempDirectory = await mkdtemp(path.join(testDirectory, "tmp-local-practice-"));
+  const tempDirectory = await mkdtemp(
+    path.join(tmpdir(), "therapy-local-practice-"),
+  );
   const dbPath = path.join(tempDirectory, "test.sqlite");
   ensureSchema(dbPath);
   const sqlite = new Database(dbPath);

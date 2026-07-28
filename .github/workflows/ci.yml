@@ -29,7 +29,9 @@ jobs:
           npm run lint -w apps/web
           npm run lint -w services/local-runtime-suite/desktop
       - name: Type-check browser code
-        run: npm run typecheck -w apps/web
+        run: |
+          npm run typecheck -w apps/web
+          npm run typecheck -w services/local-runtime-suite/desktop
       - name: Run JavaScript and TypeScript tests
         run: |
           npm test -w apps/api

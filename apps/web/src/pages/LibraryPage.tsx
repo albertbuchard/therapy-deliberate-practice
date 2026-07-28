@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ActiveFilterChips } from "../components/library/ActiveFilterChips";
 import { LibraryAdvancedFilters } from "../components/library/LibraryAdvancedFilters";
@@ -19,6 +19,7 @@ import {
 
 export const LibraryPage = () => {
   const { t } = useTranslation();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const inputRef = useRef<HTMLInputElement>(null);
   const parsedState = useMemo(
@@ -102,6 +103,7 @@ export const LibraryPage = () => {
   const languages = languagesData?.languages ?? [];
   const tags = tagsData?.tags ?? [];
   const skillDomains = skillDomainsData?.skill_domains ?? [];
+  const libraryReturnTo = `${location.pathname}${location.search}`;
 
   const handleApplyAdvanced = () => {
     setSearchState(draftState);
@@ -235,12 +237,14 @@ export const LibraryPage = () => {
               <div className="mt-6 flex gap-3">
                 <Link
                   to={`/tasks/${task.id}`}
+                  state={{ libraryReturnTo }}
                   className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950"
                 >
                   {t("library.viewDetails")}
                 </Link>
                 <Link
                   to={`/practice/${task.id}`}
+                  state={{ libraryReturnTo }}
                   className="rounded-full border border-white/20 px-4 py-2 text-sm"
                 >
                   {t("library.startPractice")}
