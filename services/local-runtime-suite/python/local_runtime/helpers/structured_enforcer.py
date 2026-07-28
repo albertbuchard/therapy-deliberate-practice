@@ -155,6 +155,16 @@ def _apply_retry_sampling(payload: dict) -> None:
     payload["top_p"] = min(top_p, 0.5)
 
 
+def _safe_failure_category(error: str) -> str:
+    if error == "missing_output_text":
+        return error
+    if error.startswith("invalid_json"):
+        return "invalid_json"
+    if error.startswith("schema_validation_failed"):
+        return "schema_validation_failed"
+    return "structured_output_failed"
+
+
 class StructuredOutputEnforcer:
     def __init__(
         self, *, selected: LoadedModel, ctx: RunContext, config: StructuredFormatConfig, request_id: str
@@ -223,7 +233,7 @@ class StructuredOutputEnforcer:
                     "request_id": self.request_id,
                     "model_id": self.selected.spec.id,
                     "attempt": attempt,
-                    "reason": last_error,
+                    "reason": _safe_failure_category(last_error),
                 },
             )
         raise StructuredOutputFailure(last_error)

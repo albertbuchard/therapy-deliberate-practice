@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { SignJWT } from "jose";
 import { createApiApp } from "../src/app";
-import { ttsAssets } from "../src/db/schema";
+import { taskExamples, tasks, ttsAssets } from "../src/db/schema";
 import type { RuntimeEnv } from "../src/env";
 import { getOrCreateTtsAsset } from "../src/services/ttsService";
 import { buildTtsCacheKey, buildTtsR2Key } from "../src/utils/ttsCache";
+
+const openTestDatabases = new Set<InstanceType<typeof Database>>();
+
+afterEach(() => {
+  for (const sqlite of openTestDatabases) {
+    if (sqlite.open) {
+      sqlite.close();
+    }
+  }
+  openTestDatabases.clear();
+});
 
 const createEnv = (): RuntimeEnv => ({
   aiMode: "local_prefer",
@@ -16,6 +27,7 @@ const createEnv = (): RuntimeEnv => ({
   adminEmails: [],
   adminGroups: [],
   cfAccessAud: "",
+  cfAccessIssuer: "",
   bypassAdminAuth: false,
   devAdminToken: "",
   environment: "test",
@@ -39,6 +51,7 @@ const createEnv = (): RuntimeEnv => ({
 
 const setupDb = () => {
   const sqlite = new Database(":memory:");
+  openTestDatabases.add(sqlite);
   sqlite.exec(`
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
@@ -75,6 +88,32 @@ const setupDb = () => {
       updated_at INTEGER NOT NULL
     );
     CREATE UNIQUE INDEX tts_assets_cache_key_idx ON tts_assets (cache_key);
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      skill_domain TEXT NOT NULL,
+      base_difficulty INTEGER NOT NULL,
+      general_objective TEXT,
+      tags TEXT NOT NULL,
+      language TEXT NOT NULL DEFAULT 'en',
+      is_published INTEGER NOT NULL,
+      parent_task_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE task_examples (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      difficulty INTEGER NOT NULL,
+      severity_label TEXT,
+      patient_text TEXT NOT NULL,
+      language TEXT NOT NULL DEFAULT 'en',
+      meta TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
   const db = drizzle(sqlite);
   return { db, sqlite };
@@ -88,13 +127,20 @@ test("getOrCreateTtsAsset returns generating when a request is in progress", asy
   const synthesizePromise = new Promise<{ bytes: Uint8Array; contentType: string }>((resolve) => {
     resolveSynthesize = resolve;
   });
+  let markSynthesizeStarted!: () => void;
+  const synthesizeStarted = new Promise<void>((resolve) => {
+    markSynthesizeStarted = resolve;
+  });
   const provider = {
     kind: "openai" as const,
     model: "gpt-4o-mini-tts",
     voice: "marin",
     format: "mp3" as const,
     healthCheck: async () => true,
-    synthesize: async () => synthesizePromise
+    synthesize: async () => {
+      markSynthesizeStarted();
+      return synthesizePromise;
+    }
   };
   const storage = {
     headObject: async () => ({ exists: false }),
@@ -114,6 +160,7 @@ test("getOrCreateTtsAsset returns generating when a request is in progress", asy
     provider,
     { text: "Hello there", voice: "marin", model: "gpt-4o-mini-tts", format: "mp3" }
   );
+  await synthesizeStarted;
   const secondResult = await getOrCreateTtsAsset(
     db,
     env,
@@ -302,7 +349,7 @@ test("getOrCreateTtsAsset flips generating to ready when R2 exists", async () =>
   assert.equal(synthesizeCalled, false);
 });
 
-test("tts route returns 404 when not ready and 200 when ready", async () => {
+test("tts route serves shared ready audio when at least one associated task is published", async () => {
   const { db } = setupDb();
   const env = createEnv();
   const storage = {
@@ -361,10 +408,129 @@ test("tts route returns 404 when not ready and 200 when ready", async () => {
     created_at: Date.now(),
     updated_at: Date.now()
   });
-
-  const ready = await app.request("/api/v1/tts/cache-ready", {
-    headers: { Authorization: `Bearer ${token}` }
+  await db.insert(tasks).values({
+    id: "task-published",
+    slug: "published",
+    title: "Published",
+    description: "Published task",
+    skill_domain: "reflection",
+    base_difficulty: 1,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: true,
+    parent_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
   });
+  await db.insert(taskExamples).values({
+    id: "example-published",
+    task_id: "task-published",
+    difficulty: 1,
+    severity_label: null,
+    patient_text: "Hello",
+    language: "en",
+    meta: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  });
+  await db.insert(tasks).values({
+    id: "task-shared-draft",
+    slug: "shared-draft",
+    title: "Shared draft",
+    description: "Draft task with the same patient statement",
+    skill_domain: "reflection",
+    base_difficulty: 1,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: false,
+    parent_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  });
+  await db.insert(taskExamples).values({
+    id: "example-shared-draft",
+    task_id: "task-shared-draft",
+    difficulty: 1,
+    severity_label: null,
+    patient_text: "Hello",
+    language: "en",
+    meta: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  });
+
+  const ready = await app.request("/api/v1/tts/cache-ready");
   assert.equal(ready.status, 200);
   assert.equal(ready.headers.get("content-type"), "audio/mpeg");
+});
+
+test("tts route hides ready audio associated only with a draft task without reading storage", async () => {
+  const { db } = setupDb();
+  const env = createEnv();
+  let storageReads = 0;
+  const storage = {
+    headObject: async () => ({ exists: true }),
+    putObject: async () => ({ etag: "etag" }),
+    getObject: async () => {
+      storageReads += 1;
+      return {
+        body: new Uint8Array([1, 2, 3]),
+        contentType: "audio/mpeg",
+        etag: "etag",
+        contentLength: 3
+      };
+    }
+  };
+  const app = createApiApp({ env, db, tts: { storage } });
+
+  await db.insert(tasks).values({
+    id: "task-draft",
+    slug: "draft",
+    title: "Draft",
+    description: "Draft task",
+    skill_domain: "reflection",
+    base_difficulty: 1,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: false,
+    parent_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  });
+  await db.insert(taskExamples).values({
+    id: "example-draft",
+    task_id: "task-draft",
+    difficulty: 1,
+    severity_label: null,
+    patient_text: "Private draft statement",
+    language: "en",
+    meta: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  });
+  await db.insert(ttsAssets).values({
+    id: "asset-draft",
+    cache_key: "cache-draft",
+    text: "Private draft statement",
+    voice: "marin",
+    model: "gpt-4o-mini-tts",
+    format: "mp3",
+    r2_key: "tts/gpt-4o-mini-tts/marin/cache-draft.mp3",
+    bytes: 3,
+    content_type: "audio/mpeg",
+    etag: "etag",
+    status: "ready",
+    error: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  });
+
+  const response = await app.request("/api/v1/tts/cache-draft");
+
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { error: "TTS asset not found." });
+  assert.equal(storageReads, 0);
 });

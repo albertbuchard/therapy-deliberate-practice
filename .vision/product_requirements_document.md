@@ -16,7 +16,7 @@ Personal history and adaptive practice may use a learner's local unverified resu
 
 ### Local Runtime Suite
 
-The desktop application must start and stop exactly one managed gateway, distinguish it from a foreign listener on the same port, and use one atomic durable configuration for port, storage, cache, model defaults, logging policy, and capability key. Saving a setting that requires restart must remain visibly pending until the gateway restarts with it.
+The desktop application must start and stop exactly one managed gateway, distinguish it from a foreign listener on the same port, and use one atomic durable configuration for the port, authoritative platform-specific data and model-cache directories, model defaults, metadata-only logging boundary, and capability key. The control centre must show the exact configuration, data, and model-cache locations used by the gateway and every advertised adapter; it must not imply that managed paths are editable when they are not. Saving an editable setting that requires restart must remain visibly pending until the gateway restarts with it.
 
 The gateway must bind to loopback by default and require a bearer capability for model catalog, logs, diagnostics containing sensitive metadata, and inference endpoints. It must enforce an explicit Origin and Host policy suitable for the packaged Tauri application and approved web origins. Health must expose a stable product identity and readiness semantics without leaking the capability or therapy content.
 
@@ -28,7 +28,7 @@ The browser, rather than the hosted Worker, must call the local gateway for loca
 
 Every generated model-catalog entry must correspond to a real implementation with accurate model identity, immutable default model revision, backend, supported platforms, memory guidance, approximate download size, and endpoint. Faster Whisper must run the real Faster Whisper library. Transformer language generation must use a causal language-model class and a compatible checkpoint. Apple-silicon MLX entries must use compatible MLX checkpoints and libraries.
 
-Model lifecycle operations must be synchronized per model so concurrent requests do not create duplicate large loads. Basic gateway health and catalog access must not wait for default model downloads. Logs must exclude prompts, transcripts, and outputs by default; an explicit local diagnostic setting may enable content logging with a clear warning.
+Model lifecycle operations must be synchronized per model so concurrent requests do not create duplicate large loads. Basic gateway health and catalog access must not wait for default model downloads. Ordinary and diagnostic logs must remain metadata-only: prompts, transcripts, and model outputs are not a supported logging option in the current product.
 
 ### Web and desktop usability
 

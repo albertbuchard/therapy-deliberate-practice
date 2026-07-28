@@ -114,6 +114,7 @@ export type PracticeRunInput = {
   task_id?: string;
   example_id?: string;
   attempt_id?: string;
+  input_mode?: "audio" | "typed";
   audio?: string;
   audio_mime?: string;
   transcript_text?: string;
@@ -139,8 +140,9 @@ export type PracticeRunError = {
 
 export type PracticeRunTranscript = {
   text: string;
-  provider: { kind: "local" | "openai"; model: string };
-  duration_ms: number;
+  input_mode?: "audio" | "typed";
+  provider: { kind: "local" | "openai"; model: string } | null;
+  duration_ms: number | null;
 };
 
 export type PracticeRunScoring = {
@@ -162,7 +164,7 @@ export type PracticeRunResponse = {
   debug?: {
     timings: Record<string, number>;
     selectedProviders: {
-      stt: { kind: "local" | "openai"; model: string };
+      stt: { kind: "local" | "openai"; model: string } | null;
       llm: { kind: "local" | "openai"; model: string } | null;
     };
   };

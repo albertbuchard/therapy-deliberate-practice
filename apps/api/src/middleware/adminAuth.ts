@@ -34,8 +34,24 @@ const getCachedJwks = (issuer: string) => {
   return jwks;
 };
 
-const isCloudflareAccessIssuer = (issuer: string) =>
-  issuer.startsWith("https://") && issuer.endsWith(".cloudflareaccess.com");
+export const isCloudflareAccessIssuer = (issuer: string) => {
+  try {
+    const url = new URL(issuer);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".cloudflareaccess.com") &&
+      url.hostname.length > ".cloudflareaccess.com".length &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      (url.pathname === "" || url.pathname === "/") &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+};
 
 const normalizeEmail = (email?: string | null) => email?.trim().toLowerCase() ?? null;
 
@@ -78,36 +94,48 @@ const resolveAccessIdentity = async (
   if (!env.cfAccessAud) {
     return { ok: false, status: 500, message: "CF_ACCESS_AUD is not configured" };
   }
-
-  const decoded = decodeJwt(token);
-  const issuer = typeof decoded.iss === "string" ? decoded.iss : null;
-  if (!issuer || !isCloudflareAccessIssuer(issuer)) {
-    return { ok: false, status: 401, message: "Invalid Access issuer" };
+  if (!env.cfAccessIssuer || !isCloudflareAccessIssuer(env.cfAccessIssuer)) {
+    return {
+      ok: false,
+      status: 500,
+      message: "CF_ACCESS_ISSUER is not configured correctly",
+    };
   }
 
   try {
-    const jwks = getCachedJwks(issuer);
+    const decoded = decodeJwt(token);
+    const issuer = typeof decoded.iss === "string" ? decoded.iss : null;
+    if (issuer !== env.cfAccessIssuer) {
+      return { ok: false, status: 401, message: "Invalid Access issuer" };
+    }
+    const jwks = getCachedJwks(env.cfAccessIssuer);
     const { payload } = await jwtVerify(token, jwks, {
       audience: env.cfAccessAud,
-      issuer
+      issuer: env.cfAccessIssuer,
     });
     const record = payload as Record<string, unknown>;
     const email = normalizeEmail((record.email as string | undefined) ?? emailHeader);
     const groups = extractGroups(record);
     return { ok: true, identity: { isAuthenticated: true, email, groups, verifiedAccessJwt: true } };
   } catch (error) {
-    console.error("Access JWT verification failed", error);
+    console.warn("Access JWT verification failed", {
+      errorType: error instanceof Error ? error.name : "UnknownError",
+    });
     return { ok: false, status: 401, message: "Invalid Access token" };
   }
 };
 
-const isAdminAllowed = (env: RuntimeEnv, email: string | null, groups: string[]) => {
+export const isAdminAllowed = (env: RuntimeEnv, email: string | null, groups: string[]) => {
   const emailAllowlist = new Set(env.adminEmails.map((item) => item.toLowerCase()));
   const groupAllowlist = new Set(env.adminGroups);
-  const emailAllowed = email ? emailAllowlist.has(email) : false;
+  const normalizedEmail = normalizeEmail(email);
+  const emailAllowed = normalizedEmail ? emailAllowlist.has(normalizedEmail) : false;
   const groupAllowed = groups.some((group) => groupAllowlist.has(group));
   return emailAllowed || groupAllowed;
 };
+
+export const hasAdminAllowlist = (env: RuntimeEnv) =>
+  env.adminEmails.length > 0 || env.adminGroups.length > 0;
 
 const isDevBypassEnabled = (env: RuntimeEnv) =>
   env.environment === "development" && env.bypassAdminAuth;
@@ -135,13 +163,11 @@ export const resolveAdminStatus = async (
     return result;
   }
   const identity = result.identity;
-  const allowlistConfigured = env.adminEmails.length > 0 || env.adminGroups.length > 0;
   const isAdmin =
-    identity.isAuthenticated && identity.verifiedAccessJwt
-      ? allowlistConfigured
-        ? isAdminAllowed(env, identity.email, identity.groups)
-        : true
-      : false;
+    identity.isAuthenticated &&
+    identity.verifiedAccessJwt &&
+    hasAdminAllowlist(env) &&
+    isAdminAllowed(env, identity.email, identity.groups);
   return { ok: true as const, identity, isAdmin };
 };
 

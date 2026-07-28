@@ -186,7 +186,7 @@ Store the token in browser local storage for local testing:
 localStorage.setItem("devAdminToken", "<DEV_ADMIN_TOKEN>");
 ```
 
-Production administration uses Cloudflare Access plus `ADMIN_EMAILS`, `ADMIN_GROUPS`, and `CF_ACCESS_AUD`. Keep the development bypass disabled in production.
+Production administration uses Cloudflare Access plus `ADMIN_EMAILS`, `ADMIN_GROUPS`, `CF_ACCESS_AUD`, and the exact Access team origin in `CF_ACCESS_ISSUER` (for example, `https://your-team.cloudflareaccess.com`, without a trailing slash). Keep the development bypass disabled in production. The API fails closed when the audience or issuer is missing or invalid.
 
 ## Validate a change
 
@@ -231,6 +231,7 @@ Common server-side variables are:
 - `ADMIN_EMAILS`
 - `ADMIN_GROUPS`
 - `CF_ACCESS_AUD`
+- `CF_ACCESS_ISSUER`
 - `ENV`
 - `BYPASS_ADMIN_AUTH`
 - `DEV_ADMIN_TOKEN`

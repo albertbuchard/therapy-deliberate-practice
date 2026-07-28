@@ -3,6 +3,7 @@ import type { ApiDatabase } from "../db/types";
 import {
   minigamePlayerPromptHistory,
   minigamePlayers,
+  minigameRedrawClaims,
   minigameRounds,
   minigameSessions,
   minigameTeams,
@@ -17,6 +18,13 @@ import {
   pickUnusedExampleForPlayer,
   type CandidateExample
 } from "./minigamePromptSelection";
+import { runAtomicMutation } from "../db/atomic";
+import {
+  getMinigameLimitCode,
+  MINIGAME_LIMIT_CODES,
+  MINIGAME_LIMITS,
+} from "./minigameLimits";
+import { publishedTasksCondition } from "./taskPublication";
 
 export { NoUniquePatientStatementsLeftError, NO_UNIQUE_PATIENT_STATEMENTS_LEFT };
 
@@ -37,6 +45,36 @@ type HistoryInsert = typeof minigamePlayerPromptHistory.$inferInsert;
 
 const isUniqueConstraintError = (error: unknown) =>
   error instanceof Error && error.message.includes("UNIQUE constraint failed");
+
+export class MinigameRedrawConflictError extends Error {
+  constructor() {
+    super("The round can no longer be redrawn.");
+    this.name = "MinigameRedrawConflictError";
+  }
+}
+
+export class NoAvailableMinigameTasksError extends Error {
+  constructor() {
+    super("The selected tasks are no longer available.");
+    this.name = "NoAvailableMinigameTasksError";
+  }
+}
+
+export class InvalidTdmConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidTdmConfigurationError";
+  }
+}
+
+const isRedrawClaimConflict = (error: unknown) =>
+  error instanceof Error &&
+  (error.message.includes("minigame_redraw_claims.replaced_round_id") ||
+    error.message.includes("MINIGAME_REDRAW_NOT_PENDING"));
+
+const isRetryableInsertConflict = (error: unknown) =>
+  isUniqueConstraintError(error) ||
+  getMinigameLimitCode(error) === MINIGAME_LIMIT_CODES.position;
 
 export const createSeededRandom = (seed: string) => {
   let h = 2166136261;
@@ -59,10 +97,19 @@ export const resolveMinigameTasks = async (db: ApiDatabase, selection: TaskSelec
     if (!selection.task_ids?.length) {
       return [];
     }
-    return db.select().from(tasks).where(inArray(tasks.id, selection.task_ids));
+    const rows = await db
+      .select()
+      .from(tasks)
+      .where(
+        and(
+          inArray(tasks.id, selection.task_ids),
+          publishedTasksCondition(),
+        ),
+      );
+    return rows.length === new Set(selection.task_ids).size ? rows : [];
   }
 
-  const filters = [eq(tasks.is_published, true)];
+  const filters = [publishedTasksCondition()];
   if (selection.skill_domains?.length) {
     filters.push(inArray(tasks.skill_domain, selection.skill_domains));
   }
@@ -79,8 +126,42 @@ export const resolveMinigameTasks = async (db: ApiDatabase, selection: TaskSelec
 export const generateTdmSchedule = (
   players: Array<{ id: string; team_id: string | null }>,
   roundsPerPlayer: number,
-  seed: string
+  seed: string,
+  validTeamIds?: ReadonlySet<string>,
 ) => {
+  if (!Number.isInteger(roundsPerPlayer) || roundsPerPlayer < 1) {
+    throw new InvalidTdmConfigurationError(
+      "Team games require a positive whole-number rounds-per-player setting.",
+    );
+  }
+  if (players.length < 2) {
+    throw new InvalidTdmConfigurationError(
+      "Team games require at least two players.",
+    );
+  }
+  if (new Set(players.map((player) => player.id)).size !== players.length) {
+    throw new InvalidTdmConfigurationError(
+      "Team-game player identifiers must be unique.",
+    );
+  }
+  if (
+    players.some(
+      (player) =>
+        !player.team_id ||
+        (validTeamIds !== undefined && !validTeamIds.has(player.team_id)),
+    )
+  ) {
+    throw new InvalidTdmConfigurationError(
+      "Every team-game player must be assigned to a team in this game.",
+    );
+  }
+  const teamIds = new Set(players.map((player) => player.team_id as string));
+  if (teamIds.size < 2) {
+    throw new InvalidTdmConfigurationError(
+      "Team games require players from at least two teams.",
+    );
+  }
+
   const rng = createSeededRandom(seed);
   const remaining = new Map(players.map((player) => [player.id, roundsPerPlayer]));
   const opponentsPlayed = new Map<string, Map<string, number>>();
@@ -93,44 +174,86 @@ export const generateTdmSchedule = (
   const matches: Array<{ playerA: string; playerB: string }> = [];
   const getRemaining = (id: string) => remaining.get(id) ?? 0;
 
-  const pickPlayerA = () => {
-    const candidates = players.filter((player) => getRemaining(player.id) > 0);
-    if (!candidates.length) return null;
-    candidates.sort((a, b) => getRemaining(b.id) - getRemaining(a.id));
-    const topRemaining = getRemaining(candidates[0].id);
-    const topCandidates = candidates.filter((player) => getRemaining(player.id) === topRemaining);
-    return topCandidates[Math.floor(rng() * topCandidates.length)];
-  };
-
-  const pickPlayerB = (playerA: { id: string; team_id: string | null }) => {
-    const candidates = players.filter(
-      (player) =>
-        player.id !== playerA.id && player.team_id !== playerA.team_id && getRemaining(player.id) > 0
+  const residualIsFeasible = () => {
+    const total = players.reduce(
+      (sum, player) => sum + getRemaining(player.id),
+      0,
     );
-    if (!candidates.length) return null;
-    const opponentsMap = opponentsPlayed.get(playerA.id) ?? new Map();
-    const teamsMapA = teamsFaced.get(playerA.id) ?? new Map();
-    candidates.sort((a, b) => {
-      const opponentDiff = (opponentsMap.get(a.id) ?? 0) - (opponentsMap.get(b.id) ?? 0);
-      if (opponentDiff !== 0) return opponentDiff;
-      const teamDiff =
-        (teamsMapA.get(a.team_id ?? "") ?? 0) - (teamsMapA.get(b.team_id ?? "") ?? 0);
-      if (teamDiff !== 0) return teamDiff;
-      return (getRemaining(b.id) ?? 0) - (getRemaining(a.id) ?? 0);
-    });
-    const bestScore = opponentsMap.get(candidates[0].id) ?? 0;
-    const bestCandidates = candidates.filter((player) => (opponentsMap.get(player.id) ?? 0) === bestScore);
-    return bestCandidates[Math.floor(rng() * bestCandidates.length)];
+    if (total % 2 !== 0) return false;
+    const byTeam = new Map<string, number>();
+    for (const player of players) {
+      const teamId = player.team_id as string;
+      byTeam.set(teamId, (byTeam.get(teamId) ?? 0) + getRemaining(player.id));
+    }
+    return [...byTeam.values()].every((teamTotal) => teamTotal <= total - teamTotal);
   };
 
-  for (;;) {
-    const playerA = pickPlayerA();
-    if (!playerA) break;
-    const playerB = pickPlayerB(playerA);
-    if (!playerB) {
-      remaining.set(playerA.id, 0);
-      continue;
+  if (!residualIsFeasible()) {
+    throw new InvalidTdmConfigurationError(
+      "The team sizes and rounds-per-player setting cannot give every player the requested number of cross-team rounds.",
+    );
+  }
+
+  while ([...remaining.values()].some((value) => value > 0)) {
+    const candidates: Array<{
+      playerA: (typeof players)[number];
+      playerB: (typeof players)[number];
+      opponentCount: number;
+      teamCount: number;
+      remainingTotal: number;
+    }> = [];
+    for (let aIndex = 0; aIndex < players.length; aIndex += 1) {
+      const playerA = players[aIndex];
+      if (getRemaining(playerA.id) < 1) continue;
+      for (let bIndex = aIndex + 1; bIndex < players.length; bIndex += 1) {
+        const playerB = players[bIndex];
+        if (
+          getRemaining(playerB.id) < 1 ||
+          playerA.team_id === playerB.team_id
+        ) {
+          continue;
+        }
+        remaining.set(playerA.id, getRemaining(playerA.id) - 1);
+        remaining.set(playerB.id, getRemaining(playerB.id) - 1);
+        const remainsFeasible = residualIsFeasible();
+        remaining.set(playerA.id, getRemaining(playerA.id) + 1);
+        remaining.set(playerB.id, getRemaining(playerB.id) + 1);
+        if (!remainsFeasible) continue;
+        candidates.push({
+          playerA,
+          playerB,
+          opponentCount:
+            opponentsPlayed.get(playerA.id)?.get(playerB.id) ?? 0,
+          teamCount:
+            (teamsFaced.get(playerA.id)?.get(playerB.team_id as string) ?? 0) +
+            (teamsFaced.get(playerB.id)?.get(playerA.team_id as string) ?? 0),
+          remainingTotal:
+            getRemaining(playerA.id) + getRemaining(playerB.id),
+        });
+      }
     }
+    if (!candidates.length) {
+      throw new InvalidTdmConfigurationError(
+        "A complete cross-team schedule could not be generated for every player.",
+      );
+    }
+    candidates.sort(
+      (a, b) =>
+        a.opponentCount - b.opponentCount ||
+        a.teamCount - b.teamCount ||
+        b.remainingTotal - a.remainingTotal ||
+        a.playerA.id.localeCompare(b.playerA.id) ||
+        a.playerB.id.localeCompare(b.playerB.id),
+    );
+    const best = candidates[0];
+    const equivalent = candidates.filter(
+      (candidate) =>
+        candidate.opponentCount === best.opponentCount &&
+        candidate.teamCount === best.teamCount &&
+        candidate.remainingTotal === best.remainingTotal,
+    );
+    const chosen = equivalent[Math.floor(rng() * equivalent.length)];
+    const { playerA, playerB } = chosen;
     const opponentMapA = opponentsPlayed.get(playerA.id) ?? new Map();
     opponentMapA.set(playerB.id, (opponentMapA.get(playerB.id) ?? 0) + 1);
     const opponentMapB = opponentsPlayed.get(playerB.id) ?? new Map();
@@ -144,6 +267,21 @@ export const generateTdmSchedule = (
     matches.push({ playerA: playerA.id, playerB: playerB.id });
   }
 
+  const appearances = new Map(players.map((player) => [player.id, 0]));
+  for (const match of matches) {
+    appearances.set(match.playerA, (appearances.get(match.playerA) ?? 0) + 1);
+    appearances.set(match.playerB, (appearances.get(match.playerB) ?? 0) + 1);
+  }
+  if (
+    matches.length * 2 !== players.length * roundsPerPlayer ||
+    players.some(
+      (player) => appearances.get(player.id) !== roundsPerPlayer,
+    )
+  ) {
+    throw new InvalidTdmConfigurationError(
+      "A complete cross-team schedule could not be generated for every player.",
+    );
+  }
   return matches;
 };
 
@@ -275,10 +413,18 @@ const buildRoundsForSession = ({
 
   if (session.game_type === "tdm") {
     const roundsPerPlayer = Number((session.settings as { rounds_per_player?: number }).rounds_per_player ?? 1);
+    if (
+      !Number.isInteger(roundsPerPlayer) ||
+      roundsPerPlayer < 1 ||
+      roundsPerPlayer > MINIGAME_LIMITS.roundsPerPlayer
+    ) {
+      throw new Error("The rounds-per-player setting is outside the supported range.");
+    }
     const matches = generateTdmSchedule(
       players.map((player) => ({ id: player.id, team_id: player.team_id ?? null })),
       roundsPerPlayer,
-      seed
+      seed,
+      new Set(teams.map((team) => team.id)),
     );
     for (const match of matches) {
       const usedA = usedByPlayer.get(match.playerA) ?? new Set();
@@ -313,6 +459,13 @@ const buildRoundsForSession = ({
       throw new Error("Add at least one player before generating rounds.");
     }
     const totalCount = count ?? 1;
+    if (
+      !Number.isInteger(totalCount) ||
+      totalCount < 1 ||
+      totalCount > MINIGAME_LIMITS.ffaRoundBatch
+    ) {
+      throw new Error("The requested round count is outside the supported range.");
+    }
     for (let i = 0; i < totalCount; i += 1) {
       const player = players[i % players.length];
       const used = usedByPlayer.get(player.id) ?? new Set();
@@ -344,29 +497,6 @@ const buildRoundsForSession = ({
   return roundsToInsert;
 };
 
-const insertPromptHistoryWithRetry = async ({
-  db,
-  sessionId,
-  rounds,
-  logEvent,
-  mode
-}: {
-  db: ApiDatabase;
-  sessionId: string;
-  rounds: RoundInsert[];
-  logEvent?: Logger;
-  mode: string;
-}) => {
-  const historyRows = buildPromptHistoryRows(sessionId, rounds, Date.now());
-  if (!historyRows.length) return;
-  await db.insert(minigamePlayerPromptHistory).values(historyRows);
-  logEvent?.("info", "minigames.prompt_history.insert", {
-    sessionId,
-    mode,
-    rows: historyRows.length
-  });
-};
-
 const generateRoundsWithRetries = async ({
   db,
   session,
@@ -381,7 +511,7 @@ const generateRoundsWithRetries = async ({
   const selection = session.task_selection as TaskSelection;
   const tasksForSelection = await resolveMinigameTasks(db, selection);
   if (!tasksForSelection.length) {
-    throw new Error("No tasks available for selection.");
+    throw new NoAvailableMinigameTasksError();
   }
   const examples = await db
     .select({ id: taskExamples.id, task_id: taskExamples.task_id })
@@ -389,6 +519,11 @@ const generateRoundsWithRetries = async ({
     .where(inArray(taskExamples.task_id, tasksForSelection.map((task) => task.id)));
 
   if (!examples.length) {
+    if (session.game_type === "tdm") {
+      throw new InvalidTdmConfigurationError(
+        "Team-game rounds cannot be generated because the selected tasks have no examples.",
+      );
+    }
     return { roundCount: 0, retries: 0 };
   }
 
@@ -401,14 +536,6 @@ const generateRoundsWithRetries = async ({
     .from(minigameTeams)
     .where(eq(minigameTeams.session_id, session.id));
 
-  const [lastRound] = await db
-    .select({ position: minigameRounds.position })
-    .from(minigameRounds)
-    .where(eq(minigameRounds.session_id, session.id))
-    .orderBy(desc(minigameRounds.position))
-    .limit(1);
-  const startPosition = lastRound?.position != null ? lastRound.position + 1 : 0;
-
   const seed = selection.seed ?? session.id;
   const maxRetries = 3;
   let attempt = 0;
@@ -416,6 +543,14 @@ const generateRoundsWithRetries = async ({
 
   while (attempt <= maxRetries) {
     try {
+      const [lastRound] = await db
+        .select({ position: minigameRounds.position })
+        .from(minigameRounds)
+        .where(eq(minigameRounds.session_id, session.id))
+        .orderBy(desc(minigameRounds.position))
+        .limit(1);
+      const startPosition =
+        lastRound?.position != null ? lastRound.position + 1 : 0;
       const usedByPlayer = await loadUsedPromptHistory(
         db,
         session.id,
@@ -435,14 +570,20 @@ const generateRoundsWithRetries = async ({
       if (!roundsToInsert.length) {
         return { roundCount: 0, retries: attempt };
       }
-      await insertPromptHistoryWithRetry({
-        db,
+      const historyRows = buildPromptHistoryRows(
+        session.id,
+        roundsToInsert,
+        Date.now(),
+      );
+      await runAtomicMutation(db, (executor) => [
+        executor.insert(minigamePlayerPromptHistory).values(historyRows),
+        executor.insert(minigameRounds).values(roundsToInsert),
+      ]);
+      logEvent?.("info", "minigames.prompt_history.insert", {
         sessionId: session.id,
-        rounds: roundsToInsert,
-        logEvent,
-        mode: session.game_type
+        mode: session.game_type,
+        rows: historyRows.length,
       });
-      await db.insert(minigameRounds).values(roundsToInsert);
       if (attempt > 0) {
         logEvent?.("info", "minigames.prompt_history.retry_success", {
           sessionId: session.id,
@@ -460,7 +601,7 @@ const generateRoundsWithRetries = async ({
         });
         throw error;
       }
-      if (isUniqueConstraintError(error)) {
+      if (isRetryableInsertConflict(error)) {
         logEvent?.("warn", "minigames.prompt_history.conflict", {
           sessionId: session.id,
           attempt,
@@ -495,16 +636,18 @@ export const generateMinigameRounds = async ({
 export const redrawMinigameRound = async ({
   db,
   session,
+  replacedRoundId,
   logEvent
 }: {
   db: ApiDatabase;
   session: typeof minigameSessions.$inferSelect;
+  replacedRoundId: string;
   logEvent?: Logger;
 }) => {
   const selection = session.task_selection as TaskSelection;
   const tasksForSelection = await resolveMinigameTasks(db, selection);
   if (!tasksForSelection.length) {
-    throw new Error("No tasks available for selection.");
+    throw new NoAvailableMinigameTasksError();
   }
   const examples = await db
     .select({ id: taskExamples.id, task_id: taskExamples.task_id })
@@ -527,25 +670,10 @@ export const redrawMinigameRound = async ({
     .from(minigameTeams)
     .where(eq(minigameTeams.session_id, session.id));
 
+  const playerById = new Map(players.map((player) => [player.id, player]));
   const teamByPlayer = new Map(players.map((player) => [player.id, player.team_id ?? null]));
+  const validTeamIds = new Set(teams.map((team) => team.id));
   const seed = selection.seed ?? session.id;
-  const matches = generateTdmSchedule(
-    players.map((player) => ({ id: player.id, team_id: player.team_id ?? null })),
-    1,
-    seed
-  );
-  const match = matches[0];
-  if (!match) {
-    return { roundCount: 0, retries: 0 };
-  }
-
-  const [lastRound] = await db
-    .select({ position: minigameRounds.position })
-    .from(minigameRounds)
-    .where(eq(minigameRounds.session_id, session.id))
-    .orderBy(desc(minigameRounds.position))
-    .limit(1);
-  const position = lastRound?.position != null ? lastRound.position + 1 : 0;
 
   const maxRetries = 3;
   let attempt = 0;
@@ -553,6 +681,50 @@ export const redrawMinigameRound = async ({
 
   while (attempt <= maxRetries) {
     try {
+      const [replaceableRound] = await db
+        .select({
+          status: minigameRounds.status,
+          player_a_id: minigameRounds.player_a_id,
+          player_b_id: minigameRounds.player_b_id,
+        })
+        .from(minigameRounds)
+        .where(
+          and(
+            eq(minigameRounds.id, replacedRoundId),
+            eq(minigameRounds.session_id, session.id),
+          ),
+        )
+        .limit(1);
+      if (replaceableRound?.status !== "pending") {
+        throw new MinigameRedrawConflictError();
+      }
+      const playerA = playerById.get(replaceableRound.player_a_id);
+      const playerB = replaceableRound.player_b_id
+        ? playerById.get(replaceableRound.player_b_id)
+        : undefined;
+      if (
+        !playerA?.team_id ||
+        !playerB?.team_id ||
+        !validTeamIds.has(playerA.team_id) ||
+        !validTeamIds.has(playerB.team_id) ||
+        playerA.team_id === playerB.team_id
+      ) {
+        throw new InvalidTdmConfigurationError(
+          "The round being redrawn must contain two current players from different teams in this game.",
+        );
+      }
+      const match = {
+        playerA: playerA.id,
+        playerB: playerB.id,
+      };
+      const [lastRound] = await db
+        .select({ position: minigameRounds.position })
+        .from(minigameRounds)
+        .where(eq(minigameRounds.session_id, session.id))
+        .orderBy(desc(minigameRounds.position))
+        .limit(1);
+      const position =
+        lastRound?.position != null ? lastRound.position + 1 : 0;
       const usedByPlayer = await loadUsedPromptHistory(
         db,
         session.id,
@@ -581,14 +753,31 @@ export const redrawMinigameRound = async ({
         started_at: null,
         completed_at: null
       };
-      await insertPromptHistoryWithRetry({
-        db,
+      const historyRows = buildPromptHistoryRows(session.id, [round], Date.now());
+      await runAtomicMutation(db, (executor) => [
+        executor.insert(minigameRedrawClaims).values({
+          replaced_round_id: replacedRoundId,
+          replacement_round_id: round.id,
+          created_at: Date.now(),
+        }),
+        executor
+          .update(minigameRounds)
+          .set({ status: "completed", completed_at: Date.now() })
+          .where(
+            and(
+              eq(minigameRounds.id, replacedRoundId),
+              eq(minigameRounds.session_id, session.id),
+              eq(minigameRounds.status, "pending"),
+            ),
+          ),
+        executor.insert(minigamePlayerPromptHistory).values(historyRows),
+        executor.insert(minigameRounds).values(round),
+      ]);
+      logEvent?.("info", "minigames.prompt_history.insert", {
         sessionId: session.id,
-        rounds: [round],
-        logEvent,
-        mode: session.game_type
+        mode: session.game_type,
+        rows: historyRows.length,
       });
-      await db.insert(minigameRounds).values(round);
       if (attempt > 0) {
         logEvent?.("info", "minigames.prompt_history.retry_success", {
           sessionId: session.id,
@@ -606,7 +795,10 @@ export const redrawMinigameRound = async ({
         });
         throw error;
       }
-      if (isUniqueConstraintError(error)) {
+      if (isRedrawClaimConflict(error)) {
+        throw new MinigameRedrawConflictError();
+      }
+      if (isRetryableInsertConflict(error)) {
         logEvent?.("warn", "minigames.prompt_history.conflict", {
           sessionId: session.id,
           attempt,

@@ -5,7 +5,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { SignJWT } from "jose";
 import { createApiApp } from "../src/app";
 import type { RuntimeEnv } from "../src/env";
-import { taskExamples, userSettings, users } from "../src/db/schema";
+import { taskExamples, tasks, userSettings, users } from "../src/db/schema";
 
 const createEnv = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
   aiMode: "openai_only",
@@ -14,6 +14,7 @@ const createEnv = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
   adminEmails: [],
   adminGroups: [],
   cfAccessAud: "",
+  cfAccessIssuer: "",
   bypassAdminAuth: false,
   devAdminToken: "",
   environment: "test",
@@ -58,6 +59,21 @@ const setupDb = () => {
       openai_key_kid TEXT,
       updated_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL
+    );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      skill_domain TEXT NOT NULL,
+      base_difficulty INTEGER NOT NULL,
+      general_objective TEXT,
+      tags TEXT NOT NULL,
+      language TEXT NOT NULL DEFAULT 'en',
+      is_published INTEGER NOT NULL,
+      parent_task_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
     );
     CREATE TABLE task_examples (
       id TEXT PRIMARY KEY,
@@ -136,6 +152,21 @@ test("prefetch batch returns ready items for patient audio", async () => {
     openai_key_kid: null,
     updated_at: Date.now(),
     created_at: Date.now()
+  });
+  await db.insert(tasks).values({
+    id: "task-1",
+    slug: "task-1",
+    title: "Published task",
+    description: "A published patient audio task.",
+    skill_domain: "test",
+    base_difficulty: 1,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: true,
+    parent_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
   });
   await db.insert(taskExamples).values([
     {
@@ -219,6 +250,21 @@ test("prefetch batch relies on server OpenAI key", async () => {
     openai_key_kid: null,
     updated_at: Date.now(),
     created_at: Date.now()
+  });
+  await db.insert(tasks).values({
+    id: "task-1",
+    slug: "task-1",
+    title: "Published task",
+    description: "A published patient audio task.",
+    skill_domain: "test",
+    base_difficulty: 1,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: true,
+    parent_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now()
   });
   await db.insert(taskExamples).values({
     id: "statement-1",

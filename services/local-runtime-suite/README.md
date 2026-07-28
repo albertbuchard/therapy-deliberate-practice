@@ -40,7 +40,7 @@ From the repository root:
 npm run dev:local
 ```
 
-The gateway reads `~/.therapy/local-runtime/config.json`. It creates a strong pairing key when none exists. The same configuration controls the port, allowed origins, storage, cache, model defaults, and logging policy.
+For direct Python development, the gateway defaults to `~/.therapy/local-runtime/config.json`. The packaged desktop passes its platform-specific application configuration path explicitly and shows the exact configuration, data, and model-cache locations in the control centre. It creates a strong pairing key when none exists. The configuration controls the port, allowed origins, storage, cache, and model defaults. Ordinary logs are always metadata-only; the current desktop does not expose a content-logging toggle.
 
 Use the desktop application for normal pairing and configuration. Direct API checks must include the pairing key on protected routes:
 
@@ -99,9 +99,9 @@ npm --prefix services/local-runtime-suite test
 npm --prefix services/local-runtime-suite run lint
 ```
 
-The Python tests cover access control, origins, configuration, model selection, concurrent loading, cancellation, model adapters, packaged-runtime inputs, and archive safety.
+The Python tests cover access control, origins, configuration, model selection, concurrent loading, inference-request cancellation, model adapters, packaged-runtime inputs, and archive safety. Model-load jobs are not cooperatively cancellable: the desktop can stop waiting after its bounded timeout and recheck the same job later.
 
-Real backend smoke tools are kept separate from unit tests because they download model fixtures. The native build workflow runs bounded Qwen Transformers and Faster Whisper inference on Linux when requested.
+Real backend smoke tools are kept separate from unit tests because they download model fixtures. Every native package workflow run now requires a receipt for each advertised packaged cell: Apple-silicon Qwen Transformers, Faster Whisper, Qwen MLX, and Parakeet MLX; Intel-macOS Faster Whisper; and Windows/Linux Qwen Transformers plus Faster Whisper. Missing or extra backend receipts fail closed.
 
 ## Portable sidecar guarantees
 

@@ -104,6 +104,7 @@ def load(ctx: RunContext) -> dict[str, Any]:
             device=device,
             compute_type=compute_type,
             revision=revision,
+            download_root=ctx.cache_dir,
         )
     except Exception as exc:
         raise RuntimeError(

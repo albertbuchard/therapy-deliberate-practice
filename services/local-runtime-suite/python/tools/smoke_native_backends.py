@@ -49,6 +49,11 @@ SUPPORTED_TARGETS = {
         "machines": {"arm64", "aarch64"},
         "platform_id": "darwin-arm64",
     },
+    "x86_64-apple-darwin": {
+        "system": "Darwin",
+        "machines": {"x86_64"},
+        "platform_id": "darwin-x64",
+    },
     "x86_64-pc-windows-msvc": {
         "system": "Windows",
         "machines": {"amd64", "x86_64"},
@@ -59,6 +64,17 @@ SUPPORTED_TARGETS = {
         "machines": {"amd64", "x86_64"},
         "platform_id": "linux-x64",
     },
+}
+TARGET_BACKEND_FAMILIES = {
+    "aarch64-apple-darwin": (
+        "qwen-transformers",
+        "faster-whisper",
+        "qwen-mlx",
+        "parakeet-mlx",
+    ),
+    "x86_64-apple-darwin": ("faster-whisper",),
+    "x86_64-pc-windows-msvc": ("qwen-transformers", "faster-whisper"),
+    "x86_64-unknown-linux-gnu": ("qwen-transformers", "faster-whisper"),
 }
 
 
@@ -155,6 +171,9 @@ async def smoke_qwen(cache_dir: Path, platform_id: str) -> dict[str, Any]:
     finished = time.perf_counter()
     if not isinstance(result, dict) or not isinstance(result.get("output_text"), str):
         raise TypeError("Qwen native smoke did not return a Responses text payload.")
+    output_text = result["output_text"].strip()
+    if not output_text:
+        raise RuntimeError("Qwen native smoke returned no non-whitespace text.")
     return {
         "family": "qwen-transformers",
         "result": "passed",
@@ -175,7 +194,7 @@ async def smoke_qwen(cache_dir: Path, platform_id: str) -> dict[str, Any]:
         "output": {
             "type": type(result).__name__,
             "keys": sorted(result),
-            "text_chars": len(result["output_text"]),
+            "text_chars": len(output_text),
         },
         "timing_ms": {
             "load": round((loaded - started) * 1000, 2),
@@ -280,6 +299,9 @@ async def smoke_qwen_mlx(cache_dir: Path, platform_id: str) -> dict[str, Any]:
     finished = time.perf_counter()
     if not isinstance(result, dict) or not isinstance(result.get("output_text"), str):
         raise TypeError("Qwen MLX native smoke did not return a Responses text payload.")
+    output_text = result["output_text"].strip()
+    if not output_text:
+        raise RuntimeError("Qwen MLX native smoke returned no non-whitespace text.")
     return {
         "family": "qwen-mlx",
         "result": "passed",
@@ -300,7 +322,7 @@ async def smoke_qwen_mlx(cache_dir: Path, platform_id: str) -> dict[str, Any]:
         "output": {
             "type": type(result).__name__,
             "keys": sorted(result),
-            "text_chars": len(result["output_text"]),
+            "text_chars": len(output_text),
         },
         "timing_ms": {
             "load": round((loaded - started) * 1000, 2),
@@ -402,18 +424,21 @@ async def run(output_path: Path) -> None:
     ).resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     platform_id = str(target_config["platform_id"])
-    if target == "aarch64-apple-darwin":
-        results = [
-            await smoke_qwen_mlx(cache_dir, platform_id),
-            await smoke_parakeet_mlx(cache_dir, platform_id),
-        ]
-        selected_modules = (model_llm_qwen3_mlx, model_stt_parakeet_mlx)
-    else:
-        results = [
-            await smoke_qwen(cache_dir, platform_id),
-            await smoke_faster_whisper(cache_dir, platform_id),
-        ]
-        selected_modules = (model_llm_qwen3_hf, model_stt_faster_whisper)
+    smoke_by_family = {
+        "qwen-transformers": smoke_qwen,
+        "faster-whisper": smoke_faster_whisper,
+        "qwen-mlx": smoke_qwen_mlx,
+        "parakeet-mlx": smoke_parakeet_mlx,
+    }
+    module_by_family = {
+        "qwen-transformers": model_llm_qwen3_hf,
+        "faster-whisper": model_stt_faster_whisper,
+        "qwen-mlx": model_llm_qwen3_mlx,
+        "parakeet-mlx": model_stt_parakeet_mlx,
+    }
+    selected_families = TARGET_BACKEND_FAMILIES[target]
+    results = [await smoke_by_family[family](cache_dir, platform_id) for family in selected_families]
+    selected_modules = tuple(module_by_family[family] for family in selected_families)
     runtime_provenance = None
     if PACKAGED_RUNTIME_ROOT:
         provenance_path = PACKAGED_RUNTIME_ROOT / "build-provenance.json"

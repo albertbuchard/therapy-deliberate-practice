@@ -7,6 +7,11 @@ import {
   fetchInferenceWithTimeout,
   gatewayResponseError
 } from "./lib/inferenceRequest";
+import { useDesktopLocale, type Translator } from "./i18n";
+import {
+  describeDoctorCheck,
+  type DoctorCheck
+} from "./i18n/doctor";
 import type { GatewayBootState } from "./hooks/useGatewayBoot";
 
 type ModelSummary = {
@@ -48,13 +53,6 @@ type GatewayRuntimeState = {
   loaded_models: string[];
 };
 
-type DoctorCheck = {
-  title: string;
-  status: string;
-  details: string;
-  fix?: string | null;
-};
-
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 type QuickTestStatus = "idle" | "running" | "ok" | "error";
@@ -84,6 +82,13 @@ type GatewayConnectionInfo = {
     llm_example: string;
     stt_example: string;
   };
+};
+
+type GatewayStoragePaths = {
+  config_file: string;
+  data_dir: string;
+  cache_dir: string;
+  logging_policy: "metadata_only";
 };
 
 type GatewayConfig = {
@@ -138,33 +143,33 @@ const truncatePreview = (value?: string, max = 120) => {
   return `${value.slice(0, max - 3)}...`;
 };
 
-const describeQuickTestStatus = (status: QuickTestStatus) => {
+const describeQuickTestStatus = (status: QuickTestStatus, t: Translator) => {
   switch (status) {
     case "ok":
-      return "OK";
+      return t("common.ok");
     case "running":
-      return "Running";
+      return t("common.running");
     case "error":
-      return "Error";
+      return t("common.error");
     default:
-      return "Idle";
+      return t("common.idle");
   }
 };
 
-const describeModelLoadPhase = (phase: ModelLoadView["phase"]) => {
+const describeModelLoadPhase = (phase: ModelLoadView["phase"], t: Translator) => {
   switch (phase) {
     case "starting":
-      return "Starting…";
+      return t("model.phase.starting");
     case "running":
-      return "Downloading / loading";
+      return t("model.phase.running");
     case "completed":
-      return "Ready";
+      return t("model.phase.completed");
     case "failed":
-      return "Needs attention";
+      return t("model.phase.failed");
     case "timed_out":
-      return "Still not ready";
+      return t("model.phase.timedOut");
     default:
-      return "Not loaded";
+      return t("model.phase.idle");
   }
 };
 
@@ -174,9 +179,19 @@ const formatModelDuration = (durationMs: number | null) => {
   return `${(durationMs / 1_000).toFixed(1)} s`;
 };
 
-const formatErrorMessage = (error: unknown) => {
+const describeGatewayStatus = (status: string, t: Translator) => {
+  const knownStatuses = new Set(["stopped", "starting", "running", "foreign"]);
+  return t(
+    knownStatuses.has(status) ? `gatewayStatus.${status}` : "gatewayStatus.unknown"
+  );
+};
+
+const describeModelStatus = (status: ModelLoadStatus["status"], t: Translator) =>
+  t(`model.status.${status}`);
+
+const formatErrorMessage = (error: unknown, t: Translator) => {
   if (error instanceof DOMException && error.name === "AbortError") {
-    return "Request timed out.";
+    return t("common.requestTimedOut");
   }
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -184,11 +199,12 @@ const formatErrorMessage = (error: unknown) => {
     return JSON.stringify(error);
   } catch (stringifyError) {
     console.error("Unable to stringify error", stringifyError);
-    return "Unknown error.";
+    return t("common.unknownError");
   }
 };
 
 export const App = () => {
+  const { locale, setLocale, t } = useDesktopLocale();
   const [status, setStatus] = useState("stopped");
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
@@ -202,6 +218,8 @@ export const App = () => {
   const [portSaveState, setPortSaveState] = useState<SaveState>("idle");
   const [portSaveError, setPortSaveError] = useState<string | null>(null);
   const [connectionInfo, setConnectionInfo] = useState<GatewayConnectionInfo | null>(null);
+  const [storagePaths, setStoragePaths] = useState<GatewayStoragePaths | null>(null);
+  const [clipboardError, setClipboardError] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [simpleSteps, setSimpleSteps] = useState({
     copiedUrl: false,
@@ -220,6 +238,7 @@ export const App = () => {
   const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
   const bootLogRef = useRef({ readyRunId: 0, errorRunId: 0 });
   const modelLoadRunRef = useRef(0);
+  const initialLoadStartedRef = useRef(false);
   const baseUrl = connectionInfo?.base_url ?? `http://127.0.0.1:${port}`;
   const llmUrl = connectionInfo?.llm_url ?? baseUrl;
   const sttUrl = connectionInfo?.stt_url ?? baseUrl;
@@ -248,18 +267,18 @@ export const App = () => {
       const nextStatus = await refreshStatus();
       if (nextStatus === "running") return;
       if (nextStatus === "stopped") {
-        throw new Error("The gateway process stopped before its health check became ready.");
+        throw new Error(t("errors.gatewayStoppedBeforeReady"));
       }
       await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 1_000));
     }
-    throw new Error("Timed out waiting for the gateway health check.");
+    throw new Error(t("errors.gatewayHealthTimeout"));
   };
 
   const refreshModels = useCallback(async () => {
-    logEvent("Refreshing model catalog from gateway.");
+    logEvent(t("events.refreshCatalog"));
     const result = await invoke<{ data: ModelSummary[] }>("gateway_models");
     setModels(result.data ?? []);
-  }, [logEvent]);
+  }, [logEvent, t]);
 
   const refreshRuntimeState = useCallback(async () => {
     const result = await invoke<GatewayRuntimeState>("gateway_runtime_state");
@@ -288,10 +307,9 @@ export const App = () => {
         setModelLoad({
           phase: "timed_out",
           job,
-          error:
-            "The desktop app stopped waiting after 15 minutes, but the gateway load job is still running. Check its current status instead of starting a duplicate job."
+          error: t("errors.modelWaitTimeout")
         });
-        logEvent("Desktop polling paused after 15 minutes; the gateway load job continues.");
+        logEvent(t("events.modelWaitPaused"));
         return;
       }
       await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 1_000));
@@ -305,18 +323,22 @@ export const App = () => {
     if (job.status === "completed") {
       setModelLoad({ phase: "completed", job });
       setSaveState("saved");
-      logEvent("Selected models are downloaded and loaded.");
+      logEvent(t("events.modelsLoaded"));
     } else {
       const failedModels = job.models
         .filter((model) => model.status === "error")
-        .map((model) => `${model.model_id}: ${model.error || "load failed"}`)
+        .map((model) => `${model.model_id}: ${model.error || t("errors.loadFailed")}`)
         .join(" · ");
       setModelLoad({
         phase: "failed",
         job,
-        error: failedModels || "One or more selected models could not be loaded."
+        error: failedModels || t("errors.modelLoadFailed")
       });
-      logEvent(`Model load failed: ${failedModels || "unknown model error"}`);
+      logEvent(
+        t("events.modelLoadFailed", {
+          details: failedModels || t("errors.unknownModelError")
+        })
+      );
     }
     await refreshLogs();
   };
@@ -324,18 +346,18 @@ export const App = () => {
   const loadSelectedModels = async () => {
     const selectedModels = [...new Set([defaults.llm, defaults.stt].filter(Boolean))];
     if (status !== "running") {
-      setModelLoad({ phase: "failed", error: "Start the gateway before loading models." });
+      setModelLoad({ phase: "failed", error: t("errors.startBeforeModels") });
       return;
     }
     if (!selectedModels.length) {
-      setModelLoad({ phase: "failed", error: "Choose an LLM and a speech model first." });
+      setModelLoad({ phase: "failed", error: t("errors.chooseModels") });
       return;
     }
 
     const runId = ++modelLoadRunRef.current;
     let activeJob: ModelLoadJob | undefined;
     setModelLoad({ phase: "starting" });
-    logEvent(`Starting model load for ${selectedModels.length} selected model(s).`);
+    logEvent(t("events.modelLoadStarting", { count: selectedModels.length }));
     try {
       await invoke("save_gateway_config", {
         payload: {
@@ -355,17 +377,17 @@ export const App = () => {
       await trackModelLoadJob(created.job_id, created.status, runId);
     } catch (error) {
       if (runId !== modelLoadRunRef.current) return;
-      const message = formatErrorMessage(error);
+      const message = formatErrorMessage(error, t);
       setModelLoad(
         activeJob
           ? {
               phase: "timed_out",
               job: activeJob,
-              error: `The status connection was interrupted, but the gateway job may still be running: ${message}`
+              error: t("errors.statusInterrupted", { details: message })
             }
           : { phase: "failed", error: message }
       );
-      logEvent(`Unable to load selected models: ${message}`);
+      logEvent(t("events.modelLoadUnavailable", { details: message }));
     }
   };
 
@@ -374,7 +396,7 @@ export const App = () => {
     if (!existingJob) return;
     const runId = ++modelLoadRunRef.current;
     setModelLoad({ phase: "running", job: existingJob });
-    logEvent(`Checking model-load job ${existingJob.id}.`);
+    logEvent(t("events.modelLoadCheck", { id: existingJob.id }));
     try {
       const latest = await invoke<ModelLoadJob>("gateway_model_load_status", {
         payload: { job_id: existingJob.id }
@@ -382,30 +404,35 @@ export const App = () => {
       await trackModelLoadJob(existingJob.id, latest, runId);
     } catch (error) {
       if (runId !== modelLoadRunRef.current) return;
-      const message = formatErrorMessage(error);
+      const message = formatErrorMessage(error, t);
       setModelLoad({
         phase: "timed_out",
         job: existingJob,
-        error: `The status connection was interrupted again: ${message}`
+        error: t("errors.statusInterruptedAgain", { details: message })
       });
-      logEvent(`Unable to resume model-load status: ${message}`);
+      logEvent(t("events.modelLoadResumeFailed", { details: message }));
     }
   };
 
-  const refreshLogs = async () => {
+  const refreshLogs = useCallback(async () => {
     const result = await invoke<{ logs: string[] }>("gateway_logs");
     setLogs((prev) => {
       const gatewayLogs = result.logs ?? [];
       const localLogs = prev.filter((line) => line.startsWith("[UI "));
       return [...localLogs, ...gatewayLogs];
     });
-  };
+  }, []);
 
   const refreshConnectionInfo = async () => {
     const result = await invoke<GatewayConnectionInfo>("gateway_connection_info");
     setConnectionInfo(result);
     setPort(result.port);
     setPortInput(String(result.port));
+  };
+
+  const refreshStoragePaths = async () => {
+    const result = await invoke<GatewayStoragePaths>("gateway_storage_paths");
+    setStoragePaths(result);
   };
 
   const refreshPairingToken = useCallback(async () => {
@@ -427,7 +454,7 @@ export const App = () => {
   const saveConfig = async () => {
     setSaveState("saving");
     try {
-      logEvent("Saving preferences to gateway config.");
+      logEvent(t("events.savingPreferences"));
       await invoke("save_gateway_config", {
         payload: {
           port,
@@ -447,7 +474,7 @@ export const App = () => {
     } catch (error) {
       console.error("Failed to save preferences", error);
       setSaveState("error");
-      logEvent("Failed to save preferences.");
+      logEvent(t("events.savePreferencesFailed"));
     }
   };
 
@@ -461,7 +488,7 @@ export const App = () => {
     setPortSaveError(null);
     try {
       if (restartRequired) {
-        logEvent(`Stopping the gateway before changing its port to ${parsed}.`);
+        logEvent(t("events.portStopping", { port: parsed }));
         resetBoot();
         modelLoadRunRef.current += 1;
         setModelLoad({ phase: "idle" });
@@ -472,7 +499,7 @@ export const App = () => {
         setStatus("stopped");
       }
 
-      logEvent(`Saving gateway port ${parsed}.`);
+      logEvent(t("events.portSaving", { port: parsed }));
       await invoke("save_gateway_config", {
         payload: {
           port: parsed,
@@ -486,7 +513,7 @@ export const App = () => {
       configSaved = true;
       setPort(parsed);
       if (restartRequired) {
-        logEvent(`Starting the gateway on port ${parsed}.`);
+        logEvent(t("events.portStarting", { port: parsed }));
         const started = await invoke<{ status: string }>("start_gateway");
         setStatus(started.status);
         await waitForGatewayReady();
@@ -495,23 +522,25 @@ export const App = () => {
     } catch (error) {
       console.error("Failed to save port", error);
       setPortSaveState("error");
-      const details = formatErrorMessage(error);
+      const details = formatErrorMessage(error, t);
       let recovery = "";
       if (previousGatewayStopped && !configSaved) {
         try {
-          logEvent("Port save failed; restarting the previous gateway configuration.");
+          logEvent(t("events.portRecovery"));
           const restored = await invoke<{ status: string }>("start_gateway");
           setStatus(restored.status);
           await waitForGatewayReady();
-          recovery = " The previous gateway configuration was restarted.";
+          recovery = t("errors.previousGatewayRestarted");
         } catch (restartError) {
-          recovery = ` The previous gateway also could not be restarted: ${formatErrorMessage(restartError)}`;
+          recovery = t("errors.previousGatewayRestartFailed", {
+            details: formatErrorMessage(restartError, t)
+          });
         }
       }
       const message =
         configSaved && restartRequired
-          ? `Port ${parsed} was saved, but the gateway could not restart: ${details}`
-          : `The gateway port was not applied: ${details}${recovery}`;
+          ? t("errors.portSavedRestartFailed", { port: parsed, details })
+          : t("errors.portNotApplied", { details, recovery });
       setPortSaveError(message);
       logEvent(message);
     } finally {
@@ -519,17 +548,21 @@ export const App = () => {
     }
   };
 
-  const runDoctor = useCallback(async () => {
-    logEvent("Running preflight doctor checks.");
+  const refreshDoctorChecks = useCallback(async () => {
     const result = await invoke<{ checks: DoctorCheck[] }>("gateway_doctor");
     setDoctorChecks(result.checks ?? []);
     await refreshLogs();
-  }, [logEvent]);
+  }, [refreshLogs]);
+
+  const runDoctor = useCallback(async () => {
+    logEvent(t("events.doctorRunning"));
+    await refreshDoctorChecks();
+  }, [logEvent, refreshDoctorChecks, t]);
 
   const startGateway = async () => {
     setStartError(null);
     try {
-      logEvent("Starting local gateway.");
+      logEvent(t("events.gatewayStarting"));
       const started = await invoke<{ status: string }>("start_gateway");
       setStatus(started.status);
       await waitForGatewayReady();
@@ -542,7 +575,7 @@ export const App = () => {
             ? error.message
             : JSON.stringify(error);
       setStartError(message);
-      logEvent(`Gateway failed to start: ${message}`);
+      logEvent(t("events.gatewayStartFailed", { details: message }));
     } finally {
       await Promise.allSettled([refreshStatus(), refreshLogs()]);
     }
@@ -556,13 +589,11 @@ export const App = () => {
     setModelLoad({ phase: "idle" });
     setQuickTests(initialQuickTestsState);
     await refreshStatus();
-    logEvent("Stopped local gateway.");
+    logEvent(t("events.gatewayStopped"));
   };
 
   const rotatePairingToken = async () => {
-    const confirmed = window.confirm(
-      "Rotate the pairing key? The Therapy website will disconnect until you paste the new key. The gateway will restart if it is running."
-    );
+    const confirmed = window.confirm(t("connection.rotateConfirm"));
     if (!confirmed) return;
     setPairingKeyState("saving");
     try {
@@ -572,21 +603,34 @@ export const App = () => {
       setSimpleSteps((previous) => ({ ...previous, copiedKey: false }));
       await Promise.allSettled([refreshStatus(), refreshLogs()]);
       setPairingKeyState("saved");
-      logEvent("Rotated the local pairing key.");
+      logEvent(t("events.pairingRotated"));
     } catch (error) {
       setPairingKeyState("error");
-      logEvent(`Pairing key rotation failed: ${formatErrorMessage(error)}`);
+      logEvent(
+        t("events.pairingRotationFailed", {
+          details: formatErrorMessage(error, t)
+        })
+      );
     }
   };
 
   const copyText = async (value: string) => {
-    await navigator.clipboard.writeText(value);
-    logEvent("Copied text to clipboard.");
+    try {
+      await navigator.clipboard.writeText(value);
+      setClipboardError(null);
+      logEvent(t("events.clipboardCopied"));
+      return true;
+    } catch {
+      const message = t("connection.clipboardFailure");
+      setClipboardError(message);
+      logEvent(message);
+      return false;
+    }
   };
 
   const runQuickTests = async () => {
     if (status !== "running") {
-      const message = "Gateway is not running. Start it before running tests.";
+      const message = t("errors.gatewayNotRunning");
       logEvent(message);
       setQuickTests({
         status: "error",
@@ -599,8 +643,7 @@ export const App = () => {
     const selected = [...new Set([defaults.llm, defaults.stt].filter(Boolean))];
     const loaded = new Set(runtimeState?.loaded_models ?? []);
     if (!selected.length || !selected.every((modelId) => loaded.has(modelId))) {
-      const message =
-        "The selected models are not loaded yet. Download and load them before running tests.";
+      const message = t("errors.modelsNotLoaded");
       logEvent(message);
       setQuickTests({
         status: "error",
@@ -611,7 +654,7 @@ export const App = () => {
       return;
     }
     if (!pairing?.token) {
-      const message = "Pairing key is unavailable. Reopen the desktop app and try again.";
+      const message = t("errors.pairingUnavailable");
       logEvent(message);
       setQuickTests({
         status: "error",
@@ -630,7 +673,7 @@ export const App = () => {
       startedAt
     });
 
-    logEvent("Running LLM test...");
+    logEvent(t("events.llmTestRunning"));
     const llmStart = performance.now();
     let llmResult: QuickTestResult;
     try {
@@ -660,19 +703,19 @@ export const App = () => {
         data?.output?.[0]?.content?.[0]?.text ??
         (typeof data?.output_text === "string" ? data.output_text : undefined);
       if (!text) {
-        throw new Error("LLM response missing text.");
+        throw new Error(t("errors.llmMissingText"));
       }
       llmResult = { status: "ok", durationMs, preview: text.trim() };
-      logEvent(`LLM test ok (${durationMs} ms)`);
+      logEvent(t("events.llmTestOk", { duration: durationMs }));
     } catch (error) {
       const durationMs = Math.round(performance.now() - llmStart);
-      const message = formatErrorMessage(error);
+      const message = formatErrorMessage(error, t);
       llmResult = { status: "error", durationMs, error: message };
-      logEvent(`LLM test failed: ${message}`);
+      logEvent(t("events.llmTestFailed", { details: message }));
     }
     setQuickTests((prev) => ({ ...prev, llm: llmResult }));
 
-    logEvent("Running STT test...");
+    logEvent(t("events.sttTestRunning"));
     setQuickTests((prev) => ({ ...prev, stt: { status: "running" } }));
     const sttStart = performance.now();
     let sttResult: QuickTestResult;
@@ -700,19 +743,19 @@ export const App = () => {
       const data = await response.json();
       const text = typeof data?.text === "string" ? data.text : undefined;
       if (text === undefined) {
-        throw new Error("STT response missing text.");
+        throw new Error(t("errors.sttMissingText"));
       }
       sttResult = {
         status: "ok",
         durationMs,
-        preview: text.trim() || "Engine responded correctly to silent audio."
+        preview: text.trim() || t("tests.silentAudio")
       };
-      logEvent(`STT test ok (${durationMs} ms)`);
+      logEvent(t("events.sttTestOk", { duration: durationMs }));
     } catch (error) {
       const durationMs = Math.round(performance.now() - sttStart);
-      const message = formatErrorMessage(error);
+      const message = formatErrorMessage(error, t);
       sttResult = { status: "error", durationMs, error: message };
-      logEvent(`STT test failed: ${message}`);
+      logEvent(t("events.sttTestFailed", { details: message }));
     }
     setQuickTests((prev) => ({ ...prev, stt: sttResult }));
 
@@ -729,6 +772,7 @@ export const App = () => {
 
   const boot = useGatewayBoot({
     healthUrl,
+    t,
     onReady: async () => {
       await refreshStatus();
       await refreshConnectionInfo();
@@ -742,46 +786,57 @@ export const App = () => {
   useEffect(() => {
     if (boot.state.phase === "error" && boot.state.error && bootLogRef.current.errorRunId !== boot.state.runId) {
       bootLogRef.current.errorRunId = boot.state.runId;
-      logEvent(`Gateway launch failed: ${boot.state.error}`);
+      logEvent(t("events.launchFailed", { details: boot.state.error }));
     }
     if (boot.state.phase === "ready" && bootLogRef.current.readyRunId !== boot.state.runId) {
       bootLogRef.current.readyRunId = boot.state.runId;
-      logEvent("Gateway health checks passed.");
+      logEvent(t("events.healthPassed"));
     }
-  }, [boot.state.phase, boot.state.error, boot.state.runId, logEvent]);
+  }, [boot.state.phase, boot.state.error, boot.state.runId, logEvent, t]);
 
   useEffect(() => {
-    refreshStatus();
-    refreshLogs();
-    refreshConnectionInfo();
-    refreshConfig();
-    refreshPairingToken();
-    runDoctor();
-  }, [refreshPairingToken, runDoctor]);
+    if (initialLoadStartedRef.current) return;
+    initialLoadStartedRef.current = true;
+    void refreshStatus();
+    void refreshLogs();
+    void refreshConnectionInfo();
+    void refreshStoragePaths();
+    void refreshConfig();
+    void refreshPairingToken();
+    void refreshDoctorChecks();
+  }, [refreshDoctorChecks, refreshLogs, refreshPairingToken]);
 
   useEffect(() => {
     if (status !== "running") return;
     void Promise.all([refreshModels(), refreshRuntimeState()]).catch((error) => {
-      logEvent(`Unable to refresh runtime state: ${formatErrorMessage(error)}`);
+      logEvent(
+        t("events.runtimeRefreshFailed", {
+          details: formatErrorMessage(error, t)
+        })
+      );
     });
-  }, [logEvent, refreshModels, refreshRuntimeState, status]);
+  }, [logEvent, refreshModels, refreshRuntimeState, status, t]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       refreshLogs();
     }, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshLogs]);
 
   useEffect(() => {
     if (status !== "starting") return;
     const interval = window.setInterval(() => {
       void refreshStatus().catch((error) => {
-        logEvent(`Unable to refresh gateway readiness: ${formatErrorMessage(error)}`);
+        logEvent(
+          t("events.readinessRefreshFailed", {
+            details: formatErrorMessage(error, t)
+          })
+        );
       });
     }, 1_000);
     return () => window.clearInterval(interval);
-  }, [logEvent, status]);
+  }, [logEvent, status, t]);
 
   useEffect(() => {
     setSaveState("idle");
@@ -902,7 +957,9 @@ export const App = () => {
     if (nextDefaults.llm !== defaults.llm || nextDefaults.stt !== defaults.stt) {
       setDefaults(nextDefaults);
       logEvent(
-        `Selected compatible defaults for ${runtimePlatformId ?? "the detected platform"}.`
+        t("events.defaultsSelected", {
+          platform: runtimePlatformId ?? t("hero.detectedMachine")
+        })
       );
     }
   }, [
@@ -914,7 +971,8 @@ export const App = () => {
     models.length,
     runtimePlatformId,
     runtimeState?.defaults,
-    sttOptions
+    sttOptions,
+    t
   ]);
 
   const gatewayReady = status === "running" || boot.state.phase === "ready";
@@ -926,8 +984,13 @@ export const App = () => {
   const portValid = Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535;
   const portDirty = portValue !== port;
   const doctorBlocking = doctorChecks.find(
-    (check) => check.status === "error" && ["local_runtime import", "Python executable"].includes(check.title)
+    (check) =>
+      check.status === "error" &&
+      ["local_runtime_import", "python_executable"].includes(check.code)
   );
+  const doctorBlockingView = doctorBlocking
+    ? describeDoctorCheck(doctorBlocking, t)
+    : null;
   const canStartGateway = !doctorBlocking && !isGatewayActive;
   const canLoadModels = isGatewayRunning;
   const hasModels = models.length > 0;
@@ -961,28 +1024,28 @@ export const App = () => {
 
   const handleLaunchStart = useCallback(() => {
     if (!canStartGateway) {
-      logEvent("Launch blocked until doctor issues are resolved.");
+      logEvent(t("events.launchBlocked"));
       return;
     }
-    logEvent("Launching local gateway via hero CTA.");
+    logEvent(t("events.launchStarting"));
     startBoot();
-  }, [canStartGateway, logEvent, startBoot]);
+  }, [canStartGateway, logEvent, startBoot, t]);
 
   const handleLaunchCancel = useCallback(() => {
-    logEvent("Stopping local gateway launch.");
+    logEvent(t("events.launchStopping"));
     cancelBoot();
-  }, [cancelBoot, logEvent]);
+  }, [cancelBoot, logEvent, t]);
 
   const handleLaunchReset = useCallback(() => {
     resetBoot();
   }, [resetBoot]);
 
   const openAdvanced = useCallback(() => {
-    logEvent("Opened advanced connection controls.");
+    logEvent(t("events.advancedOpened"));
     drawerReturnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setShowAdvanced(true);
-  }, [logEvent]);
+  }, [logEvent, t]);
 
   const closeAdvanced = useCallback(() => {
     setShowAdvanced(false);
@@ -999,39 +1062,39 @@ export const App = () => {
   if (selectedModelsLoaded) activeStep = 5;
   if (isSaved) activeStep = 6;
 
-  const step1Description = doctorBlocking
-    ? `Blocked: ${doctorBlocking.details}`
-    : "Launch the local gateway so models can be discovered.";
+  const step1Description = doctorBlockingView
+    ? t("wizard.blocked", { details: doctorBlockingView.details })
+    : t("wizard.startDescription");
 
   const steps = [
     {
       id: 1,
-      title: "Start the gateway",
+      title: t("wizard.startGateway"),
       description: step1Description,
       complete: isGatewayRunning
     },
     {
       id: 2,
-      title: "Discover available models",
-      description: "Read the compatible model catalog from the running gateway.",
+      title: t("wizard.discover"),
+      description: t("wizard.discoverDescription"),
       complete: hasModels
     },
     {
       id: 3,
-      title: "Choose default LLM + STT",
-      description: "Pick the defaults the suite should use for sessions.",
+      title: t("wizard.choose"),
+      description: t("wizard.chooseDescription"),
       complete: defaultsComplete
     },
     {
       id: 4,
-      title: "Download and load models",
-      description: "Prepare the selected local models and show their actual progress.",
+      title: t("wizard.download"),
+      description: t("wizard.downloadDescription"),
       complete: selectedModelsLoaded
     },
     {
       id: 5,
-      title: "Save preferences",
-      description: "Persist your default selections and routing preference.",
+      title: t("wizard.save"),
+      description: t("wizard.saveDescription"),
       complete: isSaved
     }
   ];
@@ -1039,8 +1102,8 @@ export const App = () => {
   if (isSaved) {
     steps.push({
       id: 6,
-      title: "Configure Therapy Settings",
-      description: "Open the settings page to connect your saved preferences.",
+      title: t("wizard.configure"),
+      description: t("wizard.configureDescription"),
       complete: false
     });
   }
@@ -1063,10 +1126,10 @@ export const App = () => {
         <span
           className={`badge ${selectedModelsLoaded ? "badge-success" : ""}`}
         >
-          {describeModelLoadPhase(effectiveModelLoadPhase)}
+          {describeModelLoadPhase(effectiveModelLoadPhase, t)}
         </span>
         {runtimePlatformId ? (
-          <span className="mono">Platform: {runtimePlatformId}</span>
+          <span className="mono">{t("model.platform", { platform: runtimePlatformId })}</span>
         ) : null}
       </div>
       {loadJobMatchesSelection
@@ -1080,7 +1143,7 @@ export const App = () => {
           </div>
           <div className="model-load-row-status">
             <span className={`model-status model-status-${model.status}`}>
-              {model.status}
+              {describeModelStatus(model.status, t)}
             </span>
             {model.duration_ms !== null ? (
               <span className="mono">{formatModelDuration(model.duration_ms)}</span>
@@ -1099,21 +1162,18 @@ export const App = () => {
             onClick={resumeModelLoadStatus}
             disabled={status !== "running"}
           >
-            Check current load status
+            {t("model.checkCurrent")}
           </button>
         </div>
       ) : null}
       {modelLoadBusy ? (
-        <div className="helper-text">
-          The first run may download model files. Keep the desktop app open; later starts reuse
-          the local cache.
-        </div>
+        <div className="helper-text">{t("model.firstRun")}</div>
       ) : null}
     </div>
   );
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-locale={locale}>
       <div
         className={`drawer-scrim ${showAdvanced ? "open" : ""}`}
         onClick={closeAdvanced}
@@ -1128,17 +1188,31 @@ export const App = () => {
         <div className="hero-glow" />
         <div className="hero-header">
           <div>
-            <div className="kicker">Local Runtime</div>
-            <div className="title">Connect in four guided steps</div>
+            <div className="kicker">{t("hero.kicker")}</div>
+            <div className="title">{t("hero.title")}</div>
             <div className="hero-subtitle">
-              Compatible models are selected for {runtimePlatformId ?? "your machine"}, with
-              download progress and connection details in one place.
+              {t("hero.subtitle", {
+                platform: runtimePlatformId ?? t("hero.detectedMachine")
+              })}
             </div>
           </div>
           <div className="hero-actions">
-            <span className="badge">Status: {status}</span>
+            <label className="locale-control">
+              <span>{t("locale.label")}</span>
+              <select
+                aria-label={t("accessibility.languageSelect")}
+                value={locale}
+                onChange={(event) => setLocale(event.target.value === "fr" ? "fr" : "en")}
+              >
+                <option value="en">{t("locale.english")}</option>
+                <option value="fr">{t("locale.french")}</option>
+              </select>
+            </label>
+            <span className="badge">
+              {t("common.status", { status: describeGatewayStatus(status, t) })}
+            </span>
             <button className="btn ghost" onClick={openAdvanced}>
-              Advanced controls
+              {t("hero.advanced")}
             </button>
           </div>
         </div>
@@ -1146,9 +1220,11 @@ export const App = () => {
           <div className={`simple-step ${simpleStep1Complete ? "complete" : ""} ${simpleActiveStep === 1 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep1Complete ? "✓" : "1"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Launch local server</div>
+              <div className="simple-step-title">{t("hero.launchTitle")}</div>
               <div className="simple-step-description">
-                {doctorBlocking ? doctorBlocking.details : "Start the gateway and let the health checks finish in the background."}
+                {doctorBlockingView
+                  ? doctorBlockingView.details
+                  : t("hero.launchDescription")}
               </div>
               <GatewayLaunchButton
                 boot={heroBootState}
@@ -1156,14 +1232,15 @@ export const App = () => {
                 onCancel={handleLaunchCancel}
                 onReset={handleLaunchReset}
                 disabled={!canStartGateway}
-                disabledReason={doctorBlocking ? doctorBlocking.details : undefined}
+                disabledReason={doctorBlockingView?.details}
                 onReadyClick={handleReadyLaunchClick}
+                t={t}
               />
-              {doctorBlocking ? (
+              {doctorBlockingView ? (
                 <div className="inline-row">
-                  <div className="helper-text">Resolve the doctor issue above and retry.</div>
+                  <div className="helper-text">{t("hero.doctorRecovery")}</div>
                   <button className="btn ghost" onClick={runDoctor}>
-                    Run doctor
+                    {t("wizard.doctor")}
                   </button>
                 </div>
               ) : null}
@@ -1172,14 +1249,11 @@ export const App = () => {
           <div className={`simple-step ${simpleStep2Complete ? "complete" : ""} ${simpleActiveStep === 2 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep2Complete ? "✓" : "2"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Prepare your local models</div>
-              <div className="simple-step-description">
-                Choose one language model and one speech model. The first download can take a few
-                minutes; progress remains visible here.
-              </div>
+              <div className="simple-step-title">{t("hero.prepareTitle")}</div>
+              <div className="simple-step-description">{t("hero.prepareDescription")}</div>
               <div className="grid">
                 <div>
-                  <div className="label">Language model</div>
+                  <div className="label">{t("model.language")}</div>
                   <select
                     className="select"
                     value={defaults.llm}
@@ -1188,7 +1262,7 @@ export const App = () => {
                     }
                     disabled={!canChooseDefaults || modelLoadBusy}
                   >
-                    <option value="">Select language model</option>
+                    <option value="">{t("model.selectLanguage")}</option>
                     {llmOptions.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.metadata.display.title}
@@ -1197,7 +1271,7 @@ export const App = () => {
                   </select>
                 </div>
                 <div>
-                  <div className="label">Speech model</div>
+                  <div className="label">{t("model.speech")}</div>
                   <select
                     className="select"
                     value={defaults.stt}
@@ -1206,7 +1280,7 @@ export const App = () => {
                     }
                     disabled={!canChooseDefaults || modelLoadBusy}
                   >
-                    <option value="">Select speech model</option>
+                    <option value="">{t("model.selectSpeech")}</option>
                     {sttOptions.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.metadata.display.title}
@@ -1223,18 +1297,18 @@ export const App = () => {
                 >
                   {modelLoadBusy
                     ? modelLoad.phase === "timed_out"
-                      ? "Load continues in gateway"
-                      : "Preparing models…"
+                      ? t("model.continues")
+                      : t("model.preparing")
                     : selectedModelsLoaded
-                      ? "Reload selected models"
-                      : "Download & load selected models"}
+                      ? t("model.reload")
+                      : t("model.downloadLoad")}
                 </button>
                 <button
                   className="btn ghost"
                   onClick={refreshModels}
                   disabled={!gatewayReady || modelLoadBusy}
                 >
-                  Refresh catalog
+                  {t("common.refresh")}
                 </button>
               </div>
               {modelLoadProgress}
@@ -1243,35 +1317,37 @@ export const App = () => {
           <div className={`simple-step ${simpleStep3Complete ? "complete" : ""} ${simpleActiveStep === 3 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep3Complete ? "✓" : "3"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Copy your connection details</div>
-              <div className="simple-step-description">
-                Therapy Settings needs both values. Your pairing key stays on this computer.
-              </div>
+              <div className="simple-step-title">{t("hero.copyTitle")}</div>
+              <div className="simple-step-description">{t("hero.copyDescription")}</div>
               <div className="connection-summary">
                 <span className="mono">{baseUrl}</span>
-                <span className="mono pairing-value">{pairing?.masked ?? "Creating pairing key…"}</span>
+                <span className="mono pairing-value">
+                  {pairing?.masked ?? t("connection.creatingKey")}
+                </span>
               </div>
               <div className="button-row">
                 <button
                   className="btn"
                   onClick={async () => {
-                    await copyText(baseUrl);
-                    setSimpleSteps((prev) => ({ ...prev, copiedUrl: true }));
+                    if (await copyText(baseUrl)) {
+                      setSimpleSteps((prev) => ({ ...prev, copiedUrl: true }));
+                    }
                   }}
                   disabled={!selectedModelsLoaded}
                 >
-                  {simpleSteps.copiedUrl ? "URL copied" : "Copy gateway URL"}
+                  {simpleSteps.copiedUrl ? t("hero.urlCopied") : t("common.copy")}
                 </button>
                 <button
                   className="btn"
                   onClick={async () => {
                     if (!pairing?.token) return;
-                    await copyText(pairing.token);
-                    setSimpleSteps((prev) => ({ ...prev, copiedKey: true }));
+                    if (await copyText(pairing.token)) {
+                      setSimpleSteps((prev) => ({ ...prev, copiedKey: true }));
+                    }
                   }}
                   disabled={!selectedModelsLoaded || !pairing?.token}
                 >
-                  {simpleSteps.copiedKey ? "Pairing key copied" : "Copy pairing key"}
+                  {simpleSteps.copiedKey ? t("hero.pairingCopied") : t("common.copy")}
                 </button>
               </div>
             </div>
@@ -1279,31 +1355,29 @@ export const App = () => {
           <div className={`simple-step ${simpleStep4Complete ? "complete" : ""} ${simpleActiveStep === 4 ? "active" : ""}`}>
             <div className="simple-step-index">{simpleStep4Complete ? "✓" : "4"}</div>
             <div className="simple-step-content">
-              <div className="simple-step-title">Open Therapy Settings</div>
-              <div className="simple-step-description">
-                Paste the local URL and pairing key into their labeled fields, then test the connection.
-              </div>
+              <div className="simple-step-title">{t("hero.settingsTitle")}</div>
+              <div className="simple-step-description">{t("hero.settingsDescription")}</div>
               <div className="button-row">
                 <button
                   className="btn primary"
                   onClick={async () => {
                     await openUrl(settingsUrl);
                     setSimpleSteps((prev) => ({ ...prev, openedSettings: true }));
-                    logEvent("Opened Therapy settings.");
+                    logEvent(t("events.settingsOpened"));
                   }}
                   disabled={!simpleStep3Complete}
-                  title={!simpleStep3Complete ? "Copy both connection values first." : undefined}
+                  title={!simpleStep3Complete ? t("hero.copyBothFirst") : undefined}
                 >
-                  {simpleStep4Complete ? "Settings opened" : "Next: Open Settings"}
+                  {simpleStep4Complete ? t("hero.settingsOpened") : t("hero.nextOpenSettings")}
                 </button>
                 <button
                   className="btn ghost"
                   onClick={async () => {
                     await openUrl(helpUrl);
-                    logEvent("Opened help center.");
+                    logEvent(t("events.helpOpened"));
                   }}
                 >
-                  Help
+                  {t("connection.help")}
                 </button>
               </div>
             </div>
@@ -1318,77 +1392,82 @@ export const App = () => {
         role="dialog"
         aria-modal="true"
         aria-labelledby="advanced-drawer-title"
+        aria-label={t("accessibility.advancedDialog")}
         aria-hidden={!showAdvanced}
         inert={!showAdvanced ? true : undefined}
         tabIndex={-1}
       >
         <div className="drawer-header">
           <div>
-            <div className="kicker">Advanced</div>
-            <div className="title" id="advanced-drawer-title">Local Runtime controls</div>
+            <div className="kicker">{t("common.advanced")}</div>
+            <div className="title" id="advanced-drawer-title">{t("hero.advanced")}</div>
           </div>
           <div className="hero-actions">
-            <span className="badge">Status: {status}</span>
+            <span className="badge">
+              {t("common.status", { status: describeGatewayStatus(status, t) })}
+            </span>
             <button className="btn ghost" onClick={closeAdvanced}>
-              Close
+              {t("common.close")}
             </button>
           </div>
         </div>
         <div className="drawer-body">
           <div className="panel header">
             <div>
-              <div className="kicker">Local Runtime Suite</div>
-              <div className="title">Desktop Launcher</div>
+              <div className="kicker">{t("hero.kicker")}</div>
+              <div className="title">{t("hero.advanced")}</div>
             </div>
-            <span className="badge">Status: {status}</span>
+            <span className="badge">
+              {t("common.status", { status: describeGatewayStatus(status, t) })}
+            </span>
           </div>
 
           <div className="panel connection">
             <div className="header">
               <div>
-                <div className="kicker">Connection</div>
-                <div className="title">Local gateway URLs</div>
+                <div className="kicker">{t("connection.kicker")}</div>
+                <div className="title">{t("connection.title")}</div>
               </div>
               <span className="badge">Port {port}</span>
             </div>
             <div className="connection-grid">
               <div className="connection-row">
-                <div className="label">Base URL</div>
+                <div className="label">{t("connection.baseUrl")}</div>
                 <div className="pill-row">
                   <div className="pill" title={baseUrl}>{baseUrl}</div>
                   <button className="icon-btn" onClick={() => copyText(baseUrl)}>
-                    Copy
+                    {t("common.copy")}
                   </button>
                 </div>
               </div>
               <div className="connection-row">
-                <div className="label">LLM URL</div>
+                <div className="label">{t("connection.llmUrl")}</div>
                 <div className="pill-row">
                   <div className="pill" title={llmUrl}>{llmUrl}</div>
                   <button className="icon-btn" onClick={() => copyText(llmUrl)}>
-                    Copy
+                    {t("common.copy")}
                   </button>
                 </div>
               </div>
               <div className="connection-row">
-                <div className="label">STT URL</div>
+                <div className="label">{t("connection.sttUrl")}</div>
                 <div className="pill-row">
                   <div className="pill" title={sttUrl}>{sttUrl}</div>
                   <button className="icon-btn" onClick={() => copyText(sttUrl)}>
-                    Copy
+                    {t("common.copy")}
                   </button>
                 </div>
               </div>
               <div className="connection-row">
-                <div className="label">Pairing key</div>
+                <div className="label">{t("connection.pairingKey")}</div>
                 <div className="pill-row">
                   <div
                     className="pill pairing-value"
                     title={showPairingKey ? pairing?.token : pairing?.masked}
                   >
                     {showPairingKey
-                      ? pairing?.token ?? "Creating pairing key…"
-                      : pairing?.masked ?? "Creating pairing key…"}
+                      ? pairing?.token ?? t("connection.creatingKey")
+                      : pairing?.masked ?? t("connection.creatingKey")}
                   </div>
                   <button
                     className="icon-btn"
@@ -1396,50 +1475,74 @@ export const App = () => {
                     aria-pressed={showPairingKey}
                     disabled={!pairing}
                   >
-                    {showPairingKey ? "Hide" : "Reveal"}
+                    {showPairingKey ? t("connection.hide") : t("connection.reveal")}
                   </button>
                   <button
                     className="icon-btn"
                     onClick={() => pairing?.token && copyText(pairing.token)}
                     disabled={!pairing?.token}
                   >
-                    Copy
+                    {t("common.copy")}
                   </button>
                 </div>
-                <div className="helper-text">
-                  Keep this key private. It authorizes browser requests to models on this computer.
-                </div>
+                <div className="helper-text">{t("connection.pairingPrivate")}</div>
                 <div className="button-row">
                   <button
                     className="btn ghost"
                     onClick={rotatePairingToken}
                     disabled={pairingKeyState === "saving"}
                   >
-                    {pairingKeyState === "saving" ? "Rotating…" : "Rotate pairing key"}
+                    {pairingKeyState === "saving"
+                      ? t("connection.rotating")
+                      : t("connection.rotate")}
                   </button>
                   {pairingKeyState === "saved" ? (
-                    <span className="success-text">New key created. Update Therapy Settings.</span>
+                    <span className="success-text">{t("connection.rotateSuccess")}</span>
                   ) : null}
                   {pairingKeyState === "error" ? (
-                    <span className="error-text">Could not rotate the key.</span>
+                    <span className="error-text">{t("connection.rotateFailure")}</span>
                   ) : null}
                 </div>
               </div>
+            </div>
+            <div className="storage-card" aria-live="polite">
+              <div className="helper-title">{t("connection.storageTitle")}</div>
+              <dl className="storage-paths">
+                <div>
+                  <dt>{t("connection.configPath")}</dt>
+                  <dd className="mono">{storagePaths?.config_file ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>{t("connection.dataPath")}</dt>
+                  <dd className="mono">{storagePaths?.data_dir ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>{t("connection.cachePath")}</dt>
+                  <dd className="mono">{storagePaths?.cache_dir ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>{t("connection.logPolicy")}</dt>
+                  <dd>{t("connection.metadataOnly")}</dd>
+                </div>
+              </dl>
             </div>
             <div className="helper-row">
               <div>
-                <div className="helper-title">Where do I paste these?</div>
-                <div className="helper-text">
-                  Open Therapy Settings and paste the Base URL and pairing key.
-                </div>
+                <div className="helper-title">{t("connection.wherePaste")}</div>
+                <div className="helper-text">{t("connection.wherePasteAnswer")}</div>
               </div>
               <button className="btn" onClick={() => openUrl(settingsUrl)}>
-                Open Therapy Settings
+                {t("connection.openSettings")}
               </button>
             </div>
+            {clipboardError ? (
+              <div className="error-banner" role="alert">
+                {clipboardError}
+              </div>
+            ) : null}
             <div className="button-row">
               <button className="btn" onClick={() => openUrl(healthUrl)}>
-                Open health check
+                {t("connection.health")}
               </button>
               <button
                 className="btn"
@@ -1451,35 +1554,37 @@ export const App = () => {
                 }
                 title={
                   !selectedModelsLoaded
-                    ? "Download and load the selected models first."
+                    ? t("hero.downloadFirst")
                     : undefined
                 }
               >
                 {quickTests.status === "running"
-                  ? "Running tests..."
-                  : "Run LLM + speech test"}
+                  ? t("tests.running")
+                  : t("tests.run")}
               </button>
               <button className="btn" onClick={() => copyText(llmExample)}>
-                Copy example LLM endpoint
+                {t("connection.copyLlm")}
               </button>
               <button className="btn" onClick={() => copyText(sttExample)}>
-                Copy example STT endpoint
+                {t("connection.copyStt")}
               </button>
             </div>
             <div className="quick-test-results">
-              <div className="helper-title">Quick test results</div>
+              <div className="helper-title">{t("tests.results")}</div>
               <div className="quick-test-row">
                 <div className="quick-test-row-header">
                   <span className="text-sm">LLM</span>
                   <span className={`badge ${quickTests.llm.status === "ok" ? "badge-success" : ""}`}>
-                    {describeQuickTestStatus(quickTests.llm.status)}
+                    {describeQuickTestStatus(quickTests.llm.status, t)}
                   </span>
                   {typeof quickTests.llm.durationMs === "number" ? (
                     <span className="mono">{quickTests.llm.durationMs} ms</span>
                   ) : null}
                 </div>
                 {quickTests.llm.preview ? (
-                  <div className="helper-text">Preview: {truncatePreview(quickTests.llm.preview)}</div>
+                  <div className="helper-text">
+                    {t("tests.preview", { preview: truncatePreview(quickTests.llm.preview) })}
+                  </div>
                 ) : null}
                 {quickTests.llm.error ? <div className="error-text">{quickTests.llm.error}</div> : null}
               </div>
@@ -1487,24 +1592,26 @@ export const App = () => {
                 <div className="quick-test-row-header">
                   <span className="text-sm">STT</span>
                   <span className={`badge ${quickTests.stt.status === "ok" ? "badge-success" : ""}`}>
-                    {describeQuickTestStatus(quickTests.stt.status)}
+                    {describeQuickTestStatus(quickTests.stt.status, t)}
                   </span>
                   {typeof quickTests.stt.durationMs === "number" ? (
                     <span className="mono">{quickTests.stt.durationMs} ms</span>
                   ) : null}
                 </div>
                 {quickTests.stt.preview ? (
-                  <div className="helper-text">Preview: {truncatePreview(quickTests.stt.preview)}</div>
+                  <div className="helper-text">
+                    {t("tests.preview", { preview: truncatePreview(quickTests.stt.preview) })}
+                  </div>
                 ) : null}
                 {quickTests.stt.error ? <div className="error-text">{quickTests.stt.error}</div> : null}
               </div>
               {quickTests.status === "idle" ? (
-                <div className="helper-text">Results appear after running the test.</div>
+                <div className="helper-text">{t("tests.empty")}</div>
               ) : null}
             </div>
             <div className="port-editor">
               <div>
-                <div className="label">Gateway port</div>
+                <div className="label">{t("port.label")}</div>
                 <input
                   className="port-input"
                   type="number"
@@ -1513,11 +1620,9 @@ export const App = () => {
                   value={portInput}
                   onChange={(event) => setPortInput(event.target.value)}
                 />
-                <div className="helper-text">
-                  Choose a port between 1024-65535. This updates the gateway + URLs above.
-                </div>
+                <div className="helper-text">{t("port.help")}</div>
                 {!portValid ? (
-                  <div className="error-text">Enter a valid port between 1024 and 65535.</div>
+                  <div className="error-text">{t("port.invalid")}</div>
                 ) : null}
               </div>
               <div className="button-row">
@@ -1526,24 +1631,22 @@ export const App = () => {
                   onClick={savePort}
                   disabled={!portValid || portSaveState === "saving"}
                 >
-                  {portSaveState === "saving" ? "Saving..." : "Save port"}
+                  {portSaveState === "saving" ? t("common.saving") : t("port.save")}
                 </button>
                 <button className="btn" onClick={() => setPortInput("8484")}>
-                  Use 8484
+                  {t("port.useDefault")}
                 </button>
                 {portSaveState === "error" ? (
-                  <span className="error-text">{portSaveError ?? "Port save failed. Try again."}</span>
+                  <span className="error-text">{portSaveError ?? t("port.saveFailed")}</span>
                 ) : null}
                 {portSaveState === "saved" ? (
-                  <span className="success-text">Port saved.</span>
+                  <span className="success-text">{t("port.saved")}</span>
                 ) : null}
               </div>
             </div>
             {portDirty && isGatewayActive ? (
               <div className="warning-banner">
-                <div>
-                  Saving this change will restart the gateway automatically on the new port.
-                </div>
+                <div>{t("port.restartNotice")}</div>
               </div>
             ) : null}
           </div>
@@ -1551,10 +1654,12 @@ export const App = () => {
           <div className="panel wizard">
             <div className="header">
               <div>
-                <div className="kicker">Setup Wizard</div>
-                <div className="title">Get ready in minutes</div>
+                <div className="kicker">{t("wizard.kicker")}</div>
+                <div className="title">{t("wizard.title")}</div>
               </div>
-              <span className="badge">Step {activeStep} of {isSaved ? 6 : 5}</span>
+              <span className="badge">
+                {t("common.stepOf", { step: activeStep, total: isSaved ? 6 : 5 })}
+              </span>
             </div>
 
             <ol className="stepper">
@@ -1575,45 +1680,47 @@ export const App = () => {
             <div className="step-card">
               <div className="step-card-header">
                 <div>
-                  <div className="label">Step 1</div>
-                  <div className="step-title">Start the gateway</div>
+                  <div className="label">{t("common.step", { step: 1 })}</div>
+                  <div className="step-title">{t("wizard.startGateway")}</div>
                 </div>
                 <span className={`badge ${isGatewayRunning ? "badge-success" : ""}`}>
                   {isGatewayRunning
-                    ? "Gateway ready"
+                    ? t("launch.readyTitle")
                     : isGatewayActive
-                      ? "Gateway starting"
-                      : "Gateway stopped"}
+                      ? t("wizard.gatewayStarting")
+                      : t("wizard.gatewayStopped")}
                 </span>
               </div>
-              <p className="step-description">
-                Launch the local gateway before loading models. You can stop it anytime.
-              </p>
-              {doctorBlocking ? (
+              <p className="step-description">{t("wizard.launchBeforeModels")}</p>
+              {doctorBlockingView ? (
                 <div className="warning-banner">
                   <div>
-                    {doctorBlocking.title}: {doctorBlocking.details}
+                    {doctorBlockingView.title}: {doctorBlockingView.details}
                   </div>
-                  {doctorBlocking.fix ? <div className="helper-text">Fix: {doctorBlocking.fix}</div> : null}
+                  {doctorBlockingView.fix ? (
+                    <div className="helper-text">
+                      {t("common.fix", { details: doctorBlockingView.fix })}
+                    </div>
+                  ) : null}
                   <button className="btn" onClick={runDoctor}>
-                    Run doctor
+                    {t("wizard.doctor")}
                   </button>
                 </div>
               ) : null}
               <div className="button-row">
                 <button className="btn primary" onClick={startGateway} disabled={!canStartGateway}>
-                  Start gateway
+                  {t("wizard.start")}
                 </button>
                 <button className="btn" onClick={stopGateway} disabled={!isGatewayActive}>
-                  Stop gateway
+                  {t("wizard.stop")}
                 </button>
                 <button className="btn" onClick={runDoctor}>
-                  Run doctor
+                  {t("wizard.doctor")}
                 </button>
               </div>
               {startError ? (
                 <div className="error-banner">
-                  <div>Gateway failed to start.</div>
+                  <div>{t("wizard.startFailed")}</div>
                   <div className="helper-text">{startError}</div>
                 </div>
               ) : null}
@@ -1622,43 +1729,48 @@ export const App = () => {
             <div className={`step-card ${canLoadModels ? "" : "is-disabled"}`}>
               <div className="step-card-header">
                 <div>
-                  <div className="label">Step 2</div>
-                  <div className="step-title">Discover compatible models</div>
+                  <div className="label">{t("common.step", { step: 2 })}</div>
+                  <div className="step-title">{t("wizard.discoverCompatible")}</div>
                 </div>
                 <span className="badge">
-                  {hasModels ? `${llmOptions.length + sttOptions.length} models available` : "No catalog yet"}
+                  {hasModels
+                    ? t("wizard.catalogCount", { count: llmOptions.length + sttOptions.length })
+                    : t("wizard.noCatalog")}
                 </span>
               </div>
               <p className="step-description">
-                Read the catalog and hide models that cannot run on{" "}
-                {runtimePlatformId ?? "this platform"}.
+                {t("wizard.platformDescription", {
+                  platform: runtimePlatformId ?? t("wizard.thisPlatform")
+                })}
               </p>
               <button className="btn" onClick={refreshModels} disabled={!canLoadModels}>
-                Refresh models
+                {t("wizard.refreshModels")}
               </button>
             </div>
 
             <div className={`step-card ${canChooseDefaults ? "" : "is-disabled"}`}>
               <div className="step-card-header">
                 <div>
-                  <div className="label">Step 3</div>
-                  <div className="step-title">Choose defaults</div>
+                  <div className="label">{t("common.step", { step: 3 })}</div>
+                  <div className="step-title">{t("wizard.defaults")}</div>
                 </div>
-                <span className="badge">{defaultsComplete ? "Defaults selected" : "Waiting on selections"}</span>
+                <span className="badge">
+                  {defaultsComplete
+                    ? t("wizard.defaultsSelected")
+                    : t("wizard.waitingSelections")}
+                </span>
               </div>
-              <p className="step-description">
-                Select your preferred LLM and STT models to use in sessions.
-              </p>
+              <p className="step-description">{t("wizard.selectDescription")}</p>
               <div className="grid">
                 <div>
-                  <div className="label">Default LLM</div>
+                  <div className="label">{t("wizard.defaultLlm")}</div>
                   <select
                     className="select"
                     value={defaults.llm}
                     onChange={(event) => setDefaults((prev) => ({ ...prev, llm: event.target.value }))}
                     disabled={!canChooseDefaults}
                   >
-                    <option value="">Select LLM</option>
+                    <option value="">{t("wizard.selectLlm")}</option>
                     {llmOptions.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.metadata.display.title}
@@ -1667,14 +1779,14 @@ export const App = () => {
                   </select>
                 </div>
                 <div>
-                  <div className="label">Default STT</div>
+                  <div className="label">{t("wizard.defaultStt")}</div>
                   <select
                     className="select"
                     value={defaults.stt}
                     onChange={(event) => setDefaults((prev) => ({ ...prev, stt: event.target.value }))}
                     disabled={!canChooseDefaults}
                   >
-                    <option value="">Select STT</option>
+                    <option value="">{t("wizard.selectStt")}</option>
                     {sttOptions.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.metadata.display.title}
@@ -1688,17 +1800,14 @@ export const App = () => {
             <div className={`step-card ${defaultsComplete ? "" : "is-disabled"}`}>
               <div className="step-card-header">
                 <div>
-                  <div className="label">Step 4</div>
-                  <div className="step-title">Download and load selected models</div>
+                  <div className="label">{t("common.step", { step: 4 })}</div>
+                  <div className="step-title">{t("model.downloadLoad")}</div>
                 </div>
                 <span className={`badge ${selectedModelsLoaded ? "badge-success" : ""}`}>
-                  {describeModelLoadPhase(effectiveModelLoadPhase)}
+                  {describeModelLoadPhase(effectiveModelLoadPhase, t)}
                 </span>
               </div>
-              <p className="step-description">
-                Prepare both engines before connecting the Therapy website. Downloads are cached
-                locally, and a failed engine is reported separately.
-              </p>
+              <p className="step-description">{t("model.prepareDescription")}</p>
               <div className="button-row">
                 <button
                   className="btn primary"
@@ -1707,18 +1816,18 @@ export const App = () => {
                 >
                   {modelLoadBusy
                     ? modelLoad.phase === "timed_out"
-                      ? "Load continues in gateway"
-                      : "Preparing models…"
+                      ? t("model.continues")
+                      : t("model.preparing")
                     : selectedModelsLoaded
-                      ? "Reload selected models"
-                      : "Download & load selected models"}
+                      ? t("model.reload")
+                      : t("model.downloadLoad")}
                 </button>
                 <button
                   className="btn"
                   onClick={refreshRuntimeState}
                   disabled={!isGatewayRunning || modelLoadBusy}
                 >
-                  Refresh readiness
+                  {t("model.refreshReadiness")}
                 </button>
               </div>
               {modelLoadProgress}
@@ -1727,16 +1836,14 @@ export const App = () => {
             <div className={`step-card ${canSave ? "" : "is-disabled"}`}>
               <div className="step-card-header">
                 <div>
-                  <div className="label">Step 5</div>
-                  <div className="step-title">Save preferences</div>
+                  <div className="label">{t("common.step", { step: 5 })}</div>
+                  <div className="step-title">{t("wizard.save")}</div>
                 </div>
                 <span className={`badge ${isSaved ? "badge-success" : ""}`}>
-                  {isSaved ? "Preferences saved" : "Not saved"}
+                  {isSaved ? t("wizard.preferencesSaved") : t("wizard.notSaved")}
                 </span>
               </div>
-              <p className="step-description">
-                Save your defaults so the gateway uses them whenever it starts.
-              </p>
+              <p className="step-description">{t("wizard.saveDefaultsDescription")}</p>
               <div className="inline-row">
                 <input
                   id="prefer-local"
@@ -1746,19 +1853,21 @@ export const App = () => {
                   disabled={!canSave}
                 />
                 <label htmlFor="prefer-local" className="text-sm">
-                  Prefer local models over proxy providers
+                  {t("wizard.preferLocal")}
                 </label>
               </div>
               <div className="button-row">
                 <button className="btn primary" onClick={saveConfig} disabled={!canSave || saveState === "saving"}>
-                  {saveState === "saving" ? "Saving..." : "Save preferences"}
+                  {saveState === "saving" ? t("common.saving") : t("wizard.save")}
                 </button>
-                {saveState === "error" ? <span className="error-text">Save failed. Try again.</span> : null}
+                {saveState === "error" ? (
+                  <span className="error-text">{t("wizard.saveFailed")}</span>
+                ) : null}
               </div>
               {isSaved ? (
                 <div className="success-panel">
-                  <span className="badge badge-success">Saved</span>
-                  <span>Your preferences are ready. Continue to Therapy Settings.</span>
+                  <span className="badge badge-success">{t("common.saved")}</span>
+                  <span>{t("wizard.preferencesReady")}</span>
                 </div>
               ) : null}
             </div>
@@ -1767,20 +1876,18 @@ export const App = () => {
               <div className="step-card">
                 <div className="step-card-header">
                   <div>
-                    <div className="label">Step 6</div>
-                    <div className="step-title">Next: Configure in Therapy Settings</div>
+                    <div className="label">{t("common.step", { step: 6 })}</div>
+                    <div className="step-title">{t("wizard.nextSettings")}</div>
                   </div>
-                  <span className="badge">Ready</span>
+                  <span className="badge">{t("common.ready")}</span>
                 </div>
-                <p className="step-description">
-                  Finish setup by linking these preferences in the Therapy web app.
-                </p>
+                <p className="step-description">{t("wizard.finishSetup")}</p>
                 <div className="button-row">
                   <button className="btn primary" onClick={() => openUrl(settingsUrl)}>
-                    Open Therapy Settings
+                    {t("connection.openSettings")}
                   </button>
-                  <button className="btn" onClick={() => navigator.clipboard.writeText(settingsUrl)}>
-                    Copy Settings Link
+                  <button className="btn" onClick={() => copyText(settingsUrl)}>
+                    {t("wizard.copySettingsLink")}
                   </button>
                 </div>
               </div>
@@ -1790,70 +1897,74 @@ export const App = () => {
           <div className="panel">
             <div className="header">
               <div>
-                <div className="kicker">Logs</div>
-                <div className="title">Gateway output</div>
+                <div className="kicker">{t("logs.kicker")}</div>
+                <div className="title">{t("logs.title")}</div>
+                <div className="helper-text">{t("logs.privacy")}</div>
               </div>
               <div className="button-row">
                 <button className="btn" onClick={refreshLogs}>
-                  Refresh logs
+                  {t("logs.refresh")}
                 </button>
                 <button className="btn" onClick={() => copyText(logs.join("\n"))} disabled={!logs.length}>
-                  Copy logs
+                  {t("logs.copy")}
                 </button>
                 <button className="btn" onClick={() => setLogs([])} disabled={!logs.length}>
-                  Clear logs
+                  {t("logs.clear")}
                 </button>
                 <button className="btn" onClick={() => setAutoScroll((value) => !value)}>
-                  Auto-scroll: {autoScroll ? "On" : "Off"}
+                  {t("logs.autoScroll", {
+                    state: autoScroll ? t("common.on") : t("common.off")
+                  })}
                 </button>
               </div>
             </div>
             {moduleNotFound ? (
               <div className="error-banner">
-                <div>
-                  The gateway could not import <strong>local_runtime</strong>. The Python package is
-                  missing from the expected path.
-                </div>
+                <div>{t("logs.importFailure")}</div>
                 <div className="button-row">
                   <button className="btn" onClick={runDoctor}>
-                    Run doctor
+                    {t("wizard.doctor")}
                   </button>
                   <button
                     className="btn"
                     onClick={() =>
-                      copyText(
-                        "Fix steps:\\n1) Set LOCAL_RUNTIME_ROOT to the local_runtime python package root.\\n2) Or bundle resources/local_runtime in the Tauri build.\\n3) Restart the gateway."
-                      )
+                      copyText(t("logs.fixSteps"))
                     }
                   >
-                    Copy fix steps
+                    {t("logs.copyFix")}
                   </button>
                 </div>
               </div>
             ) : null}
             <div className="log-box" ref={logBoxRef}>
-              {logs.length ? logs.join("\n") : "No logs yet."}
+              {logs.length ? logs.join("\n") : t("logs.none")}
             </div>
           </div>
 
           <div className="panel">
             <div className="header">
               <div>
-                <div className="kicker">Doctor</div>
-                <div className="title">Preflight checks</div>
+                <div className="kicker">{t("doctor.kicker")}</div>
+                <div className="title">{t("doctor.title")}</div>
               </div>
               <button className="btn" onClick={runDoctor}>
-                Run doctor
+                {t("wizard.doctor")}
               </button>
             </div>
             <div className="grid">
-              {doctorChecks.map((check) => (
-                <div key={check.title} className="panel">
-                  <div className="label">{check.title}</div>
-                  <div>{check.details}</div>
-                  {check.fix ? <p>Fix: {check.fix}</p> : null}
-                </div>
-              ))}
+              {!doctorChecks.length ? (
+                <div className="helper-text">{t("doctor.none")}</div>
+              ) : null}
+              {doctorChecks.map((check) => {
+                const view = describeDoctorCheck(check, t);
+                return (
+                  <div key={`${check.code}-${check.status}`} className="panel">
+                    <div className="label">{view.title}</div>
+                    <div>{view.details}</div>
+                    {view.fix ? <p>{t("common.fix", { details: view.fix })}</p> : null}
+                  </div>
+                );
+              })}
             </div>
           </div>
 

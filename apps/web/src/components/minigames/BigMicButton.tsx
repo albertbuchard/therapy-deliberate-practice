@@ -34,8 +34,9 @@ export const BigMicButton = ({
   accent,
   attention = false,
   onRecord,
-  onStop
+  onStop,
 }: BigMicButtonProps) => {
+  const { t } = useTranslation();
   const isRecording = mode === "stop";
   const isDisabled = mode === "disabled" || mode === "locked";
   const resolvedAccent = accent ?? (isRecording ? "rose" : "teal");
@@ -47,7 +48,9 @@ export const BigMicButton = ({
       ? "border-rose-300/70 bg-rose-500/30 shadow-[0_0_45px_rgba(244,63,94,0.6)]"
       : "border-teal-300/70 bg-teal-500/20 shadow-[0_0_45px_rgba(45,212,191,0.45)]";
   const progressStroke =
-    resolvedAccent === "rose" ? "rgba(248,113,113,0.9)" : "rgba(94,234,212,0.9)";
+    resolvedAccent === "rose"
+      ? "rgba(248,113,113,0.9)"
+      : "rgba(94,234,212,0.9)";
 
   return (
     <button
@@ -61,7 +64,9 @@ export const BigMicButton = ({
       }}
       disabled={isDisabled}
       className={`group relative flex h-36 w-36 items-center justify-center rounded-full border text-white transition-all duration-300 ${baseStyles} ${
-        isDisabled ? "cursor-not-allowed opacity-40" : "hover:-translate-y-1 hover:shadow-[0_0_60px_rgba(56,189,248,0.35)]"
+        isDisabled
+          ? "cursor-not-allowed opacity-40"
+          : "hover:-translate-y-1 hover:shadow-[0_0_60px_rgba(56,189,248,0.35)]"
       }`}
     >
       {attention && !isRecording && (
@@ -100,14 +105,18 @@ export const BigMicButton = ({
       <span className="relative z-10 flex flex-col items-center gap-2">
         <MicIcon accent={resolvedAccent} />
         <span className="text-[10px] font-semibold uppercase tracking-[0.3em] text-slate-200">
-          {subLabel ?? (isRecording ? "Stop" : "Record")}
+          {subLabel ??
+            (isRecording
+              ? t("minigameUi.stopRecording")
+              : t("minigameUi.record"))}
         </span>
       </span>
       {mode === "locked" && (
         <span className="absolute -bottom-8 text-[10px] uppercase tracking-[0.3em] text-slate-400">
-          Locked
+          {t("minigameUi.locked")}
         </span>
       )}
     </button>
   );
 };
+import { useTranslation } from "react-i18next";

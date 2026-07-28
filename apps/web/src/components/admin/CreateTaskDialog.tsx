@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAccessibleDialog } from "../../hooks/useAccessibleDialog";
 import { Button, Input, Label, Select, Textarea } from "./AdminUi";
 
 export type CreateTaskPayload = {
@@ -36,7 +37,7 @@ const emptyPayload = (): CreateTaskPayload => ({
   general_objective: "",
   tags: [],
   language: "en",
-  is_published: false
+  is_published: false,
 });
 
 export const CreateTaskDialog = ({
@@ -44,14 +45,13 @@ export const CreateTaskDialog = ({
   canDuplicate,
   onClose,
   onCreate,
-  onDuplicate
+  onDuplicate,
 }: CreateTaskDialogProps) => {
   const { t } = useTranslation();
   const [mode, setMode] = useState<"blank" | "json">("blank");
   const [payload, setPayload] = useState<CreateTaskPayload>(emptyPayload());
   const [jsonValue, setJsonValue] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
 
   const reset = useCallback(() => {
     setPayload(emptyPayload());
@@ -64,38 +64,7 @@ export const CreateTaskDialog = ({
     reset();
     onClose();
   }, [onClose, reset]);
-
-  useEffect(() => {
-    if (!open) return;
-    const firstInput = containerRef.current?.querySelector<HTMLElement>(
-      "input, textarea, select, button"
-    );
-    firstInput?.focus();
-    const handleKeydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        handleClose();
-      }
-      if (event.key === "Tab") {
-        const focusable = Array.from(
-          containerRef.current?.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          ) ?? []
-        );
-        if (!focusable.length) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          last.focus();
-          event.preventDefault();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          first.focus();
-          event.preventDefault();
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeydown);
-    return () => window.removeEventListener("keydown", handleKeydown);
-  }, [handleClose, open]);
+  const { dialogRef, titleId } = useAccessibleDialog(open, handleClose);
 
   if (!open) return null;
 
@@ -106,7 +75,7 @@ export const CreateTaskDialog = ({
         const draft: CreateTaskPayload = {
           ...payload,
           ...parsed,
-          tags: Array.isArray(parsed.tags) ? parsed.tags : payload.tags
+          tags: Array.isArray(parsed.tags) ? parsed.tags : payload.tags,
         };
         if (!draft.title || !draft.skill_domain || !draft.description) {
           setError(t("admin.create.errors.missingFields"));
@@ -129,15 +98,23 @@ export const CreateTaskDialog = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4 backdrop-blur-sm">
       <div
-        ref={containerRef}
-        className="w-full max-w-2xl rounded-2xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl"
       >
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">{t("admin.create.title")}</h3>
-            <p className="text-sm text-slate-400">{t("admin.create.subtitle")}</p>
+            <h3 id={titleId} className="text-lg font-semibold text-white">
+              {t("admin.create.title")}
+            </h3>
+            <p className="text-sm text-slate-400">
+              {t("admin.create.subtitle")}
+            </p>
           </div>
           <Button variant="ghost" onClick={handleClose}>
             {t("admin.actions.close")}
@@ -175,25 +152,42 @@ export const CreateTaskDialog = ({
         <div className="mt-6 space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>{t("admin.task.titleLabel")}</Label>
+              <Label htmlFor="create-task-title">
+                {t("admin.task.titleLabel")}
+              </Label>
               <Input
+                id="create-task-title"
+                data-dialog-autofocus
                 value={payload.title}
-                onChange={(event) => setPayload({ ...payload, title: event.target.value })}
+                onChange={(event) =>
+                  setPayload({ ...payload, title: event.target.value })
+                }
               />
             </div>
             <div className="space-y-2">
-              <Label>{t("admin.task.skillDomainLabel")}</Label>
+              <Label htmlFor="create-task-skill-domain">
+                {t("admin.task.skillDomainLabel")}
+              </Label>
               <Input
+                id="create-task-skill-domain"
                 value={payload.skill_domain}
-                onChange={(event) => setPayload({ ...payload, skill_domain: event.target.value })}
+                onChange={(event) =>
+                  setPayload({ ...payload, skill_domain: event.target.value })
+                }
               />
             </div>
             <div className="space-y-2">
-              <Label>{t("admin.task.difficultyLabel")}</Label>
+              <Label htmlFor="create-task-difficulty">
+                {t("admin.task.difficultyLabel")}
+              </Label>
               <Select
+                id="create-task-difficulty"
                 value={payload.base_difficulty}
                 onChange={(event) =>
-                  setPayload({ ...payload, base_difficulty: Number(event.target.value) })
+                  setPayload({
+                    ...payload,
+                    base_difficulty: Number(event.target.value),
+                  })
                 }
               >
                 {[1, 2, 3, 4, 5].map((value) => (
@@ -204,8 +198,11 @@ export const CreateTaskDialog = ({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>{t("admin.task.tagsLabel")}</Label>
+              <Label htmlFor="create-task-tags">
+                {t("admin.task.tagsLabel")}
+              </Label>
               <Input
+                id="create-task-tags"
                 value={payload.tags.join(", ")}
                 onChange={(event) =>
                   setPayload({
@@ -213,16 +210,21 @@ export const CreateTaskDialog = ({
                     tags: event.target.value
                       .split(",")
                       .map((tag) => tag.trim())
-                      .filter(Boolean)
+                      .filter(Boolean),
                   })
                 }
               />
             </div>
             <div className="space-y-2">
-              <Label>{t("appShell.language.label")}</Label>
+              <Label htmlFor="create-task-language">
+                {t("appShell.language.label")}
+              </Label>
               <Select
+                id="create-task-language"
                 value={payload.language}
-                onChange={(event) => setPayload({ ...payload, language: event.target.value })}
+                onChange={(event) =>
+                  setPayload({ ...payload, language: event.target.value })
+                }
               >
                 <option value="en">{t("appShell.language.english")}</option>
                 <option value="fr">{t("appShell.language.french")}</option>
@@ -230,25 +232,39 @@ export const CreateTaskDialog = ({
             </div>
           </div>
           <div className="space-y-2">
-            <Label>{t("admin.task.descriptionLabel")}</Label>
+            <Label htmlFor="create-task-description">
+              {t("admin.task.descriptionLabel")}
+            </Label>
             <Textarea
+              id="create-task-description"
               value={payload.description}
-              onChange={(event) => setPayload({ ...payload, description: event.target.value })}
+              onChange={(event) =>
+                setPayload({ ...payload, description: event.target.value })
+              }
             />
           </div>
           <div className="space-y-2">
-            <Label>{t("admin.task.generalObjectiveLabel")}</Label>
+            <Label htmlFor="create-task-objective">
+              {t("admin.task.generalObjectiveLabel")}
+            </Label>
             <Textarea
+              id="create-task-objective"
               value={payload.general_objective ?? ""}
               onChange={(event) =>
-                setPayload({ ...payload, general_objective: event.target.value })
+                setPayload({
+                  ...payload,
+                  general_objective: event.target.value,
+                })
               }
             />
           </div>
           {mode === "json" && (
             <div className="space-y-2">
-              <Label>{t("admin.create.jsonLabel")}</Label>
+              <Label htmlFor="create-task-json">
+                {t("admin.create.jsonLabel")}
+              </Label>
               <Textarea
+                id="create-task-json"
                 className="min-h-[160px] font-mono text-xs"
                 value={jsonValue}
                 onChange={(event) => setJsonValue(event.target.value)}

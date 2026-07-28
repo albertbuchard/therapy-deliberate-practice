@@ -1,6 +1,13 @@
-import { NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
+import {
+  NavLink,
+  Outlet,
+  useLocation,
+  useOutletContext,
+  type NavLinkRenderProps
+} from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAccessibleDialog } from "../../hooks/useAccessibleDialog";
 
 type HelpContext = {
   openAiSetup?: () => void;
@@ -12,6 +19,9 @@ export const HelpLayout = () => {
   const parentContext = useOutletContext<HelpContext | undefined>() ?? {};
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const { dialogRef } = useAccessibleDialog(isDrawerOpen, () =>
+    setIsDrawerOpen(false),
+  );
   const helpPages = useMemo(
     () => [
       {
@@ -84,17 +94,6 @@ export const HelpLayout = () => {
     setIsDrawerOpen(false);
   }, [location.pathname]);
 
-  useEffect(() => {
-    if (!isDrawerOpen) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsDrawerOpen(false);
-      }
-    };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [isDrawerOpen]);
-
   const renderNav = (isMobile = false) => (
     <div className="space-y-4">
       <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3">
@@ -120,7 +119,7 @@ export const HelpLayout = () => {
           <NavLink
             key={page.slug}
             to={`/help/${page.slug}`}
-            className={({ isActive }) =>
+            className={({ isActive }: NavLinkRenderProps) =>
               `group relative flex items-start gap-3 rounded-2xl border border-transparent px-3 py-3 text-left text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/70 ${
                 isActive
                   ? "border-white/10 bg-white/10 text-white"
@@ -128,7 +127,7 @@ export const HelpLayout = () => {
               }`
             }
           >
-            {({ isActive }) => (
+            {({ isActive }: NavLinkRenderProps) => (
               <>
                 <span
                   className={`absolute left-0 top-3 h-8 w-1 rounded-full bg-teal-400 transition ${
@@ -204,15 +203,18 @@ export const HelpLayout = () => {
             onClick={() => setIsDrawerOpen(false)}
           />
           <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={t("help.layout.dialog.ariaLabel")}
+            tabIndex={-1}
             className="absolute inset-x-4 top-6 rounded-3xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl shadow-black/40"
           >
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold text-white">{t("help.layout.dialog.title")}</p>
               <button
                 type="button"
+                data-dialog-autofocus
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/70"
                 onClick={() => setIsDrawerOpen(false)}
               >

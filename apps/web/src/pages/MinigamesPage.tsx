@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { GameSelectModal } from "../components/minigames/GameSelectModal";
 import { MinigameSetupModal } from "../components/minigames/MinigameSetupModal";
 import { AudioReactiveBackground } from "../components/minigames/AudioReactiveBackground";
@@ -19,7 +20,7 @@ import {
   deriveActivePlayerId,
   getNextRoundForPlayer,
   getUpNextPlayerId,
-  roundExampleKey
+  roundExampleKey,
 } from "../components/minigames/utils/turnUtils";
 import { usePatientAudioBank } from "../patientAudio/usePatientAudioBank";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -32,7 +33,7 @@ import {
   useGenerateMinigameRoundsMutation,
   useGetTaskQuery,
   useLazyGetMinigameStateQuery,
-  useRedrawMinigameRoundMutation
+  useRedrawMinigameRoundMutation,
 } from "../store/api";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
@@ -43,53 +44,80 @@ import {
   setEvaluationDrawerOpen,
   setAppShellHidden,
   setMinigameState,
-  toggleTranscriptHidden
+  toggleTranscriptHidden,
 } from "../store/minigamesSlice";
-import type { PlayerDraft, TeamDraft } from "../components/minigames/PlayersTeamsStep";
+import type {
+  PlayerDraft,
+  TeamDraft,
+} from "../components/minigames/PlayersTeamsStep";
 import type { TaskSelectionState } from "../components/minigames/TaskSelectionStep";
 import type { EvaluationResult } from "@deliberate/shared";
-import { computeWinner, type WinnerSummary } from "../components/minigames/utils/computeWinner";
-
-const modeCopy = {
-  ffa: "Free For All",
-  tdm: "Team Deathmatch"
-};
+import {
+  computeWinner,
+  type WinnerSummary,
+} from "../components/minigames/utils/computeWinner";
 
 const WARMUP_AHEAD = 2;
 const NO_UNIQUE_PATIENT_STATEMENTS_LEFT = "NO_UNIQUE_PATIENT_STATEMENTS_LEFT";
 
 export const MinigamePlayPage = () => {
+  const { t } = useTranslation();
+  const modeCopy = {
+    ffa: t("minigameUi.freeForAll"),
+    tdm: t("minigameUi.teamDeathmatch"),
+  };
   const dispatch = useAppDispatch();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
-  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(
+    null,
+  );
   const minigames = useAppSelector((state) => state.minigames);
   const currentPlayerId = minigames.currentPlayerId;
   const [selectOpen, setSelectOpen] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
   const [mode, setMode] = useState<"ffa" | "tdm" | null>(null);
   const [roundResultScore, setRoundResultScore] = useState<number | null>(null);
-  const [roundResultPenalty, setRoundResultPenalty] = useState<number | null>(null);
-  const [lastTranscript, setLastTranscript] = useState<string | undefined>(undefined);
-  const [lastAttemptId, setLastAttemptId] = useState<string | undefined>(undefined);
+  const [roundResultPenalty, setRoundResultPenalty] = useState<number | null>(
+    null,
+  );
+  const [lastTranscript, setLastTranscript] = useState<string | undefined>(
+    undefined,
+  );
+  const [lastAttemptId, setLastAttemptId] = useState<string | undefined>(
+    undefined,
+  );
   const [newPlayerOpen, setNewPlayerOpen] = useState(false);
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [evaluationModalData, setEvaluationModalData] = useState<EvaluationResult | null>(null);
+  const [evaluationModalData, setEvaluationModalData] =
+    useState<EvaluationResult | null>(null);
   const [endGameOpen, setEndGameOpen] = useState(false);
   const [endGamePending, setEndGamePending] = useState(false);
-  const [winnerSummary, setWinnerSummary] = useState<WinnerSummary | null>(null);
-  const [switchTargetPlayerId, setSwitchTargetPlayerId] = useState<string | null>(null);
-  const [promptExhaustedMessage, setPromptExhaustedMessage] = useState<string | null>(null);
+  const [endGameError, setEndGameError] = useState<string | null>(null);
+  const [winnerSummary, setWinnerSummary] = useState<WinnerSummary | null>(
+    null,
+  );
+  const [switchTargetPlayerId, setSwitchTargetPlayerId] = useState<
+    string | null
+  >(null);
+  const [promptExhaustedMessage, setPromptExhaustedMessage] = useState<
+    string | null
+  >(null);
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false);
   const [ffaNextRoundBlocked, setFfaNextRoundBlocked] = useState(false);
-  const [pendingWinnerState, setPendingWinnerState] = useState<{ summary: WinnerSummary | null } | null>(null);
+  const [pendingWinnerState, setPendingWinnerState] = useState<{
+    summary: WinnerSummary | null;
+  } | null>(null);
   const handledPreselectRef = useRef(false);
   const isMobile = useMediaQuery("(max-width: 768px)");
   const discardedRoundIdsRef = useRef<Set<string>>(new Set());
   const autoEndTriggeredRef = useRef<string | null>(null);
-  const [pendingAutoEndSessionId, setPendingAutoEndSessionId] = useState<string | null>(null);
+  const [pendingAutoEndSessionId, setPendingAutoEndSessionId] = useState<
+    string | null
+  >(null);
   const isMountedRef = useRef(true);
+  const abortTurnRef = useRef<(reason?: string) => void>(() => undefined);
 
   const [createSession] = useCreateMinigameSessionMutation();
   const [addTeams] = useAddMinigameTeamsMutation();
@@ -113,17 +141,21 @@ export const MinigamePlayPage = () => {
     setPromptExhaustedMessage(null);
   }, []);
 
-  const handlePromptExhaustionError = useCallback((error: unknown) => {
-    const payload = (error as { data?: { code?: string; error?: string } })?.data;
-    if (payload?.code !== NO_UNIQUE_PATIENT_STATEMENTS_LEFT) return false;
-    setPromptExhaustedMessage(
-      payload.error ??
-        "You\u2019ve used all available unique patient prompts for this session. Start a new game or broaden task selection."
-    );
-    return true;
-  }, []);
+  const handlePromptExhaustionError = useCallback(
+    (error: unknown) => {
+      const payload = (error as { data?: { code?: string; error?: string } })
+        ?.data;
+      if (payload?.code !== NO_UNIQUE_PATIENT_STATEMENTS_LEFT) return false;
+      setPromptExhaustedMessage(
+        payload.error ?? t("minigameUi.promptExhausted"),
+      );
+      return true;
+    },
+    [t],
+  );
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -163,7 +195,10 @@ export const MinigamePlayPage = () => {
       autoEndTriggeredRef.current = null;
       return;
     }
-    if (autoEndTriggeredRef.current && autoEndTriggeredRef.current !== minigames.session.id) {
+    if (
+      autoEndTriggeredRef.current &&
+      autoEndTriggeredRef.current !== minigames.session.id
+    ) {
       autoEndTriggeredRef.current = null;
     }
   }, [minigames.session?.id, mode]);
@@ -214,12 +249,11 @@ export const MinigamePlayPage = () => {
     setSetupOpen(true);
   }, [location.state, sessionIdParam]);
 
-
   const currentRound = useMemo(
     () =>
       minigames.rounds.find((round) => round.id === minigames.currentRoundId) ??
       minigames.rounds.find((round) => round.status !== "completed"),
-    [minigames.currentRoundId, minigames.rounds]
+    [minigames.currentRoundId, minigames.rounds],
   );
   const roundFlowLocked = evaluationModalOpen || newPlayerOpen;
 
@@ -243,7 +277,7 @@ export const MinigamePlayPage = () => {
     minigames.currentRoundId,
     minigames.rounds,
     mode,
-    roundFlowLocked
+    roundFlowLocked,
   ]);
 
   useEffect(() => {
@@ -253,7 +287,7 @@ export const MinigamePlayPage = () => {
       void patchResume({
         sessionId: minigames.session?.id ?? "",
         current_round_id: minigames.currentRoundId ?? null,
-        current_player_id: minigames.currentPlayerId ?? null
+        current_player_id: minigames.currentPlayerId ?? null,
       });
     }, 900);
     return () => window.clearTimeout(handle);
@@ -262,17 +296,17 @@ export const MinigamePlayPage = () => {
     minigames.currentRoundId,
     minigames.session?.ended_at,
     minigames.session?.id,
-    patchResume
+    patchResume,
   ]);
 
   const currentTaskId = currentRound?.task_id;
   const { data: currentTask } = useGetTaskQuery(
     { id: currentTaskId ?? "" },
-    { skip: !currentTaskId }
+    { skip: !currentTaskId },
   );
   const { data: evaluationTask } = useGetTaskQuery(
     { id: evaluationModalData?.task_id ?? "" },
-    { skip: !evaluationModalData?.task_id }
+    { skip: !evaluationModalData?.task_id },
   );
 
   const warmupRounds = useMemo(() => {
@@ -282,7 +316,7 @@ export const MinigamePlayPage = () => {
       .sort((a, b) => a.position - b.position);
     const currentIndex = Math.max(
       0,
-      upcoming.findIndex((round) => round.id === currentRound.id)
+      upcoming.findIndex((round) => round.id === currentRound.id),
     );
     return upcoming.slice(currentIndex, currentIndex + 1 + WARMUP_AHEAD);
   }, [currentRound, minigames.rounds]);
@@ -306,7 +340,9 @@ export const MinigamePlayPage = () => {
 
   const playedExampleIdsByPlayer = useMemo(() => {
     return minigames.results.reduce<Map<string, Set<string>>>((acc, result) => {
-      const round = minigames.rounds.find((entry) => entry.id === result.round_id);
+      const round = minigames.rounds.find(
+        (entry) => entry.id === result.round_id,
+      );
       if (!round) return acc;
       const set = acc.get(result.player_id) ?? new Set<string>();
       set.add(roundExampleKey(round));
@@ -334,13 +370,18 @@ export const MinigamePlayPage = () => {
 
   const endGame = useCallback(async () => {
     if (!minigames.session || endGamePending) return;
+    abortTurnRef.current("end-game");
     setPendingAutoEndSessionId(null);
+    setEndGameError(null);
     try {
       setEndGamePending(true);
       try {
-        await endSession({ sessionId: minigames.session.id });
+        await endSession({ sessionId: minigames.session.id }).unwrap();
       } catch {
-        // keep local state if end-session call fails
+        if (isMountedRef.current) {
+          setEndGameError(t("minigameUi.endSessionFailed"));
+        }
+        return;
       }
       dispatch(setEvaluationDrawerOpen(false));
       let nextState = {
@@ -348,10 +389,12 @@ export const MinigamePlayPage = () => {
         teams: minigames.teams,
         players: minigames.players,
         rounds: minigames.rounds,
-        results: minigames.results
+        results: minigames.results,
       };
       try {
-        const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
+        const refreshed = await fetchMinigameState(
+          minigames.session.id,
+        ).unwrap();
         dispatch(setMinigameState(refreshed));
         nextState = refreshed;
       } catch {
@@ -361,7 +404,7 @@ export const MinigamePlayPage = () => {
         mode: nextState.session.game_type,
         players: nextState.players,
         teams: nextState.teams,
-        results: nextState.results
+        results: nextState.results,
       });
       if (!isMountedRef.current) return;
       if (roundFlowLocked) {
@@ -385,7 +428,8 @@ export const MinigamePlayPage = () => {
     minigames.rounds,
     minigames.session,
     minigames.teams,
-    roundFlowLocked
+    roundFlowLocked,
+    t,
   ]);
 
   const handleReturnToHub = useCallback(() => {
@@ -421,7 +465,7 @@ export const MinigamePlayPage = () => {
     minigames.session?.id,
     mode,
     pendingAutoEndSessionId,
-    roundsPerPlayerTarget
+    roundsPerPlayerTarget,
   ]);
 
   useEffect(() => {
@@ -437,7 +481,12 @@ export const MinigamePlayPage = () => {
     }
     setPendingAutoEndSessionId(null);
     void endGame();
-  }, [endGame, evaluationModalOpen, minigames.session?.id, pendingAutoEndSessionId]);
+  }, [
+    endGame,
+    evaluationModalOpen,
+    minigames.session?.id,
+    pendingAutoEndSessionId,
+  ]);
 
   useEffect(() => {
     if (roundFlowLocked) return;
@@ -462,7 +511,9 @@ export const MinigamePlayPage = () => {
     const controller = new AbortController();
     const runWarmup = async () => {
       try {
-        await patientAudioRef.current.warmup(grouped, { signal: controller.signal });
+        await patientAudioRef.current.warmup(grouped, {
+          signal: controller.signal,
+        });
       } catch {
         if (!controller.signal.aborted) {
           return;
@@ -495,12 +546,16 @@ export const MinigamePlayPage = () => {
       responseTimerEnabled: Boolean(settings.response_timer_enabled),
       responseTimerSeconds: settings.response_timer_seconds ?? 2,
       maxResponseEnabled: Boolean(settings.max_response_duration_enabled),
-      maxResponseSeconds: settings.max_response_duration_seconds ?? 15
+      maxResponseSeconds: settings.max_response_duration_seconds ?? 15,
     };
   }, [minigames.session?.settings]);
 
   const ffaController = useFfaTurnController({
-    enabled: mode === "ffa" && !roundFlowLocked,
+    enabled:
+      mode === "ffa" &&
+      !roundFlowLocked &&
+      !endGamePending &&
+      !endGameOpen,
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
     playerId: currentRound?.player_a_id,
@@ -524,25 +579,36 @@ export const MinigamePlayPage = () => {
       }
       setLastTranscript(payload.transcript);
       const scoreFromEval =
-        typeof (payload.evaluation as EvaluationResult | undefined)?.overall?.score === "number"
+        typeof (payload.evaluation as EvaluationResult | undefined)?.overall
+          ?.score === "number"
           ? (payload.evaluation as EvaluationResult).overall.score
           : null;
       const score = payload.score ?? scoreFromEval;
       setRoundResultScore(score ?? null);
       setRoundResultPenalty(payload.timingPenalty ?? null);
       const resultPlayerId = currentRound?.player_a_id ?? null;
-      if (!payload.attemptId || !currentRound || !resultPlayerId || !minigames.session) {
+      if (
+        !payload.attemptId ||
+        !currentRound ||
+        !resultPlayerId ||
+        !minigames.session
+      ) {
         return;
       }
       if (currentPlayerId && currentPlayerId !== resultPlayerId) {
         console.warn("[minigames] result_player_mismatch", {
           roundId: currentRound.id,
           expectedPlayerId: resultPlayerId,
-          currentPlayerId
+          currentPlayerId,
         });
         return;
       }
-      if (payload.attemptId && currentRound && resultPlayerId && minigames.session) {
+      if (
+        payload.attemptId &&
+        currentRound &&
+        resultPlayerId &&
+        minigames.session
+      ) {
         dispatch(
           addRoundResult({
             roundId: currentRound.id,
@@ -553,8 +619,8 @@ export const MinigamePlayPage = () => {
             transcript: payload.transcript,
             evaluation: payload.evaluation as EvaluationResult | undefined,
             clientPenalty: payload.timingPenalty,
-            scoreTrust: payload.scoreTrust
-          })
+            scoreTrust: payload.scoreTrust,
+          }),
         );
       }
       if (payload.evaluation) {
@@ -562,11 +628,15 @@ export const MinigamePlayPage = () => {
         setEvaluationModalOpen(true);
         setFfaNextRoundBlocked(true);
       }
-    }
+    },
   });
 
   const tdmController = useTdmMatchController({
-    enabled: mode === "tdm" && !roundFlowLocked,
+    enabled:
+      mode === "tdm" &&
+      !roundFlowLocked &&
+      !endGamePending &&
+      !endGameOpen,
     sessionId: minigames.session?.id ?? "",
     round: currentRound,
     audioElement,
@@ -589,7 +659,8 @@ export const MinigamePlayPage = () => {
       }
       setLastTranscript(payload.transcript);
       const scoreFromEval =
-        typeof (payload.evaluation as EvaluationResult | undefined)?.overall?.score === "number"
+        typeof (payload.evaluation as EvaluationResult | undefined)?.overall
+          ?.score === "number"
           ? (payload.evaluation as EvaluationResult).overall.score
           : null;
       const score = payload.score ?? scoreFromEval;
@@ -606,26 +677,29 @@ export const MinigamePlayPage = () => {
             transcript: payload.transcript,
             evaluation: payload.evaluation as EvaluationResult | undefined,
             clientPenalty: payload.timingPenalty,
-            scoreTrust: payload.scoreTrust
-          })
+            scoreTrust: payload.scoreTrust,
+          }),
         );
       }
       if (payload.evaluation) {
         setEvaluationModalData(payload.evaluation as EvaluationResult);
         setEvaluationModalOpen(true);
       }
-    }
+    },
   });
 
   const controller = mode === "tdm" ? tdmController : ffaController;
+  useEffect(() => {
+    abortTurnRef.current = controller.abortTurn;
+  }, [controller.abortTurn]);
   const activePlayerId = useMemo(
     () =>
       deriveActivePlayerId({
         mode,
         currentRound,
-        tdmActivePlayerId: tdmController.activePlayerId
+        tdmActivePlayerId: tdmController.activePlayerId,
       }),
-    [currentRound, mode, tdmController.activePlayerId]
+    [currentRound, mode, tdmController.activePlayerId],
   );
   useEffect(() => {
     setLastTranscript(undefined);
@@ -645,7 +719,7 @@ export const MinigamePlayPage = () => {
         playerId: activePlayerId,
         playedExampleIds: playedExamples,
         completedRoundIds: completedRounds,
-        discardedRoundIds: discardedRoundIdsRef.current
+        discardedRoundIds: discardedRoundIdsRef.current,
       });
       if (nextRound && nextRound.id !== currentRound.id) {
         dispatch(setCurrentRoundId(nextRound.id));
@@ -653,13 +727,16 @@ export const MinigamePlayPage = () => {
       return;
     }
     const exampleKey = roundExampleKey(currentRound);
-    if (playedExamples?.has(exampleKey) || completedRounds?.has(currentRound.id)) {
+    if (
+      playedExamples?.has(exampleKey) ||
+      completedRounds?.has(currentRound.id)
+    ) {
       const nextRound = getNextRoundForPlayer({
         rounds: minigames.rounds,
         playerId: activePlayerId,
         playedExampleIds: playedExamples,
         completedRoundIds: completedRounds,
-        discardedRoundIds: discardedRoundIdsRef.current
+        discardedRoundIds: discardedRoundIdsRef.current,
       });
       if (nextRound && nextRound.id !== currentRound.id) {
         dispatch(setCurrentRoundId(nextRound.id));
@@ -674,7 +751,7 @@ export const MinigamePlayPage = () => {
     minigames.rounds,
     mode,
     playedExampleIdsByPlayer,
-    roundFlowLocked
+    roundFlowLocked,
   ]);
 
   useEffect(() => {
@@ -716,15 +793,18 @@ export const MinigamePlayPage = () => {
         response_timer_enabled: payload.responseTimerEnabled,
         response_timer_seconds: payload.responseTimerSeconds,
         max_response_duration_enabled: payload.maxResponseEnabled,
-        max_response_duration_seconds: payload.maxResponseSeconds
-      }
+        max_response_duration_seconds: payload.maxResponseSeconds,
+      },
     }).unwrap();
 
     let teamRows: TeamDraft[] = [];
     if (mode === "tdm" && payload.teams.length) {
       const response = await addTeams({
         sessionId: session.session_id,
-        teams: payload.teams.map((team) => ({ name: team.name, color: team.color }))
+        teams: payload.teams.map((team) => ({
+          name: team.name,
+          color: team.color,
+        })),
       }).unwrap();
       teamRows = response.teams.map((team) => ({ ...team, id: team.id }));
     }
@@ -742,15 +822,15 @@ export const MinigamePlayPage = () => {
         players: payload.players.map((player) => ({
           name: player.name,
           avatar: player.avatar,
-          team_id: player.team_id ? teamIdMap.get(player.team_id) : null
-        }))
+          team_id: player.team_id ? teamIdMap.get(player.team_id) : null,
+        })),
       }).unwrap();
     }
 
     try {
       await generateRounds({
         sessionId: session.session_id,
-        count: mode === "ffa" ? 3 : undefined
+        count: mode === "ffa" ? 3 : undefined,
       }).unwrap();
     } catch (error) {
       if (handlePromptExhaustionError(error)) return;
@@ -762,7 +842,6 @@ export const MinigamePlayPage = () => {
     setSetupOpen(false);
     navigate(`/minigames/play/${session.session_id}`, { replace: true });
   };
-
 
   const nextTurn = () => {
     if (promptExhaustedMessage) return;
@@ -785,7 +864,7 @@ export const MinigamePlayPage = () => {
   };
 
   const resetLocalState = () => {
-    controller.stopPatient();
+    controller.abortTurn("new-game");
     if (audioElement) {
       audioElement.pause();
       audioElement.currentTime = 0;
@@ -804,6 +883,7 @@ export const MinigamePlayPage = () => {
     closeEvaluationModal();
     setNewPlayerOpen(false);
     setEndGameOpen(false);
+    setEndGameError(null);
     setWinnerSummary(null);
   };
 
@@ -824,7 +904,10 @@ export const MinigamePlayPage = () => {
     nextTurn();
   };
 
-  const handleCreatePlayer = async (payload: { name: string; avatar: string }) => {
+  const handleCreatePlayer = async (payload: {
+    name: string;
+    avatar: string;
+  }) => {
     if (!minigames.session) return;
     controller.abortTurn("new-player");
     if (currentRound?.id) {
@@ -836,19 +919,25 @@ export const MinigamePlayPage = () => {
     setRoundResultPenalty(null);
     const response = await addPlayers({
       sessionId: minigames.session.id,
-      players: [{ name: payload.name, avatar: payload.avatar }]
+      players: [{ name: payload.name, avatar: payload.avatar }],
     }).unwrap();
     const newPlayer = response.players[0];
     const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
     dispatch(setMinigameState(refreshed));
-    const completedRoundIdsByPlayer = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
+    const completedRoundIdsByPlayer = refreshed.results.reduce<
+      Map<string, Set<string>>
+    >((acc, result) => {
       const set = acc.get(result.player_id) ?? new Set<string>();
       set.add(result.round_id);
       acc.set(result.player_id, set);
       return acc;
     }, new Map());
-    const playedExampleIdsByPlayer = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
-      const round = refreshed.rounds.find((entry) => entry.id === result.round_id);
+    const playedExampleIdsByPlayer = refreshed.results.reduce<
+      Map<string, Set<string>>
+    >((acc, result) => {
+      const round = refreshed.rounds.find(
+        (entry) => entry.id === result.round_id,
+      );
       if (!round) return acc;
       const set = acc.get(result.player_id) ?? new Set<string>();
       set.add(roundExampleKey(round));
@@ -860,11 +949,14 @@ export const MinigamePlayPage = () => {
       playerId: newPlayer.id,
       playedExampleIds: playedExampleIdsByPlayer.get(newPlayer.id),
       completedRoundIds: completedRoundIdsByPlayer.get(newPlayer.id),
-      discardedRoundIds: discardedRoundIdsRef.current
+      discardedRoundIds: discardedRoundIdsRef.current,
     });
     if (!nextForNewPlayer) {
       try {
-        await generateRounds({ sessionId: minigames.session.id, count: refreshed.players.length }).unwrap();
+        await generateRounds({
+          sessionId: minigames.session.id,
+          count: refreshed.players.length,
+        }).unwrap();
       } catch (error) {
         if (handlePromptExhaustionError(error)) {
           setNewPlayerOpen(false);
@@ -874,14 +966,20 @@ export const MinigamePlayPage = () => {
       }
       const updated = await fetchMinigameState(minigames.session.id).unwrap();
       dispatch(setMinigameState(updated));
-      const updatedCompletedRoundIds = updated.results.reduce<Map<string, Set<string>>>((acc, result) => {
+      const updatedCompletedRoundIds = updated.results.reduce<
+        Map<string, Set<string>>
+      >((acc, result) => {
         const set = acc.get(result.player_id) ?? new Set<string>();
         set.add(result.round_id);
         acc.set(result.player_id, set);
         return acc;
       }, new Map());
-      const updatedExampleIds = updated.results.reduce<Map<string, Set<string>>>((acc, result) => {
-        const round = updated.rounds.find((entry) => entry.id === result.round_id);
+      const updatedExampleIds = updated.results.reduce<
+        Map<string, Set<string>>
+      >((acc, result) => {
+        const round = updated.rounds.find(
+          (entry) => entry.id === result.round_id,
+        );
         if (!round) return acc;
         const set = acc.get(result.player_id) ?? new Set<string>();
         set.add(roundExampleKey(round));
@@ -893,7 +991,7 @@ export const MinigamePlayPage = () => {
         playerId: newPlayer.id,
         playedExampleIds: updatedExampleIds.get(newPlayer.id),
         completedRoundIds: updatedCompletedRoundIds.get(newPlayer.id),
-        discardedRoundIds: discardedRoundIdsRef.current
+        discardedRoundIds: discardedRoundIdsRef.current,
       });
     }
     dispatch(setCurrentRoundId(nextForNewPlayer?.id));
@@ -913,7 +1011,11 @@ export const MinigamePlayPage = () => {
     }
     const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
     dispatch(setMinigameState(refreshed));
-    dispatch(setCurrentRoundId(refreshed.rounds.find((round) => round.status !== "completed")?.id));
+    dispatch(
+      setCurrentRoundId(
+        refreshed.rounds.find((round) => round.status !== "completed")?.id,
+      ),
+    );
     setRoundResultScore(null);
     setRoundResultPenalty(null);
   };
@@ -923,21 +1025,29 @@ export const MinigamePlayPage = () => {
       if (controller.maxDurationRemaining != null) {
         return `${controller.maxDurationRemaining.toFixed(1)}s`;
       }
-      return "Stop";
+      return t("minigameUi.stopRecording");
     }
     if (controller.responseCountdownLabel) {
       return controller.responseCountdownLabel;
     }
-    return "Record";
-  }, [controller.maxDurationRemaining, controller.responseCountdownLabel, controller.state]);
+    return t("minigameUi.record");
+  }, [
+    controller.maxDurationRemaining,
+    controller.responseCountdownLabel,
+    controller.state,
+    t,
+  ]);
 
   const nextTurnDisabled = Boolean(promptExhaustedMessage);
 
   const canRequestNextTurn =
-    !roundFlowLocked && roundResultScore != null && controller.state === "complete";
+    !roundFlowLocked &&
+    roundResultScore != null &&
+    controller.state === "complete";
 
   const canRedraw =
     mode === "tdm" &&
+    controller.state !== "requesting_permission" &&
     controller.state !== "recording" &&
     controller.state !== "transcribing" &&
     controller.state !== "evaluating" &&
@@ -952,13 +1062,16 @@ export const MinigamePlayPage = () => {
     if (history.length < 2) return null;
     const previousEvaluation = history[history.length - 2].evaluation;
     if (!previousEvaluation?.criterion_scores?.length) return null;
-    return previousEvaluation.criterion_scores.reduce((total, score) => total + score.score, 0);
+    return previousEvaluation.criterion_scores.reduce(
+      (total, score) => total + score.score,
+      0,
+    );
   }, [activePlayerId, minigames.results]);
 
   const transcriptEligible = Boolean(
     (lastTranscript && lastTranscript.trim().length > 0) ||
-      controller.processingStage ||
-      lastAttemptId
+    controller.processingStage ||
+    lastAttemptId,
   );
 
   const upNextPlayerId = useMemo(() => {
@@ -968,6 +1081,7 @@ export const MinigamePlayPage = () => {
 
   const canSwitchPlayer =
     mode === "ffa" &&
+    controller.state !== "requesting_permission" &&
     controller.state !== "recording" &&
     controller.state !== "transcribing" &&
     controller.state !== "evaluating" &&
@@ -998,11 +1112,14 @@ export const MinigamePlayPage = () => {
       playerId: switchTargetPlayerId,
       playedExampleIds: playedExampleIdsByPlayer.get(switchTargetPlayerId),
       completedRoundIds: completedRoundIdsByPlayer.get(switchTargetPlayerId),
-      discardedRoundIds: discardedRoundIdsRef.current
+      discardedRoundIds: discardedRoundIdsRef.current,
     });
     if (!nextRound) {
       try {
-        await generateRounds({ sessionId: minigames.session.id, count: minigames.players.length }).unwrap();
+        await generateRounds({
+          sessionId: minigames.session.id,
+          count: minigames.players.length,
+        }).unwrap();
       } catch (error) {
         if (handlePromptExhaustionError(error)) {
           setSwitchDialogOpen(false);
@@ -1013,14 +1130,20 @@ export const MinigamePlayPage = () => {
       }
       const refreshed = await fetchMinigameState(minigames.session.id).unwrap();
       dispatch(setMinigameState(refreshed));
-      const refreshedCompletedRounds = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
+      const refreshedCompletedRounds = refreshed.results.reduce<
+        Map<string, Set<string>>
+      >((acc, result) => {
         const set = acc.get(result.player_id) ?? new Set<string>();
         set.add(result.round_id);
         acc.set(result.player_id, set);
         return acc;
       }, new Map());
-      const refreshedExampleIds = refreshed.results.reduce<Map<string, Set<string>>>((acc, result) => {
-        const round = refreshed.rounds.find((entry) => entry.id === result.round_id);
+      const refreshedExampleIds = refreshed.results.reduce<
+        Map<string, Set<string>>
+      >((acc, result) => {
+        const round = refreshed.rounds.find(
+          (entry) => entry.id === result.round_id,
+        );
         if (!round) return acc;
         const set = acc.get(result.player_id) ?? new Set<string>();
         set.add(roundExampleKey(round));
@@ -1032,7 +1155,7 @@ export const MinigamePlayPage = () => {
         playerId: switchTargetPlayerId,
         playedExampleIds: refreshedExampleIds.get(switchTargetPlayerId),
         completedRoundIds: refreshedCompletedRounds.get(switchTargetPlayerId),
-        discardedRoundIds: discardedRoundIdsRef.current
+        discardedRoundIds: discardedRoundIdsRef.current,
       });
     }
     dispatch(setCurrentRoundId(nextRound?.id));
@@ -1080,7 +1203,10 @@ export const MinigamePlayPage = () => {
             dispatch(resetMinigame());
             resetLocalState();
           }}
-          onNewPlayer={() => setNewPlayerOpen(true)}
+          onNewPlayer={() => {
+            controller.abortTurn("new-player-dialog");
+            setNewPlayerOpen(true);
+          }}
           onRedraw={handleRedraw}
           canRedraw={canRedraw}
           promptExhaustedMessage={promptExhaustedMessage}
@@ -1118,12 +1244,31 @@ export const MinigamePlayPage = () => {
             dispatch(resetMinigame());
             resetLocalState();
           }}
-          onNewPlayer={() => setNewPlayerOpen(true)}
+          onNewPlayer={() => {
+            controller.abortTurn("new-player-dialog");
+            setNewPlayerOpen(true);
+          }}
           onRedraw={handleRedraw}
           canRedraw={canRedraw}
           promptExhaustedMessage={promptExhaustedMessage}
           fullscreen={fullscreen}
         />
+      )}
+
+      {endGameError && (
+        <div
+          role="alert"
+          className="fixed bottom-5 left-1/2 z-[54] w-[min(92vw,34rem)] -translate-x-1/2 rounded-2xl border border-rose-300/30 bg-slate-950/95 p-4 text-sm text-rose-100 shadow-2xl"
+        >
+          <p>{endGameError}</p>
+          <button
+            type="button"
+            onClick={() => void endGame()}
+            className="mt-3 rounded-full border border-rose-200/30 bg-rose-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-rose-50 hover:border-rose-100/60"
+          >
+            {t("minigameUi.retryEndSession")}
+          </button>
+        </div>
       )}
 
       <GameSelectModal
@@ -1146,7 +1291,10 @@ export const MinigamePlayPage = () => {
         players={minigames.players}
         onClose={handleFinalReviewClose}
       />
-      <EndGameLoadingOverlay open={endGamePending} onReturnToHub={handleReturnToHub} />
+      <EndGameLoadingOverlay
+        open={endGamePending}
+        onReturnToHub={handleReturnToHub}
+      />
       <EndGameResultsOverlay
         open={endGameOpen}
         mode={mode ?? "ffa"}
@@ -1175,7 +1323,10 @@ export const MinigamePlayPage = () => {
       />
       <SwitchPlayerConfirmDialog
         open={switchDialogOpen}
-        playerName={minigames.players.find((player) => player.id === switchTargetPlayerId)?.name}
+        playerName={
+          minigames.players.find((player) => player.id === switchTargetPlayerId)
+            ?.name
+        }
         onCancel={() => {
           setSwitchDialogOpen(false);
           setSwitchTargetPlayerId(null);
@@ -1186,12 +1337,14 @@ export const MinigamePlayPage = () => {
         <VersusIntroOverlay
           open={tdmController.introOpen}
           leftName={
-            minigames.players.find((player) => player.id === currentRound.player_a_id)?.name ??
-            "Player A"
+            minigames.players.find(
+              (player) => player.id === currentRound.player_a_id,
+            )?.name ?? t("minigameUi.playerA")
           }
           rightName={
-            minigames.players.find((player) => player.id === currentRound.player_b_id)?.name ??
-            "Player B"
+            minigames.players.find(
+              (player) => player.id === currentRound.player_b_id,
+            )?.name ?? t("minigameUi.playerB")
           }
           leftAccent="rgba(45,212,191,0.65)"
           rightAccent="rgba(244,63,94,0.65)"

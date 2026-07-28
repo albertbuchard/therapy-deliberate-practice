@@ -88,6 +88,7 @@ def test_faster_whisper_load_applies_the_pinned_revision(monkeypatch, tmp_path) 
                 "device": "auto",
                 "compute_type": "default",
                 "revision": model_stt_faster_whisper.SPEC["backend"]["revision"],
+                "download_root": str(tmp_path),
             },
         )
     ]

@@ -7,6 +7,7 @@ export type EnvBindings = {
   ADMIN_EMAILS?: string;
   ADMIN_GROUPS?: string;
   CF_ACCESS_AUD?: string;
+  CF_ACCESS_ISSUER?: string;
   BYPASS_ADMIN_AUTH?: string;
   DEV_ADMIN_TOKEN?: string;
   ENV?: string;
@@ -35,6 +36,7 @@ export type RuntimeEnv = {
   adminEmails: string[];
   adminGroups: string[];
   cfAccessAud: string;
+  cfAccessIssuer: string;
   bypassAdminAuth: boolean;
   devAdminToken: string;
   environment: string;
@@ -85,6 +87,7 @@ export const resolveEnv = (bindings: EnvBindings): RuntimeEnv => ({
   adminEmails: parseCsv(bindings.ADMIN_EMAILS),
   adminGroups: parseCsv(bindings.ADMIN_GROUPS),
   cfAccessAud: bindings.CF_ACCESS_AUD ?? "",
+  cfAccessIssuer: bindings.CF_ACCESS_ISSUER ?? "",
   bypassAdminAuth: bindings.BYPASS_ADMIN_AUTH === "true",
   devAdminToken: bindings.DEV_ADMIN_TOKEN ?? "",
   environment: bindings.ENV ?? "production",

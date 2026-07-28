@@ -10,11 +10,14 @@ import { SignJWT } from "jose";
 import { createApiApp } from "../src/app";
 import { ensureSchema } from "../src/db/init";
 import { resolveEnv } from "../src/env";
+import { MINIGAME_LIMITS } from "../src/services/minigameLimits";
 import {
   attempts,
   minigamePlayers,
+  minigameRoundResults,
   minigameRounds,
   minigameSessions,
+  minigameSubmissionClaims,
   taskCriteria,
   taskExamples,
   tasks,
@@ -229,6 +232,226 @@ test("local practice is validated, private in history, and safely committed to a
     assert.equal(unpublishedResponse.status, 404);
 
     await db.update(tasks).set({ is_published: true });
+    const oversizedAudioHeaders = {
+      ...userOneHeaders,
+      "content-length": String(24 * 1024 * 1024 + 1),
+    };
+    assert.equal(
+      (
+        await app.request("/api/v1/practice/run", {
+          method: "POST",
+          headers: oversizedAudioHeaders,
+          body: "{}",
+        })
+      ).status,
+      413,
+    );
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/minigames/sessions/missing/rounds/missing/submit",
+          {
+            method: "POST",
+            headers: oversizedAudioHeaders,
+            body: "{}",
+          },
+        )
+      ).status,
+      413,
+    );
+    assert.equal(
+      (
+        await app.request("/api/v1/practice/local/prepare", {
+          method: "POST",
+          headers: {
+            ...userOneHeaders,
+            "content-length": String(256 * 1024 + 1),
+          },
+          body: "{}",
+        })
+      ).status,
+      413,
+    );
+    assert.equal(
+      (
+        await app.request("/api/v1/practice/local/commit", {
+          method: "POST",
+          headers: {
+            ...userOneHeaders,
+            "content-length": String(2 * 1024 * 1024 + 1),
+          },
+          body: "{}",
+        })
+      ).status,
+      413,
+    );
+    const oversizedSettings = await app.request("/api/v1/minigames/sessions", {
+      method: "POST",
+      headers: userOneHeaders,
+      body: JSON.stringify({
+        game_type: "tdm",
+        visibility_mode: "normal",
+        task_selection: {
+          strategy: "manual",
+          task_ids: ["task-1"],
+          shuffle: true,
+          seed: "limits",
+        },
+        settings: {
+          rounds_per_player: MINIGAME_LIMITS.roundsPerPlayer + 1,
+        },
+      }),
+    });
+    assert.equal(oversizedSettings.status, 400);
+    const oversizedSelectionValue = await app.request(
+      "/api/v1/minigames/sessions",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          game_type: "ffa",
+          visibility_mode: "normal",
+          task_selection: {
+            strategy: "manual",
+            task_ids: [
+              "x".repeat(MINIGAME_LIMITS.selectionValueLength + 1),
+            ],
+          },
+          settings: { rounds_per_player: 1 },
+        }),
+      },
+    );
+    assert.equal(oversizedSelectionValue.status, 400);
+    const oversizedSessionBody = await app.request(
+      "/api/v1/minigames/sessions",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          game_type: "ffa",
+          visibility_mode: "normal",
+          task_selection: {
+            strategy: "manual",
+            task_ids: ["task-1"],
+            seed: "x".repeat(MINIGAME_LIMITS.mutationBodyBytes),
+          },
+          settings: { rounds_per_player: 1 },
+        }),
+      },
+    );
+    assert.equal(oversizedSessionBody.status, 413);
+
+    const boundedSessionResponse = await app.request(
+      "/api/v1/minigames/sessions",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          game_type: "ffa",
+          visibility_mode: "normal",
+          task_selection: {
+            strategy: "manual",
+            task_ids: ["task-1"],
+            shuffle: true,
+            seed: "limits-valid",
+          },
+          settings: { rounds_per_player: 1 },
+        }),
+      },
+    );
+    assert.equal(boundedSessionResponse.status, 200);
+    const boundedSession = (await boundedSessionResponse.json()) as {
+      session_id: string;
+    };
+    const oversizedTeamName = await app.request(
+      `/api/v1/minigames/sessions/${boundedSession.session_id}/teams`,
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          teams: [
+            {
+              name: "x".repeat(MINIGAME_LIMITS.teamNameLength + 1),
+              color: "#000",
+            },
+          ],
+        }),
+      },
+    );
+    assert.equal(oversizedTeamName.status, 400);
+    const oversizedMutationBody = await app.request(
+      `/api/v1/minigames/sessions/${boundedSession.session_id}/players`,
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          players: [
+            {
+              name: "Player",
+              avatar: "x".repeat(MINIGAME_LIMITS.mutationBodyBytes),
+              team_id: null,
+            },
+          ],
+        }),
+      },
+    );
+    assert.equal(oversizedMutationBody.status, 413);
+    const oversizedPlayers = await app.request(
+      `/api/v1/minigames/sessions/${boundedSession.session_id}/players`,
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          players: Array.from(
+            { length: MINIGAME_LIMITS.players + 1 },
+            (_, index) => ({
+              name: `Player ${index}`,
+              avatar: "avatar",
+              team_id: null,
+            }),
+          ),
+        }),
+      },
+    );
+    assert.equal(oversizedPlayers.status, 400);
+    const malformedGenerateBody = await app.request(
+      `/api/v1/minigames/sessions/${boundedSession.session_id}/rounds/generate`,
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: "{",
+      },
+    );
+    assert.equal(malformedGenerateBody.status, 400);
+    const roundsAfterMalformedGenerate = await db
+      .select()
+      .from(minigameRounds)
+      .where(eq(minigameRounds.session_id, boundedSession.session_id));
+    assert.equal(roundsAfterMalformedGenerate.length, 0);
+    const oversizedGenerateBody = await app.request(
+      `/api/v1/minigames/sessions/${boundedSession.session_id}/rounds/generate`,
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          count: 1,
+          padding: "x".repeat(MINIGAME_LIMITS.mutationBodyBytes),
+        }),
+      },
+    );
+    assert.equal(oversizedGenerateBody.status, 413);
+    const oversizedRoundBatch = await app.request(
+      `/api/v1/minigames/sessions/${boundedSession.session_id}/rounds/generate`,
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          count: MINIGAME_LIMITS.ffaRoundBatch + 1,
+        }),
+      },
+    );
+    assert.equal(oversizedRoundBatch.status, 400);
+
     const prepareResponse = await app.request("/api/v1/practice/local/prepare", {
       method: "POST",
       headers: userOneHeaders,
@@ -275,7 +498,16 @@ test("local practice is validated, private in history, and safely committed to a
     const cloudPrepareResponse = await app.request("/api/v1/practice/local/prepare", {
       method: "POST",
       headers: userOneHeaders,
-      body: JSON.stringify({ task_id: "task-1", example_id: "example-1" })
+      body: JSON.stringify({
+        task_id: "task-1",
+        example_id: "example-1",
+        input_mode: "audio",
+        transcript: {
+          text: "A cloud-evaluated local transcript.",
+          model: "local-stt",
+          duration_ms: 100
+        }
+      })
     });
     assert.equal(cloudPrepareResponse.status, 200);
     const cloudPreparation = (await cloudPrepareResponse.json()) as {
@@ -474,56 +706,53 @@ test("local practice is validated, private in history, and safely committed to a
     );
     assert.equal(standardAttemptReuse.status, 409);
 
+    const scopedPrepareBody = {
+      task_id: "task-1",
+      example_id: "example-1",
+      minigame: {
+        session_id: "game-1",
+        round_id: "round-1",
+        player_id: "player-1"
+      }
+    };
     const scopedPrepareResponse = await app.request("/api/v1/practice/local/prepare", {
       method: "POST",
       headers: userOneHeaders,
-      body: JSON.stringify({
-        task_id: "task-1",
-        example_id: "example-1",
-        minigame: {
-          session_id: "game-1",
-          round_id: "round-1",
-          player_id: "player-1"
-        }
-      })
+      body: JSON.stringify(scopedPrepareBody)
     });
     assert.equal(scopedPrepareResponse.status, 200);
     const scopedPreparation = (await scopedPrepareResponse.json()) as {
       attemptId: string;
     };
+    const retriedScopedPrepareResponse = await app.request(
+      "/api/v1/practice/local/prepare",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify(scopedPrepareBody)
+      }
+    );
+    assert.equal(retriedScopedPrepareResponse.status, 200);
+    const retriedScopedPreparation =
+      (await retriedScopedPrepareResponse.json()) as { attemptId: string };
+    assert.equal(
+      retriedScopedPreparation.attemptId,
+      scopedPreparation.attemptId
+    );
+    const submissionClaims = await db.select().from(minigameSubmissionClaims);
+    assert.equal(submissionClaims.length, 1);
+    assert.equal(submissionClaims[0]?.round_id, "round-1");
+    assert.equal(submissionClaims[0]?.player_id, "player-1");
+    assert.equal(
+      submissionClaims[0]?.attempt_id,
+      scopedPreparation.attemptId
+    );
     const scopedCommitResponse = await app.request("/api/v1/practice/local/commit", {
       method: "POST",
       headers: userOneHeaders,
       body: JSON.stringify(buildLocalCommitBody(scopedPreparation.attemptId))
     });
     assert.equal(scopedCommitResponse.status, 200);
-    await db.insert(minigameRounds).values({
-      id: "round-2",
-      session_id: "game-1",
-      position: 1,
-      task_id: "task-1",
-      example_id: "example-1",
-      player_a_id: "player-1",
-      player_b_id: null,
-      team_a_id: null,
-      team_b_id: null,
-      status: "active",
-      started_at: now,
-      completed_at: null
-    });
-    const wrongRoundResponse = await app.request(
-      "/api/v1/minigames/sessions/game-1/rounds/round-2/commit-local",
-      {
-        method: "POST",
-        headers: userOneHeaders,
-        body: JSON.stringify({
-          player_id: "player-1",
-          attempt_id: scopedPreparation.attemptId
-        })
-      }
-    );
-    assert.equal(wrongRoundResponse.status, 409);
-
     const finalizeRequest = {
       method: "POST",
       headers: userOneHeaders,
@@ -568,6 +797,37 @@ test("local practice is validated, private in history, and safely committed to a
     assert.equal(state.results[0]?.score_trust, "local_unverified");
 
     await db.insert(minigameRounds).values({
+      id: "round-2",
+      session_id: "game-1",
+      position: 1,
+      task_id: "task-1",
+      example_id: "example-1",
+      player_a_id: "player-1",
+      player_b_id: null,
+      team_a_id: null,
+      team_b_id: null,
+      status: "active",
+      started_at: now,
+      completed_at: null
+    });
+    const wrongRoundResponse = await app.request(
+      "/api/v1/minigames/sessions/game-1/rounds/round-2/commit-local",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          player_id: "player-1",
+          attempt_id: scopedPreparation.attemptId
+        })
+      }
+    );
+    assert.equal(wrongRoundResponse.status, 409);
+    await db
+      .update(minigameRounds)
+      .set({ status: "completed", completed_at: Date.now() })
+      .where(eq(minigameRounds.id, "round-2"));
+
+    await db.insert(minigameRounds).values({
       id: "round-cloud",
       session_id: "game-1",
       position: 2,
@@ -589,6 +849,12 @@ test("local practice is validated, private in history, and safely committed to a
         body: JSON.stringify({
           task_id: "task-1",
           example_id: "example-1",
+          input_mode: "audio",
+          transcript: {
+            text: "A cloud-evaluated local transcript.",
+            model: "local-stt",
+            duration_ms: 100
+          },
           minigame: {
             session_id: "game-1",
             round_id: "round-cloud",
@@ -643,6 +909,171 @@ test("local practice is validated, private in history, and safely committed to a
     assert.equal(
       cloudMinigameAttempt?.model_info?.provider?.llm?.kind,
       "openai"
+    );
+
+    await db.insert(minigameRounds).values({
+      id: "round-skip",
+      session_id: "game-1",
+      position: 3,
+      task_id: "task-1",
+      example_id: "example-1",
+      player_a_id: "player-1",
+      player_b_id: null,
+      team_a_id: null,
+      team_b_id: null,
+      status: "active",
+      started_at: now,
+      completed_at: null
+    });
+    const poisonedClaimResponse = await app.request(
+      "/api/v1/minigames/sessions/game-1/rounds/round-skip/submit",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          player_id: "player-1",
+          attempt_id: preparation.attemptId,
+          transcript_text: "An ordinary attempt must not claim this round.",
+          mode: "openai_only"
+        })
+      }
+    );
+    assert.equal(poisonedClaimResponse.status, 409);
+    assert.equal(
+      (
+        await db
+          .select()
+          .from(minigameSubmissionClaims)
+          .where(eq(minigameSubmissionClaims.round_id, "round-skip"))
+      ).length,
+      0
+    );
+    const skipResponse = await app.request(
+      "/api/v1/minigames/sessions/game-1/rounds/round-skip/submit",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          player_id: "player-1",
+          transcript_text: "A cloud-evaluated local transcript.",
+          skip_scoring: true,
+          mode: "openai_only"
+        })
+      }
+    );
+    assert.equal(skipResponse.status, 200);
+    const skipped = (await skipResponse.json()) as { attemptId: string };
+    const [skippedAttempt] = await db
+      .select({ completed_at: attempts.completed_at })
+      .from(attempts)
+      .where(eq(attempts.id, skipped.attemptId));
+    assert.equal(skippedAttempt?.completed_at, null);
+    assert.equal(
+      (
+        await db
+          .select()
+          .from(minigameRoundResults)
+          .where(eq(minigameRoundResults.round_id, "round-skip"))
+      ).length,
+      0
+    );
+
+    const skipOriginalFetch = globalThis.fetch;
+    try {
+      installOpenAiEvaluationMock(skipped.attemptId);
+      const scoreAfterSkipResponse = await app.request(
+        "/api/v1/minigames/sessions/game-1/rounds/round-skip/submit",
+        {
+          method: "POST",
+          headers: userOneHeaders,
+          body: JSON.stringify({
+            player_id: "player-1",
+            attempt_id: skipped.attemptId,
+            transcript_text: "A cloud-evaluated local transcript.",
+            mode: "openai_only"
+          })
+        }
+      );
+      assert.equal(scoreAfterSkipResponse.status, 200);
+      const scoredAfterSkip =
+        (await scoreAfterSkipResponse.json()) as { attemptId: string };
+      assert.equal(scoredAfterSkip.attemptId, skipped.attemptId);
+    } finally {
+      globalThis.fetch = skipOriginalFetch;
+    }
+    const [completedSkippedAttempt] = await db
+      .select({ completed_at: attempts.completed_at })
+      .from(attempts)
+      .where(eq(attempts.id, skipped.attemptId));
+    assert.equal(typeof completedSkippedAttempt?.completed_at, "number");
+    const completedRetryResponse = await app.request(
+      "/api/v1/minigames/sessions/game-1/rounds/round-skip/submit",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          player_id: "player-1",
+          attempt_id: skipped.attemptId,
+          transcript_text: "A retry must return the stored completed result.",
+          mode: "openai_only"
+        })
+      }
+    );
+    assert.equal(completedRetryResponse.status, 200);
+    const completedRetry =
+      (await completedRetryResponse.json()) as { attemptId: string };
+    assert.equal(completedRetry.attemptId, skipped.attemptId);
+    const lostResponseRetry = await app.request(
+      "/api/v1/minigames/sessions/game-1/rounds/round-skip/submit",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          player_id: "player-1",
+          transcript_text: "A lost response retry omits the attempt identifier.",
+          mode: "openai_only"
+        })
+      }
+    );
+    assert.equal(lostResponseRetry.status, 200);
+    const recoveredLostResponse =
+      (await lostResponseRetry.json()) as { attemptId: string };
+    assert.equal(recoveredLostResponse.attemptId, skipped.attemptId);
+
+    await db
+      .update(minigameRounds)
+      .set({ status: "active", completed_at: null })
+      .where(eq(minigameRounds.id, "round-skip"));
+    const seededResultReplay = await app.request(
+      "/api/v1/minigames/sessions/game-1/rounds/round-skip/submit",
+      {
+        method: "POST",
+        headers: userOneHeaders,
+        body: JSON.stringify({
+          player_id: "player-1",
+          transcript_text: "Replay an accepted result after finalization was lost.",
+          mode: "openai_only"
+        })
+      }
+    );
+    assert.equal(seededResultReplay.status, 200);
+    const [reFinalizedRound] = await db
+      .select({
+        status: minigameRounds.status,
+        completed_at: minigameRounds.completed_at
+      })
+      .from(minigameRounds)
+      .where(eq(minigameRounds.id, "round-skip"));
+    assert.equal(reFinalizedRound?.status, "completed");
+    assert.equal(typeof reFinalizedRound?.completed_at, "number");
+    assert.equal(
+      (
+        await db
+          .select()
+          .from(minigameRoundResults)
+          .where(eq(minigameRoundResults.round_id, "round-skip"))
+      ).length,
+      1
     );
   } finally {
     sqlite.close();

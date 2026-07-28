@@ -185,6 +185,7 @@ input:focus-visible,
 }
 
 .btn {
+  min-height: 44px;
   padding: 10px 16px;
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -383,6 +384,53 @@ input:focus-visible,
   gap: 12px;
   flex-wrap: wrap;
   z-index: 1;
+}
+
+.locale-control {
+  display: grid;
+  gap: 4px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.locale-control select {
+  min-height: 44px;
+  max-width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 8px 30px 8px 10px;
+}
+
+.storage-card {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.storage-paths {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 0;
+}
+
+.storage-paths > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.storage-paths dt {
+  color: #94a3b8;
+}
+
+.storage-paths dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .hero-steps {
@@ -601,6 +649,7 @@ input:focus-visible,
 }
 
 .icon-btn {
+  min-height: 44px;
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -706,6 +755,17 @@ input:focus-visible,
   .header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .hero-actions,
+  .locale-control,
+  .locale-control select {
+    width: 100%;
+  }
+
+  .storage-paths > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
 
   .simple-step {

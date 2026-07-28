@@ -77,12 +77,12 @@ export const PatientCanvas = ({
 
       stage.addChild(emotionGlow, body, face, eyes, moodText);
 
-      let t = 0;
+      let animationTime = 0;
       app.ticker.add(() => {
-        t += 0.02;
-        eyes.y = 140 + Math.sin(t) * 2;
-        face.y = Math.sin(t * 0.7) * 3;
-        body.y = Math.sin(t * 0.4) * 2;
+        animationTime += 0.02;
+        eyes.y = 140 + Math.sin(animationTime) * 2;
+        face.y = Math.sin(animationTime * 0.7) * 3;
+        body.y = Math.sin(animationTime * 0.4) * 2;
       });
     };
 

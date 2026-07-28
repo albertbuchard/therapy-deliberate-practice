@@ -76,6 +76,9 @@ test("GET /api/v1/tasks/:id includes interaction examples when requested", async
           therapist_text: "I hear how tender that feels, and I care about you. I can offer support here, and we can also build your own steadying tools so you feel held between sessions. Let's name the need and pick one small self-soothing step you can take today."
         }
       ]
+    },
+    task_overrides: {
+      is_published: true
     }
   };
 

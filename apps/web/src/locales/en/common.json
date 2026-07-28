@@ -1,4 +1,29 @@
 {
+  "route": {
+    "loading": "Loading…"
+  },
+  "drawer": {
+    "close": "Close drawer",
+    "navigation": "Navigation drawer"
+  },
+  "localRuntimeErrors": {
+    "loopbackUrl": "The local runtime URL must use http://localhost or http://127.0.0.1.",
+    "originOnly": "The local runtime URL cannot contain credentials, a path, a query, or a fragment.",
+    "urlMissing": "The local runtime URL is missing.",
+    "sameGateway": "Speech recognition and evaluation must use the same local gateway URL.",
+    "pairingIncomplete": "The pairing key is incomplete.",
+    "wrongService": "A different service is using this port.",
+    "incompatibleVersion": "This local runtime version is not compatible with the website.",
+    "invalidHealth": "The local runtime returned an invalid health response.",
+    "incompatibleDetails": "The local runtime returned incompatible connection details.",
+    "emptyTranscript": "The local speech model returned an empty transcript.",
+    "emptyEvaluation": "The local language model returned an empty evaluation.",
+    "invalidEvaluationJson": "The local language model returned invalid JSON.",
+    "invalidEvaluationSchema": "The local evaluation did not match the required schema.",
+    "pairAgain": "Pair this browser with the local runtime again.",
+    "cancelled": "The local model request was cancelled. Completed earlier work was preserved.",
+    "timeout": "The local runtime timed out. Cancellation was requested; retry when the model is ready."
+  },
   "appShell": {
     "brand": "Deliberate Practice",
     "title": "Therapy Studio",
@@ -115,6 +140,11 @@
       "title": "No tasks match your filters.",
       "subtitle": "Try clearing some filters or adjusting your search terms.",
       "clear": "Clear filters"
+    },
+    "errorState": {
+      "title": "We couldn't load the task library.",
+      "subtitle": "Check your connection and try again.",
+      "retry": "Try again"
     },
     "loading": "Loading tasks...",
     "difficulty": "Difficulty {{difficulty}}",
@@ -259,11 +289,9 @@
       "saved": "Pairing key saved in this browser.",
       "pairAgain": "The pairing key is missing or no longer valid. Copy the current key from the desktop app and pair this browser again."
     },
-    "storeAudio": {
-      "label": "Store audio recordings",
-      "helper": "Save audio clips alongside attempts for future review.",
-      "enabled": "Enabled",
-      "disabled": "Disabled"
+    "retention": {
+      "title": "Attempt data",
+      "description": "Audio recordings are not retained. Your response transcript and evaluation are stored with the attempt so you can review your progress."
     },
     "actions": {
       "save": "Save settings",
@@ -308,6 +336,8 @@
     },
     "localDiagnostics": {
       "title": "Local diagnostics",
+      "missingUrl": "Missing URL for the local runtime.",
+      "invalidUrl": "Invalid local runtime URL: {{url}}",
       "subtitle": "Run health checks against your Local Runtime Suite without leaving Settings.",
       "missingConfig": "Add a Local AI URL (or endpoint overrides) above to unlock diagnostics.",
       "waiting": "Awaiting first check.",
@@ -358,6 +388,11 @@
     }
   },
   "help": {
+    "callout": {
+      "tip": "Tip",
+      "note": "Note",
+      "warning": "Warning"
+    },
     "nav": {
       "gettingStarted": {
         "title": "Getting started",
@@ -547,7 +582,7 @@
         "title": "Data + privacy",
         "subtitle": "High-level posture and transparency.",
         "items": {
-          "audio": "Audio and transcripts are only stored if you enable session storage in Settings.",
+          "audio": "Audio recordings are not retained. Your response transcript and evaluation are stored with the attempt so you can review your progress.",
           "apiKeys": "API keys are stored securely and are never returned to the browser after saving.",
           "localInference": "Local inference keeps processing on your machine when you choose the local stack."
         }
@@ -635,7 +670,8 @@
         "ready": "Download",
         "pending": "No verified release",
         "empty": "No verified desktop release has been published yet.",
-        "error": "Unable to check verified GitHub Releases. Try again later."
+        "error": "Unable to check verified GitHub Releases. Try again later.",
+        "requestFailed": "The verified GitHub Release request failed with status {{status}}."
       },
       "catalog": {
         "title": "Available models",
@@ -643,7 +679,18 @@
         "platformNote": "Intel macOS currently supports Faster Whisper speech recognition only. The interface will not offer an incompatible language model.",
         "searchPlaceholder": "Search by name, endpoint, or provider",
         "copy": "Copy ID",
-        "empty": "No models match this search yet."
+        "empty": "No models match this search yet.",
+        "endpoint": "Endpoint",
+        "backend": "Backend",
+        "platform": "Platform",
+        "acceleration": "Acceleration",
+        "resources": "Resources",
+        "ram": "{{value}} GB RAM",
+        "vram": "{{value}} GB VRAM",
+        "disk": "{{value}} GB disk",
+        "constraints": "Constraints",
+        "inputLimit": "{{value}} MB input",
+        "tokenLimit": "{{value}} tokens"
       }
     }
   },
@@ -799,12 +846,93 @@
   },
   "practice": {
     "title": "Practice session",
+    "loadingExercise": "Loading exercise…",
+    "baseDifficulty": "Base difficulty: {{difficulty}}",
+    "taskCriteria": "Task criteria",
+    "noCriteria": "No criteria available.",
+    "overallScore": "Overall score",
+    "overallScoreValue": "Overall {{score}}/4",
+    "onTrack": "On track.",
+    "needsRefinement": "Needs refinement.",
+    "presentationMode": {
+      "title": "Practice mode",
+      "text": "Text",
+      "audio": "Audio",
+      "autoPlay": "Auto-play patient audio",
+      "hideText": "Hide patient text (audio only)"
+    },
+    "sessions": {
+      "title": "Session history",
+      "label": "Session {{id}}",
+      "needsReset": "Needs reset",
+      "completed": "Completed",
+      "inProgress": "In progress",
+      "progress": "{{completed}}/{{total}} examples",
+      "loading": "Loading sessions…",
+      "empty": "No sessions yet.",
+      "corrupted": "Some sessions are missing examples. Delete them to generate a fresh session.",
+      "helper": "Browse all sessions or start a new one.",
+      "new": "New session",
+      "missingExamples": "Missing examples. Start a new session to continue practising.",
+      "delete": "Delete"
+    },
+    "patientPrompt": "Patient prompt",
+    "patientAudio": "Patient audio",
+    "previousExample": "Previous example",
+    "previousPatientTurn": "Previous patient turn",
+    "nextPatientTurn": "Next patient turn",
+    "showTranscript": "Show transcript",
+    "hideTranscript": "Hide transcript",
+    "listening": "Listening…",
+    "patientSpeaking": "Patient speaking…",
+    "warmingAudio": "Warming audio pack",
+    "audioProgress": "{{ready}}/{{total}} ready · {{percent}}%",
+    "listenBeforeRecording": "Listen to the patient before recording.",
     "loadingScenario": "Loading scenario...",
     "responseLabel": "Your response",
+    "inputMode": {
+      "legend": "How would you like to respond?",
+      "spoken": {
+        "label": "Speak",
+        "helper": "Record your response, then review the transcript."
+      },
+      "typed": {
+        "label": "Type",
+        "helper": "Write your response without recording audio."
+      }
+    },
+    "typed": {
+      "label": "Written response",
+      "placeholder": "Write what you would say to the patient…",
+      "helper": "If evaluation fails, a temporary draft stays on this device so you can retry. It is cleared after success or session deletion and expires within 24 hours.",
+      "submit": "Evaluate written response",
+      "required": "Write a response before requesting evaluation.",
+      "localUnavailable": "Local evaluation is unavailable: {{detail}}",
+      "localFallback": "The local evaluator was unavailable, so OpenAI evaluated this written response."
+    },
+    "microphone": {
+      "allow": "Allow microphone access in your browser or device settings.",
+      "connect": "Connect a microphone and try again.",
+      "closeOtherApps": "Close other apps using the microphone and try again.",
+      "retryAvailable": "Try again once the microphone is available.",
+      "differentBrowser": "Try a different browser or device.",
+      "checkSettings": "Try again or check your browser settings.",
+      "secureContext": "Microphone access requires HTTPS or localhost.",
+      "openSecurely": "Open the site over HTTPS or localhost.",
+      "unavailable": "Microphone access is unavailable in this browser.",
+      "blocked": "Microphone blocked. Open the site settings and allow microphone access. On iOS, you may also need to allow microphone access in Safari settings.",
+      "generic": "Microphone error. Please try again."
+    },
     "startRecording": "Start recording",
     "stopRecording": "Stop recording",
     "runEvaluation": "Run evaluation",
     "evaluating": "Evaluating...",
+    "status": {
+      "transcribing": "Transcribing",
+      "evaluationRunning": "Evaluation running",
+      "evaluationIssue": "Evaluation issue",
+      "issue": "Issue"
+    },
     "transcriptTitle": "Transcript",
     "copyTranscript": "Copy transcript",
     "transcriptPlaceholder": "Your transcript will appear here after evaluation.",
@@ -815,7 +943,9 @@
     "localScoreBadge": "Local · unverified",
     "localScoreNotice": "This score was produced with your local runtime. It stays in your personal history and is excluded from public rankings.",
     "localRuntime": {
-      "pairAgain": "Your local pairing key is missing or no longer valid. Open Settings and pair this browser with the desktop runtime again."
+      "pairAgain": "Your local pairing key is missing or no longer valid. Open Settings and pair this browser with the desktop runtime again.",
+      "cloudFallback": "The local runtime was unavailable, so this attempt used OpenAI.",
+      "spokenCloudFallback": "The local evaluator was unavailable, so OpenAI evaluated this locally transcribed attempt."
     },
     "criterionLabel": "Criterion {{id}}",
     "scoreLabel": "Score {{score}} / 4",
@@ -827,7 +957,19 @@
       "readAudio": "Unable to read audio data.",
       "noAudio": "No audio captured. Please record again.",
       "evaluateFailed": "Unable to evaluate response. Please try again.",
-      "sessionFailed": "Unable to start a practice session. Please refresh."
+      "sessionFailed": "Unable to start a practice session. Please refresh.",
+      "deleteSession": "Unable to delete this session. Please try again.",
+      "waitForPatient": "Wait for the patient audio to finish before recording.",
+      "recordingUnsupported": "Audio recording is not supported in this browser.",
+      "transcriptionMissing": "The transcription is missing. Please try again.",
+      "localRuntimeStatus": "The local runtime is {{status}}.",
+      "localRuntimeUnavailable": "The local runtime is unavailable: {{detail}}",
+      "localTranscriptionFailed": "Local transcription failed: {{detail}}",
+      "localEvaluationFailed": "Local evaluation failed: {{detail}}",
+      "microphoneAccess": "Microphone access failed. Please try again.",
+      "transcriptionFailed": "Transcription failed. Please try again.",
+      "localContextExpired": "This local attempt must be recorded again because its private runtime context is no longer available.",
+      "patientAudioFetch": "Failed to fetch patient audio."
     }
   },
   "exercise": {
@@ -839,7 +981,263 @@
     "generalObjective": "General objective",
     "generalObjectiveEmpty": "No general objective set yet.",
     "criteria": "Criteria",
-    "exampleCounts": "Examples by difficulty"
+    "exampleCounts": "Examples by difficulty",
+    "answersTitle": "Example therapist answers",
+    "answersSubtitle": "These show what a strong response can look like.",
+    "patient": "Patient",
+    "therapist": "Therapist",
+    "noInteractionExamples": "No interaction examples yet. Check back soon for model answers."
+  },
+  "minigameHub": {
+    "kicker": "Minigames",
+    "title": "Minigame hub",
+    "subtitle": "Resume active matches, review past results, or launch a new session with a curated setup flow.",
+    "newGame": "New game",
+    "retry": "Retry",
+    "emptyTitle": "No minigame sessions yet",
+    "emptyDescription": "Start a new session to build your history and track how your matches evolve.",
+    "startGame": "Start a new game",
+    "deleteError": "We couldn’t delete that session. Please try again."
+  },
+  "minigameDetail": {
+    "notFound": "Session not found",
+    "loadError": "We couldn’t load that session. It may have been deleted.",
+    "back": "Back to hub",
+    "retry": "Retry",
+    "kicker": "Session detail",
+    "title": "Minigame results",
+    "subtitle": "Review final outcomes, leaderboard standings, and every round of play.",
+    "delete": "Delete session",
+    "winner": "Winner",
+    "score": "Score {{score}}",
+    "tabs": {
+      "overview": "Overview",
+      "leaderboard": "Leaderboard",
+      "rounds": "Rounds"
+    },
+    "summary": "Summary",
+    "summaryValue": "{{rounds}} rounds completed with {{players}} players.",
+    "deleteError": "We couldn’t delete that session. Please try again."
+  },
+  "minigameUi": {
+    "close": "Close",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "created": "Created",
+    "ended": "Ended",
+    "progress": "Progress",
+    "players": "Players",
+    "teams": "Teams",
+    "winner": "Winner",
+    "leaderboard": "Leaderboard",
+    "transcript": "Transcript",
+    "evaluation": "Evaluation",
+    "score": "Score",
+    "status": "Status",
+    "prompt": "Prompt",
+    "player": "Player",
+    "round": "Round",
+    "rounds": "Rounds",
+    "nextTurn": "Next turn",
+    "playerTurn": "Player turn",
+    "upNext": "Up next",
+    "done": "Done",
+    "queued": "Queued",
+    "active": "Active",
+    "all": "All",
+    "newest": "Newest",
+    "oldest": "Oldest",
+    "recentlyActive": "Recently active",
+    "sortSessions": "Sort sessions",
+    "resume": "Resume",
+    "view": "View",
+    "promptUnavailable": "Prompt unavailable",
+    "noTranscript": "No transcript captured.",
+    "noEvaluation": "No evaluation recorded.",
+    "teamDeathmatch": "Team Deathmatch",
+    "freeForAll": "Free For All",
+    "roundsRemaining": "{{count}} rounds remaining",
+    "switchBlocked": "Finish the current action to switch players.",
+    "switchTitle": "Switch turn?",
+    "switchDescription": "This will stop the current round and move the turn to {{player}}. No points will be awarded for the interrupted turn.",
+    "switch": "Switch",
+    "newPlayer": "New player",
+    "newPlayerDescription": "Add a challenger mid-session.",
+    "name": "Name",
+    "playerName": "Player name",
+    "avatar": "Avatar",
+    "create": "Create",
+    "taskBrief": "Task brief",
+    "criteria": "Criteria",
+    "criteriaPending": "Criteria details will appear shortly.",
+    "hide": "Hide",
+    "hideTranscript": "Hide transcript",
+    "escape": "Esc",
+    "versus": "VS",
+    "reviewEvaluations": "Review evaluations",
+    "locked": "Locked",
+    "sessionOverview": "Session overview",
+    "localUnverified": "Local · unverified",
+    "confirmDelete": "Confirm delete",
+    "removeSession": "Remove this session?",
+    "removeSessionDescription": "This will remove {{session}} from your history. You can’t undo this action.",
+    "deleteSession": "Delete session",
+    "endingLabel": "Ending game",
+    "endingKicker": "Game ending",
+    "endingTitle": "Wrapping up your session",
+    "endingDescription": "We’re saving results and preparing the final recap. You can return to the hub anytime.",
+    "backToHub": "Back to game hub",
+    "teamDeathmatchDescription": "Squad-based duels with a smart tournament schedule.",
+    "freeForAllDescription": "Jump in with any player, anytime. End when you’re ready.",
+    "chooseMode": "Choose your mode",
+    "chooseModeDescription": "Launch a round-based experience powered by the practice pipeline.",
+    "startSetup": "Start setup",
+    "teamsDescription": "Create teams and assign players.",
+    "playersDescription": "Add the participants for this match.",
+    "addTeam": "Add team",
+    "addPlayer": "Add player",
+    "numberedTeam": "Team {{number}}",
+    "numberedPlayer": "Player {{number}}",
+    "roundsPerPlayer": "Rounds per player",
+    "taskStrategy": "Task strategy",
+    "strategy": {
+      "manual": "Manual",
+      "random": "Random",
+      "filtered_random": "Filtered random"
+    },
+    "pickTasks": "Pick tasks",
+    "tags": "Tags",
+    "skillDomain": "Skill domain",
+    "shuffleEachRound": "Shuffle each round",
+    "shuffleDescription": "Re-randomize tasks between turns.",
+    "gameMode": "Game mode",
+    "visibilityValue": "Visibility: {{value}}",
+    "roundsPerPlayerValue": "Rounds per player: {{count}}",
+    "taskSelection": "Task selection",
+    "strategyValue": "Strategy: {{value}}",
+    "manualTasksValue": "Manual tasks: {{count}}",
+    "tagsValue": "Tags: {{value}}",
+    "domainsValue": "Domains: {{value}}",
+    "solo": "Solo",
+    "nowPlaying": "Now playing",
+    "nowUp": "Now up",
+    "waitSeconds": "WAIT {{seconds}}s",
+    "lateSeconds": "LATE {{seconds}}s",
+    "selectMode": "Select a mode to begin.",
+    "teamA": "Team A",
+    "teamB": "Team B",
+    "playerA": "Player A",
+    "playerB": "Player B",
+    "turn": "Turn",
+    "playerTurnValue": "{{player}}’s turn",
+    "noCompletedRounds": "No completed rounds yet.",
+    "numberedRound": "Round {{number}}",
+    "transcriptValue": "Transcript: {{value}}",
+    "evaluationDetails": "Evaluation details",
+    "localScoreNotice": "Local scores count in this private game, but never in the public leaderboard.",
+    "roundCount_one": "{{count}} round",
+    "roundCount_other": "{{count}} rounds",
+    "performanceRecap": "Performance recap",
+    "roundAverage": "Round average {{score}}/4",
+    "totalScore": "Total {{score}}",
+    "comparedWithLastRound": "{{delta}} compared with last round",
+    "criterionValue": "Criterion {{id}}",
+    "addNewPlayer": "Add new player",
+    "nextRound": "Next round",
+    "finalResults": "Final results",
+    "finalScoreboardLocked": "Final scoreboard locked",
+    "matchBreakdown": "Match breakdown",
+    "gameAnalysis": "Game analysis",
+    "finalLeaderboard": "Final leaderboard",
+    "final": "Final",
+    "nextSteps": "Next steps",
+    "nextStepsDescription": "Wrap the session, review highlights, and return to the dashboard when you are ready.",
+    "exitResults": "Exit results",
+    "launchMinigame": "Launch a minigame",
+    "endGame": "End game",
+    "newGame": "New game",
+    "redraw": "Redraw",
+    "allPromptsUsed": "All prompts used",
+    "promptExhausted": "You’ve used all available unique patient prompts for this session. Start a new game or broaden the task selection.",
+    "submissionFailed": "Submission failed. Please try again.",
+    "roundActivationFailed": "We couldn’t start this round. Check your connection and try again.",
+    "endSessionFailed": "We couldn’t end the game, so your session is still active. Check your connection and try again.",
+    "retryEndSession": "Try ending again",
+    "timeout": {
+      "transcript": "No response recorded.",
+      "summaryFeedback": "No response was recorded before the response window closed.",
+      "improveNext": "Respond within the response window.",
+      "patientReaction": "No response recorded."
+    },
+    "winner": {
+      "conjunction": "and",
+      "teamTie": "Teams {{names}} tie!",
+      "playerTie": "Players {{names}} tie!",
+      "topScore": "Top score {{score}}",
+      "scoreComparison": "{{top}} vs {{next}}",
+      "teamWins": "Team {{name}} wins!",
+      "playerWins": "Player {{name}} wins!"
+    },
+    "task": "Task",
+    "selectGameToPreview": "Select a game to preview tasks.",
+    "roundComplete": "Round complete",
+    "timingPenalty": "Timing penalty −{{score}}",
+    "viewDetails": "View details",
+    "stopAudio": "Stop audio",
+    "replayPatientAudio": "Replay patient audio",
+    "playPatientAudio": "Play patient audio",
+    "visibilityMode": "Visibility mode",
+    "timing": "Timing",
+    "playersAndTeams": "Players and teams",
+    "reviewAndStart": "Review and start",
+    "setup": "Setup",
+    "setupDescription": "Configure tasks, visibility, and players before launching.",
+    "responseTimer": "Response timer",
+    "responseTimerDescription": "Require a minimum delay after the patient finishes.",
+    "seconds": "seconds",
+    "secondsRange": "Enter 0.1–60 seconds",
+    "maxResponseDuration": "Maximum response duration",
+    "maxResponseDescription": "Limit how long recording can last.",
+    "back": "Back",
+    "next": "Next",
+    "startGame": "Start game",
+    "startingGame": "Starting game…",
+    "setupFailed": "We couldn’t start the game. Check your connection and try again; your setup has been kept.",
+    "record": "Record",
+    "stopRecording": "Stop",
+    "fullscreen": "Fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "replayPatientVoice": "Replay patient voice",
+    "playPatientVoice": "Play patient voice",
+    "stopVoice": "Stop voice",
+    "audioStatus": {
+      "idle": "Audio idle",
+      "generating": "Preparing voice…",
+      "downloading": "Downloading voice…",
+      "ready": "Ready to play",
+      "playing": "Patient speaking",
+      "blocked": "Tap to play",
+      "error": "Audio unavailable"
+    },
+    "currentTurn": "Current turn",
+    "visibility": {
+      "normal": {
+        "title": "Normal",
+        "description": "Task name and criteria remain visible during play."
+      },
+      "hard": {
+        "title": "Hard",
+        "description": "Task name stays visible; criteria remain hidden until review."
+      },
+      "extreme": {
+        "title": "Extreme",
+        "description": "Task name and criteria remain hidden until review."
+      }
+    },
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "noResultsYet": "No results yet",
+    "listening": "Listening…"
   },
   "admin": {
     "title": "Admin Library",
@@ -864,7 +1262,7 @@
       "manualAction": "Create manually",
       "parsedKicker": "Parsed text",
       "parsedTitle": "Start from parsed text",
-      "parsedDescription": "Paste free text or a source URL and review the parsed draft.",
+      "parsedDescription": "Paste source text and review the parsed draft.",
       "parsedAction": "Parse text"
     },
     "library": {
@@ -881,9 +1279,8 @@
     "tasksTitle": "Tasks",
     "createFromText": {
       "title": "Create from free text",
-      "subtitle": "Paste source text or provide a URL to parse.",
+      "subtitle": "Paste source text to parse.",
       "placeholderText": "Paste task text here",
-      "placeholderUrl": "Source URL (optional)",
       "parse": "Parse with OpenAI",
       "parsing": "Parsing...",
       "errorFallback": "Failed to parse"
@@ -907,7 +1304,9 @@
       "publishLabel": "Publish",
       "descriptionLabel": "Description",
       "generalObjectiveLabel": "General objective",
-      "tagsLabel": "Tags"
+      "tagsLabel": "Tags",
+      "languageLabel": "Language",
+      "languageValue": "Language: {{language}}"
     },
     "edit": {
       "title": "Edit existing task",
@@ -975,7 +1374,10 @@
       "save": "Save",
       "backToLibrary": "Back to library",
       "backToPortal": "Back to portal",
-      "reset": "Reset"
+      "reset": "Reset",
+      "advanced": "Advanced",
+      "openInspector": "Open inspector",
+      "applyToEditor": "Apply to editor"
     },
     "status": {
       "loading": "Loading",
@@ -1059,12 +1461,15 @@
       "pageSubtitle": "Review the parsed draft carefully before creating the task.",
       "inputs": {
         "freeText": "Free text",
-        "sourceUrl": "Source URL (optional)",
+        "instructionPrompt": "Instruction prompt",
+        "instructionHint": "Describe the task you want generated. This is an instruction, not source material to parse.",
+        "pasteOnlyHint": "Paste the source text here. Importing from an arbitrary URL is unavailable until the app can validate and fetch remote addresses safely.",
         "parseMode": "Parse mode"
       },
       "mode": {
         "original": "Original generation",
-        "exact": "Exact parsing"
+        "exact": "Exact parsing",
+        "partialPrompt": "From partial prompt"
       },
       "reviewKicker": "Review",
       "reviewTitle": "Parsed result",
@@ -1118,6 +1523,8 @@
       "empty": "Select a task to inspect.",
       "jsonTitle": "Task JSON",
       "jsonSubtitle": "Review or safely apply edits.",
+      "show": "Show",
+      "hide": "Hide",
       "editable": "Editable",
       "format": "Format",
       "apply": "Apply",

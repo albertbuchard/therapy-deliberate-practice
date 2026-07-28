@@ -88,7 +88,7 @@ export const useMinigameAttemptRunner = () => {
           resolvedTranscript = transcription.transcript?.text;
         }
         if (!resolvedAttemptId || !resolvedTranscript) {
-          throw new Error("Transcription missing.");
+          throw new Error(t("practice.error.transcriptionMissing"));
         }
         onEvaluating?.();
         return submitRound({
@@ -122,7 +122,9 @@ export const useMinigameAttemptRunner = () => {
         const token = requireLocalRuntimePairingKey(gatewayOrigin);
         const health = await checkLocalRuntimeHealth(gatewayOrigin);
         if (health.status !== "ready") {
-          throw new Error(`The local runtime is ${health.status}.`);
+          throw new Error(
+            t("practice.error.localRuntimeStatus", { status: health.status })
+          );
         }
         const transcript = await transcribeWithLocalRuntime({
           baseUrl: gatewayOrigin,
@@ -132,6 +134,12 @@ export const useMinigameAttemptRunner = () => {
         const preparation = await prepareLocalPractice({
           task_id: taskId,
           example_id: exampleId,
+          input_mode: "audio",
+          transcript: {
+            text: transcript.text,
+            model: transcript.model,
+            duration_ms: transcript.durationMs
+          },
           minigame: {
             session_id: sessionId,
             round_id: roundId,
@@ -157,7 +165,10 @@ export const useMinigameAttemptRunner = () => {
         }
         if (settings.aiMode === "local_only" || !settings.hasOpenAiKey) {
           const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(`Local transcription failed: ${detail}`, { cause: error });
+          throw new Error(
+            t("practice.error.localTranscriptionFailed", { detail }),
+            { cause: error }
+          );
         }
         return finishWithOpenAi();
       }
@@ -181,7 +192,10 @@ export const useMinigameAttemptRunner = () => {
         }
         if (settings.aiMode === "local_only" || !settings.hasOpenAiKey) {
           const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(`Local evaluation failed: ${detail}`, { cause: error });
+          throw new Error(
+            t("practice.error.localEvaluationFailed", { detail }),
+            { cause: error }
+          );
         }
         return finishWithOpenAi({
           attemptId: localRuntime.preparation.attemptId,
@@ -191,6 +205,7 @@ export const useMinigameAttemptRunner = () => {
 
       await commitLocalPractice({
         attempt_id: localRuntime.preparation.attemptId,
+        input_mode: "audio",
         transcript: {
           text: localRuntime.transcript.text,
           model: localRuntime.transcript.model,

@@ -28,6 +28,8 @@ jobs:
         run: |
           npm run lint -w apps/web
           npm run lint -w services/local-runtime-suite/desktop
+      - name: Type-check browser code
+        run: npm run typecheck -w apps/web
       - name: Run JavaScript and TypeScript tests
         run: |
           npm test -w apps/api
@@ -40,39 +42,16 @@ jobs:
         run: |
           npm run build
           npm run build -w services/local-runtime-suite/desktop
-      - name: Install browser for deterministic local-runtime flows
+      - name: Install browser for maintained web flows
         run: npx playwright install --with-deps chromium
-      - name: Run deterministic local-runtime browser flows
+      - name: Run all maintained browser flows
         env:
           VITE_SUPABASE_URL: https://ci-placeholder.supabase.co
           VITE_SUPABASE_ANON_KEY: ci-placeholder
-          E2E_BASE_URL: http://127.0.0.1:5174
         run: |
-          server_log="$RUNNER_TEMP/therapy-web-preview.log"
-          npm run preview -w apps/web -- \
-            --host 127.0.0.1 --port 5174 --strictPort > "$server_log" 2>&1 &
-          server_pid=$!
-          cleanup() {
-            kill "$server_pid" 2>/dev/null || true
-            wait "$server_pid" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-          ready=0
-          for _ in {1..30}; do
-            if curl --fail --silent --show-error "$E2E_BASE_URL" >/dev/null; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [[ "$ready" -ne 1 ]]; then
-            cat "$server_log"
-            exit 1
-          fi
           (
             cd apps/web
-            npx playwright test tests/localRuntimeFlows.spec.ts \
-              --grep-invert "existing deployed HTTPS origin"
+            npx playwright test --grep-invert "existing deployed HTTPS origin"
           )
       - name: Audit production dependency placement
         run: npm run audit:production

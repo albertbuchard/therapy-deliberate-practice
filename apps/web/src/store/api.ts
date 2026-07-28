@@ -8,7 +8,7 @@ import type {
   TaskCriterion,
   TaskExample,
   TaskInteractionExample,
-  EvaluationResult
+  EvaluationResult,
 } from "@deliberate/shared";
 import type { RootState } from ".";
 
@@ -193,7 +193,12 @@ export type LeaderboardEntry = {
 };
 
 export type LeaderboardResponse = {
-  query: { tags: string[]; skill_domain: string | null; language: string | null; limit: number };
+  query: {
+    tags: string[];
+    skill_domain: string | null;
+    language: string | null;
+    limit: number;
+  };
   entries: LeaderboardEntry[];
   generated_at: number;
 };
@@ -215,36 +220,52 @@ export const api = createApi({
         }
       }
       return headers;
-    }
+    },
   }),
   tagTypes: ["Task", "Attempt", "MinigameSession"],
   endpoints: (builder) => ({
     getAdminWhoami: builder.query<AdminWhoami, void>({
-      query: () => "/admin/whoami"
+      query: () => "/admin/whoami",
     }),
     getMe: builder.query<UserProfile, void>({
-      query: () => "/me"
+      query: () => "/me",
     }),
-    updateMeProfile: builder.mutation<{ ok: boolean; display_name: string; bio: string | null }, UserProfileInput>({
-      query: (body) => ({ url: "/me/profile", method: "PUT", body })
+    updateMeProfile: builder.mutation<
+      { ok: boolean; display_name: string; bio: string | null },
+      UserProfileInput
+    >({
+      query: (body) => ({ url: "/me/profile", method: "PUT", body }),
     }),
     getPublicProfile: builder.query<PublicProfileResponse, string>({
-      query: (profileId) => `/profiles/${profileId}`
+      query: (profileId) => `/profiles/${profileId}`,
     }),
     getMeSettings: builder.query<UserSettings, void>({
-      query: () => "/me/settings"
+      query: () => "/me/settings",
     }),
     updateMeSettings: builder.mutation<UserSettings, UserSettingsInput>({
-      query: (body) => ({ url: "/me/settings", method: "PUT", body })
+      query: (body) => ({ url: "/me/settings", method: "PUT", body }),
     }),
-    updateOpenAiKey: builder.mutation<{ ok: boolean; hasOpenAiKey: boolean }, { openaiApiKey: string }>({
-      query: (body) => ({ url: "/me/openai-key", method: "PUT", body })
+    updateOpenAiKey: builder.mutation<
+      { ok: boolean; hasOpenAiKey: boolean },
+      { openaiApiKey: string }
+    >({
+      query: (body) => ({ url: "/me/openai-key", method: "PUT", body }),
     }),
-    deleteOpenAiKey: builder.mutation<{ ok: boolean; hasOpenAiKey: boolean }, void>({
-      query: () => ({ url: "/me/openai-key", method: "DELETE" })
+    deleteOpenAiKey: builder.mutation<
+      { ok: boolean; hasOpenAiKey: boolean },
+      void
+    >({
+      query: () => ({ url: "/me/openai-key", method: "DELETE" }),
     }),
-    validateOpenAiKey: builder.mutation<{ ok: boolean; error?: string }, { openaiApiKey?: string }>({
-      query: (body) => ({ url: "/me/openai-key/validate", method: "POST", body })
+    validateOpenAiKey: builder.mutation<
+      { ok: boolean; error?: string },
+      { openaiApiKey?: string }
+    >({
+      query: (body) => ({
+        url: "/me/openai-key/validate",
+        method: "POST",
+        body,
+      }),
     }),
     getTasks: builder.query<
       Task[],
@@ -269,23 +290,26 @@ export const api = createApi({
           }
         });
         if (tags && tags.length > 0) {
-          const normalizedTags = [...tags].map((tag) => tag.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+          const normalizedTags = [...tags]
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b));
           if (normalizedTags.length > 0) {
             normalizedParams.tags = normalizedTags.join(",");
           }
         }
         return { url: "/tasks", params: normalizedParams };
       },
-      providesTags: ["Task"]
+      providesTags: ["Task"],
     }),
     getTaskLanguages: builder.query<{ languages: string[] }, void>({
-      query: () => "/tasks/languages"
+      query: () => "/tasks/languages",
     }),
     getTaskTags: builder.query<{ tags: string[] }, void>({
-      query: () => "/tasks/tags"
+      query: () => "/tasks/tags",
     }),
     getTaskSkillDomains: builder.query<{ skill_domains: string[] }, void>({
-      query: () => "/tasks/skill-domains"
+      query: () => "/tasks/skill-domains",
     }),
     getTask: builder.query<
       Task & {
@@ -297,21 +321,32 @@ export const api = createApi({
     >({
       query: ({ id, includeInteractions }) => ({
         url: `/tasks/${id}`,
-        params: includeInteractions ? { include_interactions: 1 } : undefined
+        params: includeInteractions ? { include_interactions: 1 } : undefined,
       }),
-      providesTags: (_result, _err, { id }) => [{ type: "Task", id }]
+      providesTags: (_result, _err, { id }) => [{ type: "Task", id }],
     }),
-    getTaskExamples: builder.query<TaskExample[], { taskId: string; difficulty?: number; limit?: number; exclude?: string[] }>(
+    getTaskExamples: builder.query<
+      TaskExample[],
       {
-        query: ({ taskId, exclude, ...params }) => ({
-          url: `/tasks/${taskId}/examples`,
-          params: { ...params, exclude: exclude?.join(",") }
-        })
+        taskId: string;
+        difficulty?: number;
+        limit?: number;
+        exclude?: string[];
       }
-    ),
+    >({
+      query: ({ taskId, exclude, ...params }) => ({
+        url: `/tasks/${taskId}/examples`,
+        params: { ...params, exclude: exclude?.join(",") },
+      }),
+    }),
     getLeaderboard: builder.query<
       LeaderboardResponse,
-      { tags?: string[]; skill_domain?: string | null; language?: string | null; limit?: number }
+      {
+        tags?: string[];
+        skill_domain?: string | null;
+        language?: string | null;
+        limit?: number;
+      }
     >({
       query: ({ tags, skill_domain, language, limit }) => {
         const params: Record<string, string | number> = {};
@@ -328,76 +363,122 @@ export const api = createApi({
           params.tags = tags.join(",");
         }
         return { url: "/leaderboard", params };
-      }
+      },
     }),
     startSession: builder.mutation<
       { session_id: string; items: PracticeSessionItem[] },
-      { mode: "single_task" | "mixed_set"; task_id?: string; item_count: number; difficulty?: number }
+      {
+        mode: "single_task" | "mixed_set";
+        task_id?: string;
+        item_count: number;
+        difficulty?: number;
+      }
     >({
-      query: (body) => ({ url: "/sessions/start", method: "POST", body })
+      query: (body) => ({ url: "/sessions/start", method: "POST", body }),
     }),
-    getPracticeSessions: builder.query<PracticeSessionSummary[], { task_id?: string }>({
-      query: (params) => ({ url: "/sessions", params })
+    getPracticeSessions: builder.query<
+      PracticeSessionSummary[],
+      { task_id?: string }
+    >({
+      query: (params) => ({ url: "/sessions", params }),
     }),
-    deletePracticeSession: builder.mutation<{ ok: boolean }, { sessionId: string }>({
-      query: ({ sessionId }) => ({ url: `/sessions/${sessionId}`, method: "DELETE" })
+    deletePracticeSession: builder.mutation<
+      { ok: boolean },
+      { sessionId: string }
+    >({
+      query: ({ sessionId }) => ({
+        url: `/sessions/${sessionId}`,
+        method: "DELETE",
+      }),
     }),
-    getPracticeSessionAttempts: builder.query<PracticeSessionAttempt[], string>({
-      query: (sessionId) => `/sessions/${sessionId}/attempts`,
-      providesTags: ["Attempt"]
-    }),
+    getPracticeSessionAttempts: builder.query<PracticeSessionAttempt[], string>(
+      {
+        query: (sessionId) => `/sessions/${sessionId}/attempts`,
+        providesTags: ["Attempt"],
+      },
+    ),
     getAdminTasks: builder.query<Task[], void>({
       query: () => "/admin/tasks",
-      providesTags: ["Task"]
+      providesTags: ["Task"],
     }),
-    getAdminTask: builder.query<Task & { criteria: TaskCriterion[]; examples: TaskExample[] }, string>({
+    getAdminTask: builder.query<
+      Task & { criteria: TaskCriterion[]; examples: TaskExample[] },
+      string
+    >({
       query: (id) => `/admin/tasks/${id}`,
-      providesTags: (_result, _err, id) => [{ type: "Task", id }]
+      providesTags: (_result, _err, id) => [{ type: "Task", id }],
     }),
-    updateTask: builder.mutation<{ status: string }, { id: string; task: Task & { criteria?: TaskCriterion[]; examples?: TaskExample[] } }>({
+    updateTask: builder.mutation<
+      { status: string },
+      {
+        id: string;
+        task: Task & { criteria?: TaskCriterion[]; examples?: TaskExample[] };
+      }
+    >({
       query: ({ id, task }) => ({
         url: `/admin/tasks/${id}`,
         method: "PUT",
-        body: task
+        body: task,
       }),
-      invalidatesTags: (_result, _err, { id }) => [{ type: "Task", id }, "Task"]
+      invalidatesTags: (_result, _err, { id }) => [
+        { type: "Task", id },
+        "Task",
+      ],
     }),
-    createTask: builder.mutation<{ id: string; slug: string }, Partial<Task> & { criteria?: TaskCriterion[]; examples?: TaskExample[] }>({
+    createTask: builder.mutation<
+      { id: string; slug: string },
+      Partial<Task> & { criteria?: TaskCriterion[]; examples?: TaskExample[] }
+    >({
       query: (body) => ({ url: "/admin/tasks", method: "POST", body }),
-      invalidatesTags: ["Task"]
+      invalidatesTags: ["Task"],
     }),
     deleteTask: builder.mutation<{ status: string }, { id: string }>({
       query: ({ id }) => ({ url: `/admin/tasks/${id}`, method: "DELETE" }),
-      invalidatesTags: (_result, _err, { id }) => [{ type: "Task", id }, "Task"]
+      invalidatesTags: (_result, _err, { id }) => [
+        { type: "Task", id },
+        "Task",
+      ],
     }),
-    duplicateTask: builder.mutation<{ id: string; slug: string }, { id: string }>({
-      query: ({ id }) => ({ url: `/admin/tasks/${id}/duplicate`, method: "POST" }),
-      invalidatesTags: ["Task"]
+    duplicateTask: builder.mutation<
+      { id: string; slug: string },
+      { id: string }
+    >({
+      query: ({ id }) => ({
+        url: `/admin/tasks/${id}/duplicate`,
+        method: "POST",
+      }),
+      invalidatesTags: ["Task"],
     }),
-    translateTask: builder.mutation<{ id: string; slug: string }, { id: string; targetLanguage: string }>({
+    translateTask: builder.mutation<
+      { id: string; slug: string },
+      { id: string; targetLanguage: string }
+    >({
       query: ({ id, targetLanguage }) => ({
         url: `/admin/tasks/${id}/translate`,
         method: "POST",
-        body: { target_language: targetLanguage }
+        body: { target_language: targetLanguage },
       }),
-      invalidatesTags: ["Task"]
+      invalidatesTags: ["Task"],
     }),
     parseTask: builder.mutation<
       DeliberatePracticeTaskV2,
       { free_text?: string; source_url?: string | null; parse_mode?: ParseMode }
     >({
-      query: (body) => ({ url: "/admin/parse-task", method: "POST", body })
+      query: (body) => ({ url: "/admin/parse-task", method: "POST", body }),
     }),
     importTask: builder.mutation<
       { id: string; slug: string },
-      { task_v2: DeliberatePracticeTaskV2; task_overrides?: Record<string, unknown> }
+      {
+        task_v2: DeliberatePracticeTaskV2;
+        task_overrides?: Record<string, unknown>;
+      }
     >({
       query: (body) => ({ url: "/admin/import-task", method: "POST", body }),
-      invalidatesTags: ["Task"]
+      invalidatesTags: ["Task"],
     }),
     runPractice: builder.mutation<PracticeRunResponse, PracticeRunInput>({
       query: (body) => ({ url: "/practice/run", method: "POST", body }),
-      invalidatesTags: ["Attempt"]
+      invalidatesTags: ["Attempt"],
     }),
     prepareLocalPractice: builder.mutation<
       LocalPracticePreparation,
@@ -405,31 +486,49 @@ export const api = createApi({
         session_item_id?: string;
         task_id?: string;
         example_id?: string;
+        input_mode?: "audio" | "typed";
+        transcript?:
+          | { text: string; model: string; duration_ms: number }
+          | { text: string };
         minigame?: { session_id: string; round_id: string; player_id: string };
       }
     >({
-      query: (body) => ({ url: "/practice/local/prepare", method: "POST", body })
+      query: (body) => ({
+        url: "/practice/local/prepare",
+        method: "POST",
+        body,
+      }),
     }),
     commitLocalPractice: builder.mutation<
       PracticeRunResponse,
       {
         attempt_id: string;
-        transcript: { text: string; model: string; duration_ms: number };
+        input_mode?: "audio" | "typed";
+        transcript:
+          | { text: string; model: string; duration_ms: number }
+          | { text: string };
         evaluation: EvaluationResult;
         llm: { model: string; duration_ms: number };
         practice_mode?: "standard" | "real_time";
         turn_context?: PracticeRunInput["turn_context"];
       }
     >({
-      query: (body) => ({ url: "/practice/local/commit", method: "POST", body }),
-      invalidatesTags: ["Attempt"]
+      query: (body) => ({
+        url: "/practice/local/commit",
+        method: "POST",
+        body,
+      }),
+      invalidatesTags: ["Attempt"],
     }),
     listMinigameSessions: builder.query<
       { sessions: MinigameSessionSummary[] },
-      { status?: "active" | "ended" | "all"; sort?: "newest" | "oldest" | "recently_active" }
+      {
+        status?: "active" | "ended" | "all";
+        sort?: "newest" | "oldest" | "recently_active";
+      }
     >({
       query: (params) => ({ url: "/minigames/sessions", params }),
-      providesTags: ["MinigameSession"]
+      providesTags: ["MinigameSession"],
     }),
     createMinigameSession: builder.mutation<
       { session_id: string },
@@ -440,7 +539,7 @@ export const api = createApi({
         settings: Record<string, unknown>;
       }
     >({
-      query: (body) => ({ url: "/minigames/sessions", method: "POST", body })
+      query: (body) => ({ url: "/minigames/sessions", method: "POST", body }),
     }),
     getMinigameSessionDetail: builder.query<
       {
@@ -453,41 +552,69 @@ export const api = createApi({
       string
     >({
       query: (sessionId) => `/minigames/sessions/${sessionId}`,
-      providesTags: (_result, _err, sessionId) => [{ type: "MinigameSession", id: sessionId }]
+      providesTags: (_result, _err, sessionId) => [
+        { type: "MinigameSession", id: sessionId },
+      ],
     }),
     patchMinigameResume: builder.mutation<
       { ok: boolean },
-      { sessionId: string; current_round_id?: string | null; current_player_id?: string | null }
+      {
+        sessionId: string;
+        current_round_id?: string | null;
+        current_player_id?: string | null;
+      }
     >({
       query: ({ sessionId, ...body }) => ({
         url: `/minigames/sessions/${sessionId}/resume`,
         method: "PATCH",
-        body
-      })
+        body,
+      }),
     }),
-    endMinigameSession: builder.mutation<{ ok: boolean }, { sessionId: string }>({
-      query: ({ sessionId }) => ({ url: `/minigames/sessions/${sessionId}/end`, method: "POST" })
+    endMinigameSession: builder.mutation<
+      { ok: boolean },
+      { sessionId: string }
+    >({
+      query: ({ sessionId }) => ({
+        url: `/minigames/sessions/${sessionId}/end`,
+        method: "POST",
+      }),
     }),
-    deleteMinigameSession: builder.mutation<{ ok: boolean }, { sessionId: string }>({
-      query: ({ sessionId }) => ({ url: `/minigames/sessions/${sessionId}`, method: "DELETE" }),
-      invalidatesTags: ["MinigameSession"]
+    deleteMinigameSession: builder.mutation<
+      { ok: boolean },
+      { sessionId: string }
+    >({
+      query: ({ sessionId }) => ({
+        url: `/minigames/sessions/${sessionId}`,
+        method: "DELETE",
+      }),
+      invalidatesTags: ["MinigameSession"],
     }),
-    addMinigameTeams: builder.mutation<{ teams: MinigameTeam[] }, { sessionId: string; teams: Array<{ name: string; color: string }> }>({
+    addMinigameTeams: builder.mutation<
+      { teams: MinigameTeam[] },
+      { sessionId: string; teams: Array<{ name: string; color: string }> }
+    >({
       query: ({ sessionId, teams }) => ({
         url: `/minigames/sessions/${sessionId}/teams`,
         method: "POST",
-        body: { teams }
-      })
+        body: { teams },
+      }),
     }),
     addMinigamePlayers: builder.mutation<
       { players: MinigamePlayer[] },
-      { sessionId: string; players: Array<{ name: string; avatar: string; team_id?: string | null }> }
+      {
+        sessionId: string;
+        players: Array<{
+          name: string;
+          avatar: string;
+          team_id?: string | null;
+        }>;
+      }
     >({
       query: ({ sessionId, players }) => ({
         url: `/minigames/sessions/${sessionId}/players`,
         method: "POST",
-        body: { players }
-      })
+        body: { players },
+      }),
     }),
     generateMinigameRounds: builder.mutation<
       { round_count: number },
@@ -496,14 +623,17 @@ export const api = createApi({
       query: ({ sessionId, count }) => ({
         url: `/minigames/sessions/${sessionId}/rounds/generate`,
         method: "POST",
-        body: count ? { count } : {}
-      })
+        body: count ? { count } : {},
+      }),
     }),
-    redrawMinigameRound: builder.mutation<{ round_count: number }, { sessionId: string }>({
+    redrawMinigameRound: builder.mutation<
+      { round_count: number },
+      { sessionId: string }
+    >({
       query: ({ sessionId }) => ({
         url: `/minigames/sessions/${sessionId}/redraw`,
-        method: "POST"
-      })
+        method: "POST",
+      }),
     }),
     getMinigameState: builder.query<
       {
@@ -515,13 +645,16 @@ export const api = createApi({
       },
       string
     >({
-      query: (sessionId) => `/minigames/sessions/${sessionId}/state`
+      query: (sessionId) => `/minigames/sessions/${sessionId}/state`,
     }),
-    startMinigameRound: builder.mutation<{ ok: boolean }, { sessionId: string; roundId: string }>({
+    startMinigameRound: builder.mutation<
+      { ok: boolean },
+      { sessionId: string; roundId: string }
+    >({
       query: ({ sessionId, roundId }) => ({
         url: `/minigames/sessions/${sessionId}/rounds/${roundId}/start`,
-        method: "POST"
-      })
+        method: "POST",
+      }),
     }),
     submitMinigameRound: builder.mutation<
       PracticeRunResponse,
@@ -551,9 +684,9 @@ export const api = createApi({
       query: ({ sessionId, roundId, ...body }) => ({
         url: `/minigames/sessions/${sessionId}/rounds/${roundId}/submit`,
         method: "POST",
-        body
+        body,
       }),
-      invalidatesTags: ["Attempt"]
+      invalidatesTags: ["Attempt"],
     }),
     commitLocalMinigameRound: builder.mutation<
       PracticeRunResponse,
@@ -577,15 +710,24 @@ export const api = createApi({
       query: ({ sessionId, roundId, ...body }) => ({
         url: `/minigames/sessions/${sessionId}/rounds/${roundId}/commit-local`,
         method: "POST",
-        body
+        body,
       }),
-      invalidatesTags: ["Attempt"]
+      invalidatesTags: ["Attempt"],
     }),
     prefetchPatientAudio: builder.mutation<
-      { cache_key: string; status: "ready" | "generating"; audio_url?: string; retry_after_ms?: number },
+      {
+        cache_key: string;
+        status: "ready" | "generating";
+        audio_url?: string;
+        retry_after_ms?: number;
+      },
       { exercise_id: string; practice_mode: "real_time"; statement_id?: string }
     >({
-      query: (body) => ({ url: "/practice/patient-audio/prefetch", method: "POST", body })
+      query: (body) => ({
+        url: "/practice/patient-audio/prefetch",
+        method: "POST",
+        body,
+      }),
     }),
     prefetchPatientAudioBatch: builder.mutation<
       {
@@ -599,13 +741,17 @@ export const api = createApi({
         ready_count: number;
         total_count: number;
       },
-      { exercise_id: string; practice_mode: "real_time"; statement_ids: string[] }
+      {
+        exercise_id: string;
+        practice_mode: "real_time";
+        statement_ids: string[];
+      }
     >({
       query: (body) => ({
         url: "/practice/patient-audio/prefetch-batch",
         method: "POST",
-        body
-      })
+        body,
+      }),
     }),
     getAttempts: builder.query<
       Array<{
@@ -623,9 +769,9 @@ export const api = createApi({
       { task_id?: string }
     >({
       query: (params) => ({ url: "/attempts", params }),
-      providesTags: ["Attempt"]
-    })
-  })
+      providesTags: ["Attempt"],
+    }),
+  }),
 });
 
 export const {
@@ -678,5 +824,5 @@ export const {
   useCommitLocalMinigameRoundMutation,
   usePrefetchPatientAudioMutation,
   usePrefetchPatientAudioBatchMutation,
-  useGetAttemptsQuery
+  useGetAttemptsQuery,
 } = api;

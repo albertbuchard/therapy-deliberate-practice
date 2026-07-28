@@ -3,6 +3,7 @@ import {
   gatewayBootActivityMessage,
   type GatewayBootState
 } from "../hooks/useGatewayBoot";
+import type { Translator } from "../i18n";
 
 type Props = {
   boot: GatewayBootState;
@@ -12,6 +13,7 @@ type Props = {
   disabled?: boolean;
   disabledReason?: string;
   onReadyClick?: () => void;
+  t: Translator;
 };
 
 function CheckIcon() {
@@ -38,26 +40,33 @@ export function GatewayLaunchButton({
   onReset,
   disabled,
   disabledReason,
-  onReadyClick
+  onReadyClick,
+  t
 }: Props) {
   const isBusy = boot.phase === "booting" || boot.phase === "polling";
   const isReady = boot.phase === "ready";
   const isDisabled = Boolean(disabled) && !isBusy && !isReady;
 
-  const activeMessage = useMemo(() => gatewayBootActivityMessage(boot), [boot]);
+  const activeMessage = useMemo(() => gatewayBootActivityMessage(boot, t), [boot, t]);
 
   const subtitle = useMemo(() => {
     if (isDisabled && disabledReason) return disabledReason;
-    if (boot.phase === "idle") return "Starts the local gateway and waits for /health.";
-    if (boot.phase === "booting") return "Spawning process…";
+    if (boot.phase === "idle") return t("launch.idleSubtitle");
+    if (boot.phase === "booting") return t("launch.bootingSubtitle");
     if (boot.phase === "polling") {
-      const http = boot.lastHttpStatus ? `HTTP ${boot.lastHttpStatus}` : "No response yet";
-      const readiness = boot.lastReadiness ? ` • status: ${boot.lastReadiness}` : "";
-      return `Health check #${boot.attempts + 1} • ${http}${readiness}`;
+      const http = boot.lastHttpStatus ? `HTTP ${boot.lastHttpStatus}` : t("launch.noResponse");
+      const readiness = boot.lastReadiness
+        ? t("launch.readinessSuffix", { status: boot.lastReadiness })
+        : "";
+      return t("launch.healthSubtitle", {
+        attempt: boot.attempts + 1,
+        http,
+        readiness
+      });
     }
-    if (boot.phase === "ready") return "You can continue to the next step.";
-    if (boot.phase === "cancelled") return "You can launch again anytime.";
-    return boot.error ?? "Check logs/doctor for details.";
+    if (boot.phase === "ready") return t("launch.readySubtitle");
+    if (boot.phase === "cancelled") return t("launch.stoppedSubtitle");
+    return boot.error ?? t("launch.errorSubtitle");
   }, [
     boot.phase,
     boot.attempts,
@@ -65,7 +74,8 @@ export function GatewayLaunchButton({
     boot.lastReadiness,
     boot.error,
     disabledReason,
-    isDisabled
+    isDisabled,
+    t
   ]);
 
   const right = useMemo(() => {
@@ -110,12 +120,12 @@ export function GatewayLaunchButton({
           <span className="launch-btn__left">
             <span className="launch-btn__title">
               {boot.phase === "idle"
-                ? "Launch local server"
+                ? t("launch.startTitle")
                 : boot.phase === "ready"
-                  ? "Gateway ready"
+                  ? t("launch.readyTitle")
                   : boot.phase === "error"
-                    ? "Launch failed"
-                    : "Launching"}
+                    ? t("launch.failedTitle")
+                    : t("launch.launchingTitle")}
             </span>
 
             <span className="launch-btn__message" key={`${boot.phase}-${activeMessage}`}>
@@ -131,10 +141,16 @@ export function GatewayLaunchButton({
                 <Spinner />
                 <span>
                   {boot.phase === "booting"
-                    ? "Process launch in progress"
+                    ? t("launch.launchProgress")
                     : boot.attempts === 0
-                      ? "Health check pending"
-                      : `${boot.attempts} health ${boot.attempts === 1 ? "check" : "checks"} completed`}
+                      ? t("launch.healthPending")
+                      : t("launch.healthChecks", {
+                          count: boot.attempts,
+                          checks:
+                            boot.attempts === 1
+                              ? t("launch.checkSingular")
+                              : t("launch.checkPlural")
+                        })}
                 </span>
               </span>
             )}
@@ -146,7 +162,7 @@ export function GatewayLaunchButton({
 
       {isBusy && (
         <button type="button" className="btn launch-cancel" onClick={onCancel}>
-          Stop
+          {t("common.stop")}
         </button>
       )}
     </div>

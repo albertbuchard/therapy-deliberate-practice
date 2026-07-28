@@ -99,6 +99,14 @@ struct GatewayEndpointExamples {
 }
 
 #[derive(Debug, Serialize)]
+struct GatewayStoragePaths {
+    config_file: String,
+    data_dir: String,
+    cache_dir: String,
+    logging_policy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct StatusResponse {
     status: String,
 }
@@ -139,6 +147,8 @@ struct DoctorResponse {
 struct GatewayConfigFile {
     port: Option<u16>,
     default_models: Option<HashMap<String, String>>,
+    data_dir: Option<String>,
+    cache_dir: Option<String>,
     prefer_local: Option<bool>,
     access_token: Option<String>,
 }
@@ -147,6 +157,8 @@ struct GatewayConfigFile {
 struct GatewayConfigResponse {
     port: u16,
     default_models: HashMap<String, String>,
+    data_dir: String,
+    cache_dir: String,
     prefer_local: bool,
     #[serde(skip_serializing)]
     access_token: String,
@@ -471,13 +483,12 @@ fn gateway_doctor(app: tauri::AppHandle, state: tauri::State<GatewayManager>) ->
     let config = match build_launch_config(&app) {
         Ok(config) => config,
         Err(error) => {
-            let (details, hint) = describe_gateway_error(&error);
+            let (details, _) = describe_gateway_error(&error);
             return DoctorResponse {
                 checks: vec![serde_json::json!({
-                    "title": "Gateway configuration",
+                    "code": "gateway_configuration",
                     "status": "error",
                     "details": details,
-                    "fix": hint.unwrap_or_else(|| "Ensure LOCAL_RUNTIME_ROOT is set or bundle the local runtime resources.".to_string())
                 })],
             };
         }
@@ -508,18 +519,16 @@ fn gateway_doctor(app: tauri::AppHandle, state: tauri::State<GatewayManager>) ->
             match python_check {
                 Ok(version) => {
                     checks.push(serde_json::json!( {
-                        "title": "Python executable",
+                        "code": "python_executable",
                         "status": "ok",
-                        "details": if version.is_empty() { "Python is available.".to_string() } else { format!("Using {version}") },
-                        "fix": null
+                        "details": if version.is_empty() { None } else { Some(version) },
                     }));
                 }
                 Err(error) => {
                     checks.push(serde_json::json!( {
-                        "title": "Python executable",
+                        "code": "python_executable",
                         "status": "error",
-                        "details": format!("Unable to run Python: {error}"),
-                        "fix": "Install Python 3.10+ or set LOCAL_RUNTIME_PYTHON to a valid interpreter."
+                        "details": error,
                     }));
                 }
             }
@@ -527,19 +536,17 @@ fn gateway_doctor(app: tauri::AppHandle, state: tauri::State<GatewayManager>) ->
             match run_python_import_check(&config) {
                 Ok(path) => {
                     checks.push(serde_json::json!( {
-                        "title": "local_runtime import",
+                        "code": "local_runtime_import",
                         "status": "ok",
-                        "details": format!("Resolved local_runtime at {path}"),
-                        "fix": null
+                        "details": path,
                     }));
                 }
                 Err(error) => {
-                    let (details, hint) = describe_gateway_error(&error);
+                    let (details, _) = describe_gateway_error(&error);
                     checks.push(serde_json::json!( {
-                        "title": "local_runtime import",
+                        "code": "local_runtime_import",
                         "status": "error",
                         "details": details,
-                        "fix": hint.unwrap_or_else(|| "Set LOCAL_RUNTIME_ROOT to the python package root or ensure resources/local_runtime is bundled.".to_string())
                     }));
                 }
             }
@@ -547,28 +554,25 @@ fn gateway_doctor(app: tauri::AppHandle, state: tauri::State<GatewayManager>) ->
         GatewayLaunchMode::Sidecar => match resolve_sidecar_path(&app) {
             Some(path) => {
                 checks.push(serde_json::json!( {
-                    "title": "Gateway sidecar binary",
+                    "code": "gateway_sidecar_binary",
                     "status": "ok",
-                    "details": format!("Found sidecar at {}", path.display()),
-                    "fix": null
+                    "details": path.display().to_string(),
                 }));
 
                 if !is_executable(&path) {
                     checks.push(serde_json::json!( {
-                        "title": "Gateway sidecar permissions",
+                        "code": "gateway_sidecar_permissions",
                         "status": "error",
-                        "details": "Sidecar is not executable.".to_string(),
-                        "fix": "Ensure the sidecar file has execute permissions."
+                        "details": path.display().to_string(),
                     }));
                 }
             }
             None => {
                 checks.push(serde_json::json!( {
-                        "title": "Gateway sidecar binary",
-                        "status": "error",
-                        "details": "Sidecar binary not found.".to_string(),
-                        "fix": "Sidecar not resolvable. Ensure you run `tauri dev` with src-tauri/tauri.sidecar.conf.json (see `npm run tauri:dev`) or run `npm run sidecar:build`."
-                    }));
+                    "code": "gateway_sidecar_binary",
+                    "status": "error",
+                    "details": null,
+                }));
             }
         },
     }
@@ -577,32 +581,24 @@ fn gateway_doctor(app: tauri::AppHandle, state: tauri::State<GatewayManager>) ->
     let port_in_use = TcpListener::bind(("127.0.0.1", config.port)).is_err();
     if port_in_use && status == "running" {
         checks.push(serde_json::json!({
-            "title": "Port availability",
+            "code": "port_availability",
             "status": "ok",
-            "details": format!("Port {} is bound by the running gateway.", config.port),
-            "fix": null
+            "port": config.port,
+            "gateway_status": status,
         }));
     } else if port_in_use {
         checks.push(serde_json::json!({
-            "title": "Port availability",
+            "code": "port_availability",
             "status": if status == "starting" { "warning" } else { "error" },
-            "details": if status == "starting" {
-                format!("Port {} is bound while the gateway starts.", config.port)
-            } else {
-                format!("Port {} is already in use.", config.port)
-            },
-            "fix": if status == "starting" {
-                "Wait for the gateway health check to become ready."
-            } else {
-                "Choose another port in the desktop app or stop the process using this port."
-            }
+            "port": config.port,
+            "gateway_status": status,
         }));
     } else {
         checks.push(serde_json::json!({
-            "title": "Port availability",
+            "code": "port_availability",
             "status": "ok",
-            "details": format!("Port {} is free.", config.port),
-            "fix": null
+            "port": config.port,
+            "gateway_status": "free",
         }));
     }
 
@@ -610,35 +606,27 @@ fn gateway_doctor(app: tauri::AppHandle, state: tauri::State<GatewayManager>) ->
         match gateway_health(config.port) {
             Ok(health) => {
                 checks.push(serde_json::json!({
-                    "title": "Gateway health",
+                    "code": "gateway_health",
                     "status": "ok",
-                    "details": format!("Health check OK: {}", health.body),
-                    "fix": null
+                    "details": health.body,
+                    "gateway_status": status,
                 }));
             }
             Err(error) => {
                 checks.push(serde_json::json!({
-                    "title": "Gateway health",
+                    "code": "gateway_health",
                     "status": "warning",
-                    "details": format!("Gateway responded but health check failed: {:?}", error),
-                    "fix": "Open the gateway logs to inspect startup errors."
+                    "details": format!("{error:?}"),
+                    "gateway_status": status,
                 }));
             }
         }
     } else {
         checks.push(serde_json::json!({
-            "title": "Gateway health",
+            "code": "gateway_health",
             "status": "warning",
-            "details": if status == "starting" {
-                "Gateway process is starting; health is not ready yet."
-            } else {
-                "Gateway is not running yet."
-            },
-            "fix": if status == "starting" {
-                "Wait for startup to finish or inspect logs if it takes unusually long."
-            } else {
-                "Start the gateway to verify health."
-            }
+            "details": null,
+            "gateway_status": status,
         }));
     }
 
@@ -779,6 +767,8 @@ fn save_gateway_config(app: tauri::AppHandle, payload: ConfigPayload) -> Result<
         &config_path,
         payload.port,
         &payload.default_models,
+        &existing.data_dir,
+        &existing.cache_dir,
         payload.prefer_local,
         &existing.access_token,
     )
@@ -804,6 +794,25 @@ fn gateway_connection_info(app: tauri::AppHandle) -> Result<GatewayConnectionInf
             stt_example: format!("{base_url}/v1/audio/transcriptions"),
         },
     })
+}
+
+fn storage_paths_from_config(
+    config_path: &Path,
+    config: &GatewayConfigResponse,
+) -> GatewayStoragePaths {
+    GatewayStoragePaths {
+        config_file: config_path.to_string_lossy().into_owned(),
+        data_dir: config.data_dir.clone(),
+        cache_dir: config.cache_dir.clone(),
+        logging_policy: "metadata_only",
+    }
+}
+
+#[tauri::command]
+fn gateway_storage_paths(app: tauri::AppHandle) -> Result<GatewayStoragePaths, GatewayError> {
+    let config_path = resolve_config_path(&app)?;
+    let config = read_gateway_config(&app)?;
+    Ok(storage_paths_from_config(&config_path, &config))
 }
 
 #[tauri::command]
@@ -853,6 +862,27 @@ fn resolve_config_path(app: &tauri::AppHandle) -> Result<PathBuf, GatewayError> 
         .join("config.json"))
 }
 
+fn resolve_configured_directory(
+    config_parent: &Path,
+    configured: Option<String>,
+    fallback_name: &str,
+) -> (String, bool) {
+    match configured.filter(|path| !path.trim().is_empty()) {
+        Some(path) if Path::new(&path).is_absolute() => (path, false),
+        Some(path) => (
+            config_parent.join(path).to_string_lossy().into_owned(),
+            true,
+        ),
+        None => (
+            config_parent
+                .join(fallback_name)
+                .to_string_lossy()
+                .into_owned(),
+            true,
+        ),
+    }
+}
+
 fn read_gateway_config(app: &tauri::AppHandle) -> Result<GatewayConfigResponse, GatewayError> {
     let config_path = resolve_config_path(app)?;
     let parsed = if config_path.exists() {
@@ -863,18 +893,38 @@ fn read_gateway_config(app: &tauri::AppHandle) -> Result<GatewayConfigResponse, 
         GatewayConfigFile {
             port: None,
             default_models: None,
+            data_dir: None,
+            cache_dir: None,
             prefer_local: None,
             access_token: None,
         }
     };
-    let existing_token = parsed
-        .access_token
-        .filter(|token| is_valid_access_token(token));
-    let needs_write = !config_path.exists() || existing_token.is_none();
+    let GatewayConfigFile {
+        port,
+        default_models,
+        data_dir,
+        cache_dir,
+        prefer_local,
+        access_token,
+    } = parsed;
+    let target_dir = config_path
+        .parent()
+        .ok_or_else(|| GatewayError::Config("Config path missing parent".into()))?;
+    let (resolved_data_dir, data_dir_needs_write) =
+        resolve_configured_directory(target_dir, data_dir, "data");
+    let (resolved_cache_dir, cache_dir_needs_write) =
+        resolve_configured_directory(target_dir, cache_dir, "cache");
+    let existing_token = access_token.filter(|token| is_valid_access_token(token));
+    let needs_write = !config_path.exists()
+        || existing_token.is_none()
+        || data_dir_needs_write
+        || cache_dir_needs_write;
     let response = GatewayConfigResponse {
-        port: parsed.port.unwrap_or(8484),
-        default_models: parsed.default_models.unwrap_or_default(),
-        prefer_local: parsed.prefer_local.unwrap_or(true),
+        port: port.unwrap_or(8484),
+        default_models: default_models.unwrap_or_default(),
+        data_dir: resolved_data_dir,
+        cache_dir: resolved_cache_dir,
+        prefer_local: prefer_local.unwrap_or(true),
         access_token: match existing_token {
             Some(token) => token,
             None => generate_access_token()?,
@@ -885,6 +935,8 @@ fn read_gateway_config(app: &tauri::AppHandle) -> Result<GatewayConfigResponse, 
             &config_path,
             response.port,
             &response.default_models,
+            &response.data_dir,
+            &response.cache_dir,
             response.prefer_local,
             &response.access_token,
         )?;
@@ -934,6 +986,8 @@ where
         config_path,
         current.port,
         &current.default_models,
+        &current.data_dir,
+        &current.cache_dir,
         current.prefer_local,
         &new_token,
     );
@@ -942,6 +996,8 @@ where
             config_path,
             current.port,
             &current.default_models,
+            &current.data_dir,
+            &current.cache_dir,
             current.prefer_local,
             &current.access_token,
         )
@@ -968,6 +1024,8 @@ where
                 config_path,
                 current.port,
                 &current.default_models,
+                &current.data_dir,
+                &current.cache_dir,
                 current.prefer_local,
                 &current.access_token,
             )
@@ -993,6 +1051,8 @@ fn write_gateway_config(
     config_path: &Path,
     port: u16,
     default_models: &HashMap<String, String>,
+    data_dir: &str,
+    cache_dir: &str,
     prefer_local: bool,
     access_token: &str,
 ) -> Result<(), GatewayError> {
@@ -1009,8 +1069,8 @@ fn write_gateway_config(
         "default_models": default_models,
         "prefer_local": prefer_local,
         "access_token": access_token,
-        "data_dir": target_dir.join("data").to_string_lossy(),
-        "cache_dir": target_dir.join("cache").to_string_lossy()
+        "data_dir": data_dir,
+        "cache_dir": cache_dir
     });
     let mut serialized =
         serde_json::to_vec_pretty(&json).map_err(|err| GatewayError::Config(err.to_string()))?;
@@ -1711,6 +1771,7 @@ fn main() {
             save_gateway_config,
             gateway_config,
             gateway_connection_info,
+            gateway_storage_paths,
             gateway_pairing_token,
             rotate_gateway_pairing_token
         ])
@@ -1806,13 +1867,23 @@ mod tests {
         let config_path = directory.path().join("nested").join("config.json");
         let token = generate_access_token().expect("secure token");
 
-        write_gateway_config(&config_path, 8484, &HashMap::new(), true, &token)
-            .expect("write config");
+        write_gateway_config(
+            &config_path,
+            8484,
+            &HashMap::new(),
+            "/private/runtime-data",
+            "/private/model-cache",
+            true,
+            &token,
+        )
+        .expect("write config");
 
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&config_path).expect("read config"))
                 .expect("parse config");
         assert_eq!(value["access_token"], token);
+        assert_eq!(value["data_dir"], "/private/runtime-data");
+        assert_eq!(value["cache_dir"], "/private/model-cache");
         #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&config_path)
@@ -1825,12 +1896,59 @@ mod tests {
     }
 
     #[test]
+    fn storage_paths_report_the_authoritative_configured_locations() {
+        let config_path = PathBuf::from("/tmp/therapy/local-runtime/config.json");
+        let config = GatewayConfigResponse {
+            port: 8484,
+            default_models: HashMap::new(),
+            data_dir: "/custom/private-data".into(),
+            cache_dir: "/custom/model-cache".into(),
+            prefer_local: true,
+            access_token: "a".repeat(64),
+        };
+        let paths = storage_paths_from_config(&config_path, &config);
+
+        assert_eq!(paths.config_file, "/tmp/therapy/local-runtime/config.json");
+        assert_eq!(paths.data_dir, "/custom/private-data");
+        assert_eq!(paths.cache_dir, "/custom/model-cache");
+        assert_eq!(paths.logging_policy, "metadata_only");
+    }
+
+    #[test]
+    fn relative_storage_paths_resolve_against_the_config_directory() {
+        let config_parent = PathBuf::from("/tmp/therapy/local-runtime");
+
+        let (data_dir, data_changed) =
+            resolve_configured_directory(&config_parent, Some("private-data".into()), "data");
+        let (cache_dir, cache_changed) =
+            resolve_configured_directory(&config_parent, Some("model-cache".into()), "cache");
+        let (absolute_dir, absolute_changed) = resolve_configured_directory(
+            &config_parent,
+            Some("/custom/absolute-cache".into()),
+            "cache",
+        );
+
+        assert_eq!(data_dir, "/tmp/therapy/local-runtime/private-data");
+        assert_eq!(cache_dir, "/tmp/therapy/local-runtime/model-cache");
+        assert!(data_changed);
+        assert!(cache_changed);
+        assert_eq!(absolute_dir, "/custom/absolute-cache");
+        assert!(!absolute_changed);
+    }
+
+    #[test]
     fn pairing_rotation_restores_the_previous_key_when_restart_fails() {
         let directory = tempfile::tempdir().expect("temporary config directory");
         let config_path = directory.path().join("config.json");
         let current = GatewayConfigResponse {
             port: 8484,
             default_models: HashMap::new(),
+            data_dir: directory.path().join("data").to_string_lossy().into_owned(),
+            cache_dir: directory
+                .path()
+                .join("cache")
+                .to_string_lossy()
+                .into_owned(),
             prefer_local: true,
             access_token: "a".repeat(64),
         };
@@ -1838,6 +1956,8 @@ mod tests {
             &config_path,
             current.port,
             &current.default_models,
+            &current.data_dir,
+            &current.cache_dir,
             current.prefer_local,
             &current.access_token,
         )
@@ -1886,6 +2006,12 @@ mod tests {
         let current = GatewayConfigResponse {
             port: 8484,
             default_models: HashMap::new(),
+            data_dir: directory.path().join("data").to_string_lossy().into_owned(),
+            cache_dir: directory
+                .path()
+                .join("cache")
+                .to_string_lossy()
+                .into_owned(),
             prefer_local: true,
             access_token: "a".repeat(64),
         };

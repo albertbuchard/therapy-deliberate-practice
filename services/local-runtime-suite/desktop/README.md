@@ -7,13 +7,13 @@ The Local Runtime Desktop app starts and stops one managed local gateway, guides
 - gateway startup, readiness, shutdown, and recovery;
 - exact product health checks so an unrelated process on the port is never treated as the gateway;
 - platform-compatible speech and language model selection;
-- model downloads, loading progress, failure details, cancellation, and retry;
+- model downloads, loading progress, failure details, timeout/recheck behavior, and retry;
 - pairing-key reveal, copy, and confirmed rotation;
-- port, storage, cache, model defaults, and logging configuration;
-- redacted logs and doctor checks;
+- port and model-default configuration, plus visible configuration, data, and cache locations;
+- metadata-only logs and doctor checks; there is no content-logging toggle;
 - safe recovery after a crashed or stale child process.
 
-The main window supports widths down to 360 pixels, keyboard focus management, visible status text, and reduced-motion preferences.
+The English and French control centre supports persisted locale selection, long translated text, widths down to 360 pixels, keyboard focus management, visible status text, and reduced-motion preferences. Stopping the desktop app's wait or closing the interface does not cancel a model load that is already running in the gateway; reopen the status view and recheck the existing job instead of starting a duplicate.
 
 ## Development
 
@@ -68,12 +68,12 @@ The manual `desktop-build` GitHub Actions workflow is the supported unsigned, bu
 - removes generated Python bytecode from the portable runtime so Windows installer paths remain bounded;
 - writes checksummed artifact and provenance manifests, including a fail-closed Linux receipt that
   binds the pre-bundle launcher to the AppImage launcher after `linuxdeploy` changes its runtime path;
-- can run bounded Qwen and Faster Whisper inference from the packaged Linux payload;
+- runs the complete advertised bounded native matrix from the packaged payload: Qwen Transformers, Faster Whisper, Qwen MLX, and Parakeet MLX on Apple silicon; Faster Whisper on Intel macOS; and Qwen Transformers plus Faster Whisper on Windows and Linux;
 - uploads checksummed build artifacts and evidence.
 
 It never receives signing credentials. Its `source_ref` input may therefore be used to test a branch, commit, or tag without exposing protected release secrets. Its artifacts are test artifacts, not release-ready packages.
 
-The separate manual `desktop-signed-build` workflow accepts only the exact version tag selected as the workflow execution ref and requires `SIGN` confirmation. It is designed to use a `desktop-signing` environment, but naming an environment in workflow YAML does not protect it. Repository administrators must create that environment, require independent reviewers, prevent self-review and bypass as appropriate, restrict it to version tags, and place signing secrets only in that environment. Until those repository settings and secrets are independently verified, signed-release readiness is blocked and this workflow must not be run. Once configured, it signs and notarizes both Mac packages, signs the Windows sidecar, desktop executable, and installers, verifies those signatures after installation, and requires real Qwen and Faster Whisper inference from the packaged Linux payload.
+The separate manual `desktop-signed-build` workflow accepts only the exact version tag selected as the workflow execution ref and requires `SIGN` confirmation. It is designed to use a `desktop-signing` environment, but naming an environment in workflow YAML does not protect it. Repository administrators must create that environment, require independent reviewers, prevent self-review and bypass as appropriate, restrict it to version tags, and place signing secrets only in that environment. Until those repository settings and secrets are independently verified, signed-release readiness is blocked and this workflow must not be run. Once configured, it signs and notarizes both Mac packages, signs the Windows sidecar, desktop executable, and installers, verifies those signatures after installation, and requires the same complete advertised native backend matrix from the signed packaged payloads.
 
 The Apple-silicon and Intel packages require macOS 14 or later. Tauri declares this minimum in package metadata. The portable-runtime builder also forces the macOS 14 wheel platform and rejects any installed wheel tagged for a newer macOS release.
 
@@ -87,7 +87,7 @@ The `desktop-release-draft` workflow requires:
 - a successful `desktop-signed-build` run for the same tag and source commit;
 - all four target artifact manifests;
 - valid package checksums, cryptographic build attestations, and packaged-gateway smoke receipts;
-- pinned Qwen and Faster Whisper inference evidence from the packaged Linux runtime;
+- pinned native inference evidence for every backend advertised by each packaged target;
 - signed and notarized macOS packages;
 - signed Windows packages;
 - explicit `PUBLISH` confirmation;

@@ -141,7 +141,9 @@ export const LocalSuite = () => {
         }
         if (!response.ok)
           throw new Error(
-            `GitHub release request failed with ${response.status}.`,
+            t("help.localSuite.downloads.requestFailed", {
+              status: response.status,
+            }),
           );
         return response.json() as Promise<ReleaseResponse>;
       })
@@ -436,15 +438,21 @@ export const LocalSuite = () => {
 
               <div className="mt-4 grid gap-3 text-xs text-slate-300 sm:grid-cols-2">
                 <div>
-                  <p className="font-semibold text-white">Endpoint</p>
+                  <p className="font-semibold text-white">
+                    {t("help.localSuite.catalog.endpoint")}
+                  </p>
                   <p>{model.api.endpoint}</p>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Backend</p>
+                  <p className="font-semibold text-white">
+                    {t("help.localSuite.catalog.backend")}
+                  </p>
                   <p>{model.backend.provider}</p>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Platform</p>
+                  <p className="font-semibold text-white">
+                    {t("help.localSuite.catalog.platform")}
+                  </p>
                   <p>
                     {model.compat.platforms
                       .map((platform) => PLATFORM_LABELS[platform] ?? platform)
@@ -452,7 +460,9 @@ export const LocalSuite = () => {
                   </p>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Acceleration</p>
+                  <p className="font-semibold text-white">
+                    {t("help.localSuite.catalog.acceleration")}
+                  </p>
                   <p>
                     {model.compat.acceleration
                       .map(
@@ -463,20 +473,34 @@ export const LocalSuite = () => {
                   </p>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Resources</p>
+                  <p className="font-semibold text-white">
+                    {t("help.localSuite.catalog.resources")}
+                  </p>
                   <p>
-                    {model.compat.requires_ram_gb} GB RAM
+                    {t("help.localSuite.catalog.ram", {
+                      value: model.compat.requires_ram_gb,
+                    })}
                     {model.compat.requires_vram_gb
-                      ? ` / ${model.compat.requires_vram_gb} GB VRAM`
+                      ? ` / ${t("help.localSuite.catalog.vram", { value: model.compat.requires_vram_gb })}`
                       : ""}{" "}
-                    / {model.compat.disk_gb} GB disk
+                    /{" "}
+                    {t("help.localSuite.catalog.disk", {
+                      value: model.compat.disk_gb,
+                    })}
                   </p>
                 </div>
                 <div>
-                  <p className="font-semibold text-white">Constraints</p>
+                  <p className="font-semibold text-white">
+                    {t("help.localSuite.catalog.constraints")}
+                  </p>
                   <p>
-                    {model.limits.max_input_mb}MB input ·{" "}
-                    {model.limits.max_output_tokens_default} tokens
+                    {t("help.localSuite.catalog.inputLimit", {
+                      value: model.limits.max_input_mb,
+                    })}{" "}
+                    ·{" "}
+                    {t("help.localSuite.catalog.tokenLimit", {
+                      value: model.limits.max_output_tokens_default,
+                    })}
                   </p>
                 </div>
               </div>

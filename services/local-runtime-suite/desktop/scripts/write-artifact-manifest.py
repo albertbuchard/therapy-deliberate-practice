@@ -8,6 +8,7 @@ import re
 import shutil
 from pathlib import Path
 
+from native_backend_receipt import verify_native_backend_smoke
 from verify_linux_launcher_transform import LINUX_TARGET, validate_receipt
 
 PUBLISHABLE_PATTERNS = {
@@ -26,6 +27,7 @@ PUBLISHABLE_PATTERNS = {
     ),
 }
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+GIT_SHA = re.compile(r"^[a-f0-9]{40}$")
 ARTIFACT_MANIFEST_SCHEMA_VERSION = 2
 EXPECTED_DESKTOP_EXECUTABLES = {
     "aarch64-apple-darwin": "local-runtime-desktop",
@@ -88,6 +90,22 @@ def validate_launcher_transformation(
     return validated
 
 
+def validate_native_backend_receipt(
+    target: str,
+    receipt: dict,
+    *,
+    provenance: dict,
+    source_sha: str,
+) -> dict:
+    verify_native_backend_smoke(
+        target,
+        receipt,
+        provenance=provenance,
+        source_sha=source_sha,
+    )
+    return receipt
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
@@ -96,7 +114,7 @@ def main() -> None:
     parser.add_argument("--provenance", type=Path, required=True)
     parser.add_argument("--smoke-receipt", type=Path, required=True)
     parser.add_argument("--desktop-shell-receipt", type=Path, required=True)
-    parser.add_argument("--native-backend-receipt", type=Path)
+    parser.add_argument("--native-backend-receipt", type=Path, required=True)
     parser.add_argument("--launcher-transform-receipt", type=Path)
     parser.add_argument("--signature-receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -105,10 +123,20 @@ def main() -> None:
     smoke = json.loads(arguments.smoke_receipt.read_text("utf-8"))
     desktop_shell_smoke = json.loads(arguments.desktop_shell_receipt.read_text("utf-8"))
     signature = json.loads(arguments.signature_receipt.read_text("utf-8"))
-    native_backend_smoke = (
-        json.loads(arguments.native_backend_receipt.read_text("utf-8"))
-        if arguments.native_backend_receipt
-        else None
+    native_backend_smoke = json.loads(
+        arguments.native_backend_receipt.read_text("utf-8")
+    )
+    source_sha = os.environ.get("BUILD_SOURCE_SHA") or os.environ.get("GITHUB_SHA")
+    if not source_sha or not GIT_SHA.fullmatch(source_sha):
+        raise RuntimeError(
+            "An exact 40-character BUILD_SOURCE_SHA or GITHUB_SHA is required "
+            "to seal release provenance."
+        )
+    native_backend_smoke = validate_native_backend_receipt(
+        arguments.target,
+        native_backend_smoke,
+        provenance=provenance,
+        source_sha=source_sha,
     )
     launcher_transformation = (
         json.loads(arguments.launcher_transform_receipt.read_text("utf-8"))
@@ -181,11 +209,6 @@ def main() -> None:
             }
         )
 
-    source_sha = os.environ.get("BUILD_SOURCE_SHA") or os.environ.get("GITHUB_SHA")
-    if not source_sha:
-        raise RuntimeError(
-            "BUILD_SOURCE_SHA or GITHUB_SHA is required to seal release provenance."
-        )
     manifest = {
         "schema_version": ARTIFACT_MANIFEST_SCHEMA_VERSION,
         "target": arguments.target,

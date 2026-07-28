@@ -11,6 +11,7 @@ const createEnv = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
   adminEmails: [],
   adminGroups: [],
   cfAccessAud: "",
+  cfAccessIssuer: "",
   bypassAdminAuth: false,
   devAdminToken: "",
   environment: "test",

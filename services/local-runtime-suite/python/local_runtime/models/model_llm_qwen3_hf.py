@@ -203,12 +203,14 @@ def load(ctx: RunContext) -> dict[str, Any]:
             model_ref,
             revision=revision,
             trust_remote_code=False,
+            cache_dir=ctx.cache_dir,
         )
         model = AutoModelForCausalLM.from_pretrained(
             model_ref,
             revision=revision,
             trust_remote_code=False,
             torch_dtype="auto",
+            cache_dir=ctx.cache_dir,
         )
     except Exception as exc:  # pragma: no cover - surfaced via startup logs
         raise RuntimeError(
@@ -234,9 +236,7 @@ def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
     model = instance["model"]
     device = instance["device"]
     prompt = "Hello from warmup."
-    ctx.logger.info(
-        "qwen3_hf.warmup.start", extra={"model_id": SPEC["id"], "prompt": prompt, "device": device}
-    )
+    ctx.logger.info("qwen3_hf.warmup.start", extra={"model_id": SPEC["id"], "device": device})
     start = time.perf_counter()
 
     def _invoke() -> None:

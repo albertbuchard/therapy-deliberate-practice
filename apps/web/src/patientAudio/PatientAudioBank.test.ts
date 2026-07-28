@@ -35,15 +35,28 @@ const createDeferred = <T,>() => {
 
 const setupCacheStorage = () => {
   const store = new Map<string, Response>();
-  const cache = {
-    match: vi.fn(async (url: string) => store.get(url)),
-    put: vi.fn(async (url: string, response: Response) => {
-      store.set(url, response);
-    })
+  const requestKey = (request: RequestInfo | URL) =>
+    typeof request === "string" ? request : request.toString();
+  const cache: Cache = {
+    add: vi.fn(async () => undefined),
+    addAll: vi.fn(async () => undefined),
+    delete: vi.fn(async () => false),
+    keys: vi.fn(async () => []),
+    match: vi.fn(async (request: RequestInfo | URL) =>
+      store.get(requestKey(request))
+    ),
+    matchAll: vi.fn(async () => []),
+    put: vi.fn(async (request: RequestInfo | URL, response: Response) => {
+      store.set(requestKey(request), response);
+    }),
   };
-  const caches = {
-    open: vi.fn(async () => cache)
-  } as CacheStorage;
+  const caches: CacheStorage = {
+    open: vi.fn(async () => cache),
+    delete: vi.fn(async () => false),
+    has: vi.fn(async () => false),
+    keys: vi.fn(async () => []),
+    match: vi.fn(async () => undefined)
+  };
   Object.assign(globalThis, { caches });
   return { store, cache };
 };
@@ -100,7 +113,7 @@ describe("PatientAudioBank", () => {
 
   it("respects retry_after_ms and caps attempts", async () => {
     vi.useFakeTimers();
-    const prefetchSingle = vi.fn(async () => ({
+    const prefetchSingle = vi.fn(async (): Promise<PrefetchResult> => ({
       cache_key: "cache-wait",
       status: "generating",
       retry_after_ms: 200
@@ -122,7 +135,7 @@ describe("PatientAudioBank", () => {
 
   it("aborts polling and avoids late state updates", async () => {
     vi.useFakeTimers();
-    const prefetchSingle = vi.fn(async () => ({
+    const prefetchSingle = vi.fn(async (): Promise<PrefetchResult> => ({
       cache_key: "cache-abort",
       status: "generating",
       retry_after_ms: 200
@@ -145,7 +158,7 @@ describe("PatientAudioBank", () => {
   });
 
   it("transitions through generating and downloading statuses", async () => {
-    const prefetchSingle = vi.fn(async () => ({
+    const prefetchSingle = vi.fn(async (): Promise<PrefetchResult> => ({
       cache_key: "cache-ready",
       status: "ready",
       audio_url: "/api/v1/tts/cache-ready"

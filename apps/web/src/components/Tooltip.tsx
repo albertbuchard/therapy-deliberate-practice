@@ -2,7 +2,7 @@ import { cloneElement, useId, type ReactElement } from "react";
 
 type TooltipProps = {
   label: string;
-  children: ReactElement;
+  children: ReactElement<{ "aria-describedby"?: string }>;
 };
 
 export const Tooltip = ({ label, children }: TooltipProps) => {

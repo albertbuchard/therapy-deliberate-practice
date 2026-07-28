@@ -73,7 +73,9 @@ export class PatientAudioBank {
 
   subscribe(listener: () => void) {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   getEntry(exerciseId: string, statementId: string) {
@@ -293,14 +295,15 @@ export class PatientAudioBank {
       const cachedResponse = await getCachedResponse(audioUrl, signal);
       if (signal?.aborted) return;
 
-      let response = cachedResponse;
+      let response: Response;
       if (cachedResponse) {
         this.log("cache.hit", { audioUrl });
+        response = cachedResponse;
       } else {
         this.log("cache.miss", { audioUrl });
         response = await fetch(audioUrl, { signal });
         if (!response.ok) {
-          throw new Error("Failed to fetch patient audio.");
+          throw new Error(i18n.t("practice.error.patientAudioFetch"));
         }
         await putIfMissing(audioUrl, response.clone());
       }
@@ -354,3 +357,4 @@ export class PatientAudioBank {
     this.logger?.(event, payload);
   }
 }
+import i18n from "../i18n";

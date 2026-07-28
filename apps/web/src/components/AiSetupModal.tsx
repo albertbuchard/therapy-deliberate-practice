@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAccessibleDialog } from "../hooks/useAccessibleDialog";
 
 type GuideMode = "intro" | "local" | "openai";
 
@@ -66,6 +67,9 @@ export const AiSetupModal = ({ open, onClose }: AiSetupModalProps) => {
   const { t } = useTranslation();
   const [mode, setMode] = useState<GuideMode>("intro");
   const [stepIndex, setStepIndex] = useState(0);
+  const { dialogRef, titleId } = useAccessibleDialog(open, () =>
+    onClose("skip"),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -125,20 +129,6 @@ export const AiSetupModal = ({ open, onClose }: AiSetupModalProps) => {
           t("aiSetup.local.steps.1.bullets.0"),
           t("aiSetup.local.steps.1.bullets.1"),
           t("aiSetup.local.steps.1.bullets.2")
-        ],
-        links: [
-          {
-            label: t("aiSetup.local.steps.1.links.0.label"),
-            href: t("aiSetup.local.steps.1.links.0.href")
-          },
-          {
-            label: t("aiSetup.local.steps.1.links.1.label"),
-            href: t("aiSetup.local.steps.1.links.1.href")
-          },
-          {
-            label: t("aiSetup.local.steps.1.links.2.label"),
-            href: t("aiSetup.local.steps.1.links.2.href")
-          }
         ]
       },
       {
@@ -148,8 +138,7 @@ export const AiSetupModal = ({ open, onClose }: AiSetupModalProps) => {
           t("aiSetup.local.steps.2.bullets.0"),
           t("aiSetup.local.steps.2.bullets.1"),
           t("aiSetup.local.steps.2.bullets.2")
-        ],
-        code: t("aiSetup.local.steps.2.code")
+        ]
       }
     ],
     [t]
@@ -219,20 +208,24 @@ export const AiSetupModal = ({ open, onClose }: AiSetupModalProps) => {
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-6 py-10">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(45,212,191,0.2),_transparent_60%)]" />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        className="relative z-10 w-full max-w-4xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950/80 shadow-[0_30px_120px_rgba(15,23,42,0.9)] backdrop-blur"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="relative z-10 max-h-[90dvh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950/80 shadow-[0_30px_120px_rgba(15,23,42,0.9)] backdrop-blur"
       >
         <div className="flex items-start justify-between gap-4 border-b border-white/10 px-8 py-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.35em] text-teal-300">
               {t("aiSetup.title.kicker")}
             </p>
-            <h2 className="text-2xl font-semibold text-white">{t("aiSetup.title.main")}</h2>
+            <h2 id={titleId} className="text-2xl font-semibold text-white">{t("aiSetup.title.main")}</h2>
             <p className="mt-2 max-w-2xl text-sm text-slate-300">{t("aiSetup.title.subtitle")}</p>
           </div>
           <button
             type="button"
+            data-dialog-autofocus
             onClick={() => onClose("skip")}
             className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-200 transition hover:border-white/30 hover:text-white"
           >
@@ -325,9 +318,7 @@ export const AiSetupModal = ({ open, onClose }: AiSetupModalProps) => {
                       });
                       return;
                     }
-                    if (mode !== "intro") {
-                      onClose("dismiss");
-                    }
+                    onClose("dismiss");
                   }}
                   className="rounded-full bg-teal-400 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-slate-950 transition hover:-translate-y-0.5 hover:bg-teal-300"
                 >

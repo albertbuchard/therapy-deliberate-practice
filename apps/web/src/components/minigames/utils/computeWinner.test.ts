@@ -76,7 +76,7 @@ describe("computeWinner", () => {
     const summary = computeWinner({ mode: "ffa", players, teams: [], results });
 
     expect(summary.kind).toBe("tie");
-    expect(summary.label).toBe("Player Ava & Ben tie!");
+    expect(summary.label).toBe("Players Ava and Ben tie!");
     expect(summary.winnerIds).toEqual(["p1", "p2"]);
   });
 

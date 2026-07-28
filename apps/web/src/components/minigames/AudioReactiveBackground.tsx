@@ -16,10 +16,10 @@ type Particle = {
 export const AudioReactiveBackground = ({ audioElement, isPlaying }: AudioReactiveBackgroundProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const dataRef = useRef<Uint8Array | null>(null);
+  const dataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const particlesRef = useRef<Particle[]>([]);
-  const rafRef = useRef<number>();
+  const rafRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const canvas = canvasRef.current;

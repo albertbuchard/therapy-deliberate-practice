@@ -333,6 +333,47 @@ export const minigamePlayerPromptHistory = sqliteTable(
   })
 );
 
+export const minigameRedrawClaims = sqliteTable(
+  "minigame_redraw_claims",
+  {
+    replaced_round_id: text("replaced_round_id").primaryKey(),
+    replacement_round_id: text("replacement_round_id").notNull(),
+    created_at: integer("created_at").notNull(),
+  },
+  (table) => ({
+    replacementUniqueIdx: uniqueIndex(
+      "minigame_redraw_claims_replacement_round_id_idx",
+    ).on(table.replacement_round_id),
+  }),
+);
+
+export const minigameRoundStartClaims = sqliteTable(
+  "minigame_round_start_claims",
+  {
+    round_id: text("round_id").primaryKey(),
+    session_id: text("session_id").notNull(),
+    created_at: integer("created_at").notNull(),
+  },
+);
+
+export const minigameSubmissionClaims = sqliteTable(
+  "minigame_submission_claims",
+  {
+    round_id: text("round_id").notNull(),
+    player_id: text("player_id").notNull(),
+    attempt_id: text("attempt_id").notNull(),
+    created_at: integer("created_at").notNull(),
+  },
+  (table) => ({
+    roundPlayerUniqueIdx: uniqueIndex(
+      "minigame_submission_claims_round_player_idx",
+    ).on(table.round_id, table.player_id),
+    attemptUniqueIdx: uniqueIndex(
+      "minigame_submission_claims_attempt_id_idx",
+    ).on(table.attempt_id),
+  }),
+);
+
 export const ttsAssets = sqliteTable(
   "tts_assets",
   {

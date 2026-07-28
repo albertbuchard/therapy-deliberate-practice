@@ -39,6 +39,17 @@ class TrackingLock:
         self.held = False
 
 
+class CapturingLogger:
+    def __init__(self) -> None:
+        self.extras: list[dict] = []
+
+    def info(self, _message, *, extra=None) -> None:
+        self.extras.append(extra or {})
+
+    def exception(self, _message, *, extra=None) -> None:
+        self.extras.append(extra or {})
+
+
 def test_qwen_generation_parameters_are_bounded_and_use_instruct_defaults() -> None:
     hf = model_llm_qwen3_hf._generation_params(
         {
@@ -135,7 +146,11 @@ def test_qwen_hf_load_applies_an_immutable_test_revision(monkeypatch, tmp_path) 
         (
             "tokenizer",
             "tiny-random/qwen3",
-            {"revision": "immutable-revision", "trust_remote_code": False},
+            {
+                "revision": "immutable-revision",
+                "trust_remote_code": False,
+                "cache_dir": str(tmp_path),
+            },
         ),
         (
             "model",
@@ -144,6 +159,7 @@ def test_qwen_hf_load_applies_an_immutable_test_revision(monkeypatch, tmp_path) 
                 "revision": "immutable-revision",
                 "trust_remote_code": False,
                 "torch_dtype": "auto",
+                "cache_dir": str(tmp_path),
             },
         ),
     ]
@@ -151,26 +167,111 @@ def test_qwen_hf_load_applies_an_immutable_test_revision(monkeypatch, tmp_path) 
 
 def test_qwen_mlx_load_applies_the_pinned_revision(monkeypatch, tmp_path) -> None:
     calls = []
+    snapshot_calls = []
+    resolved = tmp_path / "cache" / "snapshot"
 
     def mlx_load(model_ref, **kwargs):
         calls.append((model_ref, kwargs))
         return object(), object()
 
+    def snapshot_download(**kwargs):
+        snapshot_calls.append(kwargs)
+        return str(resolved)
+
     monkeypatch.setitem(sys.modules, "mlx_lm", SimpleNamespace(load=mlx_load))
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=snapshot_download),
+    )
     context = SimpleNamespace(
         logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
-        cache_dir=str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
     )
 
     instance = model_llm_qwen3_mlx.load(context)
 
     assert instance["revision"] == model_llm_qwen3_mlx.SPEC["backend"]["revision"]
+    assert snapshot_calls == [
+        {
+            "repo_id": model_llm_qwen3_mlx.SPEC["backend"]["model_ref"],
+            "revision": model_llm_qwen3_mlx.SPEC["backend"]["revision"],
+            "cache_dir": str(tmp_path / "cache"),
+        }
+    ]
     assert calls == [
         (
-            model_llm_qwen3_mlx.SPEC["backend"]["model_ref"],
+            str(resolved),
             {"revision": model_llm_qwen3_mlx.SPEC["backend"]["revision"]},
         )
     ]
+
+
+def test_qwen_warmup_logs_are_metadata_only(monkeypatch) -> None:
+    class InferenceMode:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            return None
+
+    class FakeTorch:
+        @staticmethod
+        def inference_mode():
+            return InferenceMode()
+
+    class Inputs(dict):
+        def to(self, _device):
+            return self
+
+    class Tokenizer:
+        def __call__(self, _prompt, **_kwargs):
+            return Inputs()
+
+    class Model:
+        def generate(self, **_kwargs):
+            return None
+
+    hf_logger = CapturingLogger()
+    monkeypatch.setattr(
+        model_llm_qwen3_hf,
+        "_load_backend",
+        lambda: (FakeTorch(), object(), object(), object()),
+    )
+    model_llm_qwen3_hf.warmup(
+        {
+            "tokenizer": Tokenizer(),
+            "model": Model(),
+            "device": "cpu",
+            "lock": TrackingLock(),
+        },
+        SimpleNamespace(logger=hf_logger),
+    )
+
+    mlx_logger = CapturingLogger()
+    monkeypatch.setitem(
+        sys.modules,
+        "mlx_lm",
+        SimpleNamespace(generate=lambda *_args, **_kwargs: "ok"),
+    )
+    monkeypatch.setattr(
+        model_llm_qwen3_mlx,
+        "_build_sampling_components",
+        lambda _params: ("sampler", []),
+    )
+    model_llm_qwen3_mlx.warmup(
+        {
+            "model": object(),
+            "tokenizer": object(),
+            "lock": TrackingLock(),
+        },
+        SimpleNamespace(logger=mlx_logger),
+    )
+
+    assert hf_logger.extras
+    assert mlx_logger.extras
+    assert all("prompt" not in extra for extra in hf_logger.extras)
+    assert all("prompt" not in extra for extra in mlx_logger.extras)
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,10 @@
+import { useTranslation } from "react-i18next";
 import type { PatientAudioStatus } from "../../patientAudio/PatientAudioBank";
-import type { MinigamePlayer, MinigameRound, MinigameTeam } from "../../store/api";
+import type {
+  MinigamePlayer,
+  MinigameRound,
+  MinigameTeam,
+} from "../../store/api";
 
 type NowUpHeaderProps = {
   mode: "ffa" | "tdm" | null;
@@ -18,16 +23,8 @@ const teamGradientMap: Record<string, string> = {
   amber: "from-amber-300/70 via-amber-100/80 to-white/60",
   rose: "from-rose-300/70 via-rose-100/80 to-white/60",
   sky: "from-sky-300/70 via-sky-100/80 to-white/60",
-  lime: "from-lime-300/70 via-lime-100/80 to-white/60"
+  lime: "from-lime-300/70 via-lime-100/80 to-white/60",
 };
-
-const modeLabelMap = {
-  ffa: "Free For All",
-  tdm: "Team Deathmatch"
-};
-
-const teamSummary = (team?: MinigameTeam | null) =>
-  team ? `${team.name} · ${team.color}` : "Solo";
 
 const teamAccent = (team?: MinigameTeam | null) =>
   team?.color && teamGradientMap[team.color]
@@ -42,16 +39,23 @@ export const NowUpHeader = ({
   activePlayerId,
   responseCountdown,
   audioStatus,
-  audioError
+  audioError,
 }: NowUpHeaderProps) => {
+  const { t } = useTranslation();
+  const teamSummary = (team?: MinigameTeam | null) =>
+    team ? `${team.name} · ${team.color}` : t("minigameUi.solo");
   const isPlaying = audioStatus === "playing";
-  const headerLabel = isPlaying ? "Now playing" : "Now up";
+  const headerLabel = isPlaying
+    ? t("minigameUi.nowPlaying")
+    : t("minigameUi.nowUp");
   const responseLabel =
     responseCountdown == null
       ? null
       : responseCountdown > 0
-        ? `WAIT ${responseCountdown.toFixed(1)}s`
-        : `LATE ${Math.abs(responseCountdown).toFixed(1)}s`;
+        ? t("minigameUi.waitSeconds", { seconds: responseCountdown.toFixed(1) })
+        : t("minigameUi.lateSeconds", {
+            seconds: Math.abs(responseCountdown).toFixed(1),
+          });
   const responseTone =
     responseCountdown == null
       ? ""
@@ -62,7 +66,7 @@ export const NowUpHeader = ({
   if (!mode) {
     return (
       <div className="w-full rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-center text-sm text-slate-200 shadow-[0_0_30px_rgba(15,23,42,0.4)] backdrop-blur">
-        Select a mode to begin.
+        {t("minigameUi.selectMode")}
       </div>
     );
   }
@@ -92,7 +96,9 @@ export const NowUpHeader = ({
             {headerLabel}
           </span>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-white/70">
-            {modeLabelMap[mode]}
+            {mode === "tdm"
+              ? t("minigameUi.teamDeathmatch")
+              : t("minigameUi.freeForAll")}
           </span>
           {responseLabel && (
             <span
@@ -113,40 +119,44 @@ export const NowUpHeader = ({
         <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
             <p className="text-[10px] uppercase tracking-[0.35em] text-slate-400">
-              Team A
+              {t("minigameUi.teamA")}
             </p>
             <p className={`mt-2 text-lg font-semibold text-white`}>
-              {playerA?.name ?? "Player A"}
+              {playerA?.name ?? t("minigameUi.playerA")}
             </p>
-            <p className={`text-xs uppercase tracking-[0.2em] bg-gradient-to-r ${teamAccent(teamA)} bg-clip-text text-transparent`}>
+            <p
+              className={`text-xs uppercase tracking-[0.2em] bg-gradient-to-r ${teamAccent(teamA)} bg-clip-text text-transparent`}
+            >
               {teamSummary(teamA)}
             </p>
             {activePlayerId && activePlayerId === playerA?.id && (
               <span className="mt-2 inline-flex rounded-full border border-teal-300/50 bg-teal-500/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-teal-100">
-                Turn
+                {t("minigameUi.turn")}
               </span>
             )}
           </div>
 
           <div className="hidden items-center justify-center md:flex">
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.4em] text-slate-200">
-              VS
+              {t("minigameUi.versus")}
             </span>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-right">
             <p className="text-[10px] uppercase tracking-[0.35em] text-slate-400">
-              Team B
+              {t("minigameUi.teamB")}
             </p>
             <p className="mt-2 text-lg font-semibold text-white">
-              {playerB?.name ?? "Player B"}
+              {playerB?.name ?? t("minigameUi.playerB")}
             </p>
-            <p className={`text-xs uppercase tracking-[0.2em] bg-gradient-to-r ${teamAccent(teamB)} bg-clip-text text-transparent`}>
+            <p
+              className={`text-xs uppercase tracking-[0.2em] bg-gradient-to-r ${teamAccent(teamB)} bg-clip-text text-transparent`}
+            >
               {teamSummary(teamB)}
             </p>
             {activePlayerId && activePlayerId === playerB?.id && (
               <span className="mt-2 inline-flex rounded-full border border-rose-300/50 bg-rose-500/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-rose-100">
-                Turn
+                {t("minigameUi.turn")}
               </span>
             )}
           </div>
@@ -154,16 +164,21 @@ export const NowUpHeader = ({
       ) : (
         <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
           <p className="text-[10px] uppercase tracking-[0.35em] text-slate-400">
-            Player turn
+            {t("minigameUi.playerTurn")}
           </p>
           <p className="mt-2 text-lg font-semibold text-white">
-            {players.find((player) => player.id === activePlayerId)?.name ?? playerA?.name ?? "Player"} Turn
+            {t("minigameUi.playerTurnValue", {
+              player:
+                players.find((player) => player.id === activePlayerId)?.name ??
+                playerA?.name ??
+                t("minigameUi.player"),
+            })}
           </p>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-300">
             {teamSummary(teamA)}
           </p>
           <span className="mt-2 inline-flex rounded-full border border-teal-300/50 bg-teal-500/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-teal-100">
-            Turn
+            {t("minigameUi.turn")}
           </span>
         </div>
       )}

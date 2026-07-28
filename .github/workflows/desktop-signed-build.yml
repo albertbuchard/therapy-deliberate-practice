@@ -479,7 +479,7 @@ jobs:
           "PACKAGED_RUNTIME_ROOT=$($runtime.FullName)" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run native backends from packaged Unix payload
-        if: runner.os == 'Linux' || matrix.target == 'aarch64-apple-darwin'
+        if: runner.os == 'Linux' || endsWith(matrix.target, '-apple-darwin')
         shell: bash
         env:
           RUNNER_TARGET: ${{ matrix.target }}
@@ -514,13 +514,10 @@ jobs:
             --provenance "services/local-runtime-suite/desktop/src-tauri/resources/local-runtime-python/build-provenance.json"
             --smoke-receipt "release-evidence/${{ matrix.target }}/packaged-sidecar-smoke.json"
             --desktop-shell-receipt "release-evidence/${{ matrix.target }}/desktop-shell-smoke.json"
+            --native-backend-receipt "release-evidence/${{ matrix.target }}/native-backends.json"
             --signature-receipt "release-evidence/${{ matrix.target }}/signature-receipt.json"
             --output "release-evidence/${{ matrix.target }}/artifact-manifest.json"
           )
-          native_receipt="release-evidence/${{ matrix.target }}/native-backends.json"
-          if [[ -f "$native_receipt" ]]; then
-            args+=(--native-backend-receipt "$native_receipt")
-          fi
           launcher_transform="release-evidence/${{ matrix.target }}/launcher-transformation.json"
           if [[ -f "$launcher_transform" ]]; then
             args+=(--launcher-transform-receipt "$launcher_transform")

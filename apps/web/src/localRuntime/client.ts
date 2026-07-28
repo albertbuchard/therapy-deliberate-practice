@@ -5,6 +5,7 @@ import {
   type TaskExample
 } from "@deliberate/shared";
 import { z } from "zod";
+import i18n from "../i18n";
 
 const STORAGE_PREFIX = "therapy.localRuntimePairingKey";
 const GATEWAY_SERVICE_ID = "therapy-local-runtime";
@@ -45,7 +46,7 @@ const isLoopbackHostname = (hostname: string) =>
 export const normalizeLocalRuntimeBaseUrl = (value: string): string => {
   const parsed = new URL(value.trim());
   if (parsed.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) {
-    throw new Error("The local runtime URL must use http://localhost or http://127.0.0.1.");
+    throw new Error(i18n.t("localRuntimeErrors.loopbackUrl"));
   }
   if (
     parsed.username ||
@@ -54,9 +55,7 @@ export const normalizeLocalRuntimeBaseUrl = (value: string): string => {
     parsed.hash ||
     (parsed.pathname !== "/" && parsed.pathname !== "")
   ) {
-    throw new Error(
-      "The local runtime URL cannot contain credentials, a path, a query, or a fragment."
-    );
+    throw new Error(i18n.t("localRuntimeErrors.originOnly"));
   }
   return parsed.origin;
 };
@@ -77,12 +76,10 @@ export const resolveLocalRuntimeGatewayOrigin = ({
   ];
   const uniqueOrigins = [...new Set(origins)];
   if (uniqueOrigins.length === 0) {
-    throw new Error("The local runtime URL is missing.");
+    throw new Error(i18n.t("localRuntimeErrors.urlMissing"));
   }
   if (uniqueOrigins.length > 1) {
-    throw new Error(
-      "Speech recognition and evaluation must use the same local gateway URL."
-    );
+    throw new Error(i18n.t("localRuntimeErrors.sameGateway"));
   }
   return uniqueOrigins[0];
 };
@@ -96,7 +93,7 @@ export const loadLocalRuntimePairingKey = (baseUrl: string): string =>
 export const requireLocalRuntimePairingKey = (baseUrl: string): string => {
   const token = loadLocalRuntimePairingKey(baseUrl);
   if (!token) {
-    throw new LocalRuntimeRequestError("Pair this browser with the local runtime again.", {
+    throw new LocalRuntimeRequestError(i18n.t("localRuntimeErrors.pairAgain"), {
       code: "PAIRING_REQUIRED"
     });
   }
@@ -106,7 +103,7 @@ export const requireLocalRuntimePairingKey = (baseUrl: string): string => {
 export const saveLocalRuntimePairingKey = (baseUrl: string, token: string): void => {
   const normalizedToken = token.trim();
   if (normalizedToken.length < 32) {
-    throw new Error("The pairing key is incomplete.");
+    throw new Error(i18n.t("localRuntimeErrors.pairingIncomplete"));
   }
   window.localStorage.setItem(storageKey(baseUrl), normalizedToken);
 };
@@ -233,7 +230,7 @@ const localFetch = async (
       }
       if (abortCause === "caller") {
         throw new LocalRuntimeRequestError(
-          "The local model request was cancelled. Completed earlier work was preserved.",
+          i18n.t("localRuntimeErrors.cancelled"),
           {
             code: "CANCELLED",
             cause: error
@@ -241,7 +238,7 @@ const localFetch = async (
         );
       }
       throw new LocalRuntimeRequestError(
-        "The local runtime timed out. Cancellation was requested; retry when the model is ready.",
+        i18n.t("localRuntimeErrors.timeout"),
         {
           code: "TIMEOUT",
           cause: error
@@ -270,13 +267,13 @@ export const checkLocalRuntimeHealth = async (
   }
   const payload = (await response.json()) as Partial<LocalRuntimeHealth>;
   if (payload.service !== GATEWAY_SERVICE_ID) {
-    throw new Error("A different service is using this port.");
+    throw new Error(i18n.t("localRuntimeErrors.wrongService"));
   }
   if (payload.protocol_version !== GATEWAY_PROTOCOL_VERSION) {
-    throw new Error("This local runtime version is not compatible with the website.");
+    throw new Error(i18n.t("localRuntimeErrors.incompatibleVersion"));
   }
   if (typeof payload.status !== "string") {
-    throw new Error("The local runtime returned an invalid health response.");
+    throw new Error(i18n.t("localRuntimeErrors.invalidHealth"));
   }
   return payload as LocalRuntimeHealth;
 };
@@ -298,7 +295,7 @@ export const getLocalRuntimeDetails = async (baseUrl: string, token: string) => 
     payload.protocol_version !== GATEWAY_PROTOCOL_VERSION ||
     typeof payload.status !== "string"
   ) {
-    throw new Error("The local runtime returned incompatible connection details.");
+    throw new Error(i18n.t("localRuntimeErrors.incompatibleDetails"));
   }
   return payload;
 };
@@ -347,7 +344,7 @@ export const transcribeWithLocalRuntime = async ({
   const payload = (await response.json()) as { text?: string; model?: string };
   const text = payload.text?.trim();
   if (!text) {
-    throw new Error("The local speech model returned an empty transcript.");
+    throw new Error(i18n.t("localRuntimeErrors.emptyTranscript"));
   }
   return {
     text,
@@ -448,17 +445,17 @@ export const evaluateWithLocalRuntime = async ({
   const payload = (await response.json()) as { model?: string };
   const raw = outputText(payload);
   if (!raw) {
-    throw new Error("The local language model returned an empty evaluation.");
+    throw new Error(i18n.t("localRuntimeErrors.emptyEvaluation"));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error("The local language model returned invalid JSON.");
+    throw new Error(i18n.t("localRuntimeErrors.invalidEvaluationJson"));
   }
   const validated = evaluationResultSchema.safeParse(parsed);
   if (!validated.success) {
-    throw new Error("The local evaluation did not match the required schema.");
+    throw new Error(i18n.t("localRuntimeErrors.invalidEvaluationSchema"));
   }
   return {
     evaluation: validated.data,

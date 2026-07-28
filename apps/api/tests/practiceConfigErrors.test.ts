@@ -5,7 +5,12 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { SignJWT } from "jose";
 import { createApiApp } from "../src/app";
 import type { RuntimeEnv } from "../src/env";
-import { userSettings, users } from "../src/db/schema";
+import {
+  taskExamples,
+  tasks,
+  userSettings,
+  users,
+} from "../src/db/schema";
 
 const createEnv = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
   aiMode: "local_prefer",
@@ -14,6 +19,7 @@ const createEnv = (overrides: Partial<RuntimeEnv> = {}): RuntimeEnv => ({
   adminEmails: [],
   adminGroups: [],
   cfAccessAud: "",
+  cfAccessIssuer: "",
   bypassAdminAuth: false,
   devAdminToken: "",
   environment: "test",
@@ -76,6 +82,32 @@ const setupDb = () => {
       score_trust TEXT NOT NULL DEFAULT 'local_unverified',
       model_info TEXT
     );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      skill_domain TEXT NOT NULL,
+      base_difficulty INTEGER NOT NULL,
+      general_objective TEXT,
+      tags TEXT NOT NULL,
+      language TEXT NOT NULL,
+      is_published INTEGER NOT NULL,
+      parent_task_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE task_examples (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      difficulty INTEGER NOT NULL,
+      severity_label TEXT,
+      patient_text TEXT NOT NULL,
+      language TEXT NOT NULL,
+      meta TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
   const db = drizzle(sqlite);
   return { db, sqlite };
@@ -126,6 +158,33 @@ test("practice run returns 400 when openai_only has no key", async () => {
     updated_at: Date.now(),
     created_at: Date.now()
   });
+  const now = Date.now();
+  await db.insert(tasks).values({
+    id: "task-1",
+    slug: "task-1",
+    title: "Task",
+    description: "Description",
+    skill_domain: "validation",
+    base_difficulty: 2,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: true,
+    parent_task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
+  await db.insert(taskExamples).values({
+    id: "example-1",
+    task_id: "task-1",
+    difficulty: 2,
+    severity_label: null,
+    patient_text: "Prompt",
+    language: "en",
+    meta: null,
+    created_at: now,
+    updated_at: now,
+  });
 
   const headers = await createAuthHeader(env, userId);
   const response = await app.request("/api/v1/practice/run", {
@@ -134,7 +193,7 @@ test("practice run returns 400 when openai_only has no key", async () => {
     body: JSON.stringify({
       task_id: "task-1",
       example_id: "example-1",
-      attempt_id: "attempt-1",
+      input_mode: "typed",
       transcript_text: "hello",
       practice_mode: "real_time",
       skip_scoring: true

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gatewayBootActivityMessage, isReadyGatewayHealth } from "./useGatewayBoot";
+import { translate } from "../i18n";
 
 describe("gateway health contract", () => {
   it("accepts only the exact public gateway identity and ready state", () => {
@@ -43,5 +44,20 @@ describe("gateway startup feedback", () => {
         lastReadiness: "starting"
       })
     ).toBe("Gateway reported “starting”; checking again…");
+  });
+
+  it("reports the same measured state in French", () => {
+    expect(
+      gatewayBootActivityMessage(
+        {
+          phase: "polling",
+          runId: 1,
+          attempts: 3,
+          startedAtMs: 1,
+          lastReadiness: "starting"
+        },
+        (key, values) => translate("fr", key, values)
+      )
+    ).toBe("La passerelle indique « starting » ; nouvelle vérification…");
   });
 });

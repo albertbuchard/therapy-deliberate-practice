@@ -30,7 +30,7 @@ An **evaluation trust provenance** states how an evaluation was produced. `cloud
 
 1. The ordinary practice path must be calm, legible, responsive on desktop and mobile, and explicit about recording, transcription, evaluation, progress, errors, and recovery.
 2. Local inference must work through a browser-to-loopback connection protected by a per-install capability key. Pairing must be an explicit, recoverable copy-and-paste flow; the key must never be sent to the hosted API, placed in a URL, logged, or included in analytics.
-3. Therapy-related prompts, transcripts, and model outputs are sensitive content. Logs must contain metadata by default and content only after explicit diagnostic opt-in.
+3. Therapy-related prompts, transcripts, and model outputs are sensitive content. Logs and diagnostics must remain metadata-only; the current product does not provide a content-logging opt-in.
 4. A model or operating system is supported only when the repository has proportionate executable evidence for its integration and packaging path. Unsupported claims must be removed or clearly marked.
 5. Release builds and release publication are separate capabilities. Normal validation produces downloadable build artifacts without creating a public release. Signing, notarization, store submission, tags, deployment, and publication require explicit authorization and configured credentials.
 6. Accessibility, keyboard operation, touch targets, visible focus, reduced motion, readable contrast, meaningful status text, and error recovery are part of correctness.
@@ -69,7 +69,7 @@ The separate release workflow can create only a draft release from an existing v
 
 The browser owns presentation, microphone capture, explicit local pairing, and direct calls to the loopback gateway. The hosted API owns authentication, task and criterion data, authorization, preparation of evaluation context, validation of returned structures, server-derived aggregates, persistence, and trust labeling. Hosted providers run only in the hosted API. Local providers run only in the local gateway.
 
-The desktop launcher owns the gateway process, a single atomic configuration file, the pairing key, model defaults, log access, and diagnostics. The gateway must read that exact configuration for both server startup and application lifespan. A health response must identify the Therapy Local Runtime rather than treating any listener on the port as healthy.
+The desktop launcher owns the gateway process, a single atomic configuration file, the pairing key, authoritative data and model-cache paths, model defaults, metadata-only log access, and diagnostics. The gateway and every model adapter must use the exact paths the control centre reports. The gateway must read that configuration for both server startup and application lifespan. A health response must identify the Therapy Local Runtime rather than treating any listener on the port as healthy.
 
 The model registry owns per-model lifecycle synchronization and returns real readiness and failure states. Large model downloads are explicit or background operations; they cannot block basic gateway health. Packaged sidecars are deterministic target-specific artifacts with pinned upstream inputs, verified checksums, target-suffixed executable names, and package-level smoke evidence.
 

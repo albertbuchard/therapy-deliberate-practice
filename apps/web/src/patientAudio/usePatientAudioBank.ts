@@ -29,6 +29,37 @@ type UsePatientAudioBankOptions = {
   maxAttempts?: number;
 };
 
+export const pausePatientAudio = (
+  audioElement?: HTMLAudioElement | null,
+) => {
+  audioElement?.pause();
+};
+
+export const stopAndRewindPatientAudio = (
+  audioElement?: HTMLAudioElement | null,
+) => {
+  if (!audioElement) return;
+  audioElement.pause();
+  audioElement.currentTime = 0;
+};
+
+export const preparePatientAudioPlayback = (
+  audioElement: HTMLAudioElement,
+  source: string,
+) => {
+  const sourceChanged = audioElement.getAttribute("src") !== source;
+  if (sourceChanged) {
+    audioElement.pause();
+    audioElement.currentTime = 0;
+    audioElement.src = source;
+    audioElement.load();
+    return;
+  }
+  if (audioElement.ended) {
+    audioElement.currentTime = 0;
+  }
+};
+
 const normalizeWarmupTargets = (targets: WarmupTargets) => {
   const grouped = new Map<string, Set<string>>();
   if (Array.isArray(targets)) {
@@ -53,7 +84,7 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
     () => createPatientAudioLogger(options?.loggerScope ?? "bank"),
     [options?.loggerScope]
   );
-  const bankRef = useRef<PatientAudioBank>();
+  const bankRef = useRef<PatientAudioBank | undefined>(undefined);
 
   if (!bankRef.current) {
     bankRef.current = new PatientAudioBank({
@@ -131,11 +162,8 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
     [bank]
   );
 
-  const stop = useCallback((audioElement?: HTMLAudioElement | null) => {
-    if (!audioElement) return;
-    audioElement.pause();
-    audioElement.currentTime = 0;
-  }, []);
+  const pause = useCallback(pausePatientAudio, []);
+  const stopAndRewind = useCallback(stopAndRewindPatientAudio, []);
 
   const play = useCallback(
     async (
@@ -159,11 +187,9 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
         return;
       }
 
-      audioElement.pause();
-      audioElement.currentTime = 0;
-      audioElement.src = entry.blobUrl;
-      audioElement.load();
+      preparePatientAudioPlayback(audioElement, entry.blobUrl);
       audioElement.onended = () => {
+        audioElement.currentTime = 0;
         bank.updateEntry(exerciseId, statementId, { status: "ready" });
         opts?.onEnded?.();
       };
@@ -213,7 +239,8 @@ export const usePatientAudioBank = (options?: UsePatientAudioBankOptions) => {
     warmup,
     ensureReady,
     play,
-    stop,
+    pause,
+    stopAndRewind,
     getEntry,
     progress
   };

@@ -8,11 +8,6 @@ on:
         required: true
         default: "main"
         type: string
-      run_native_backend_smoke:
-        description: "Run bounded native inference from packaged ARM macOS, Windows, and Linux runtimes"
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -22,8 +17,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve_source:
+    name: resolve exact source commit
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Seal immutable source commit
+        id: source
+        shell: bash
+        run: |
+          source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved source is not an exact 40-character commit SHA." >&2
+            exit 1
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.artifact }}
+    needs: resolve_source
     strategy:
       fail-fast: false
       matrix:
@@ -55,11 +73,19 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ needs.resolve_source.outputs.source_sha }}
           persist-credentials: false
       - name: Record checked-out source commit
         shell: bash
-        run: echo "BUILD_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          RESOLVED_SOURCE_SHA: ${{ needs.resolve_source.outputs.source_sha }}
+        run: |
+          checked_out_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          if [[ "$checked_out_sha" != "$RESOLVED_SOURCE_SHA" ]]; then
+            echo "Matrix checkout does not match the sealed source commit." >&2
+            exit 1
+          fi
+          echo "BUILD_SOURCE_SHA=$checked_out_sha" >> "$GITHUB_ENV"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24.12.0"
@@ -361,8 +387,7 @@ jobs:
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run native backends from packaged Unix payload
         if: >-
-          inputs.run_native_backend_smoke &&
-          (runner.os == 'Linux' || matrix.target == 'aarch64-apple-darwin')
+          runner.os == 'Linux' || endsWith(matrix.target, '-apple-darwin')
         shell: bash
         env:
           RUNNER_TARGET: ${{ matrix.target }}
@@ -373,7 +398,7 @@ jobs:
             services/local-runtime-suite/python/tools/smoke_native_backends.py \
             --output "release-evidence/${{ matrix.target }}/native-backends.json"
       - name: Run native backends from packaged Windows payload
-        if: runner.os == 'Windows' && inputs.run_native_backend_smoke
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
           RUNNER_TARGET: ${{ matrix.target }}
@@ -397,13 +422,10 @@ jobs:
             --provenance "services/local-runtime-suite/desktop/src-tauri/resources/local-runtime-python/build-provenance.json"
             --smoke-receipt "release-evidence/${{ matrix.target }}/packaged-sidecar-smoke.json"
             --desktop-shell-receipt "release-evidence/${{ matrix.target }}/desktop-shell-smoke.json"
+            --native-backend-receipt "release-evidence/${{ matrix.target }}/native-backends.json"
             --signature-receipt "release-evidence/${{ matrix.target }}/signature-receipt.json"
             --output "release-evidence/${{ matrix.target }}/artifact-manifest.json"
           )
-          native_receipt="release-evidence/${{ matrix.target }}/native-backends.json"
-          if [[ -f "$native_receipt" ]]; then
-            args+=(--native-backend-receipt "$native_receipt")
-          fi
           launcher_transform="release-evidence/${{ matrix.target }}/launcher-transformation.json"
           if [[ -f "$launcher_transform" ]]; then
             args+=(--launcher-transform-receipt "$launcher_transform")

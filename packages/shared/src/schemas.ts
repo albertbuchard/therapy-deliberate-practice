@@ -205,9 +205,10 @@ export const practiceRunInputSchema = z
     task_id: z.string().optional(),
     example_id: z.string().optional(),
     attempt_id: z.string().optional(),
+    input_mode: z.enum(["audio", "typed"]).optional(),
     audio: z.string().optional(),
     audio_mime: z.string().optional(),
-    transcript_text: z.string().optional(),
+    transcript_text: z.string().trim().min(1).max(20_000).optional(),
     skip_scoring: z.boolean().optional(),
     mode: z.enum(["local_prefer", "openai_only", "local_only"]).optional(),
     practice_mode: z.enum(["standard", "real_time"]).optional(),
@@ -233,6 +234,18 @@ export const practiceRunInputSchema = z
         message: "Provide audio or transcript_text."
       });
     }
+    if (data.input_mode === "typed" && data.audio) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Typed practice cannot include audio."
+      });
+    }
+    if (data.input_mode === "typed" && !data.transcript_text) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Typed practice requires transcript_text."
+      });
+    }
   });
 
 export const practiceRunResponseSchema = z.object({
@@ -243,11 +256,14 @@ export const practiceRunResponseSchema = z.object({
   transcript: z
     .object({
       text: z.string(),
-      provider: z.object({
-        kind: z.enum(["local", "openai"]),
-        model: z.string()
-      }),
-      duration_ms: z.number()
+      input_mode: z.enum(["audio", "typed"]).optional(),
+      provider: z
+        .object({
+          kind: z.enum(["local", "openai"]),
+          model: z.string()
+        })
+        .nullable(),
+      duration_ms: z.number().nullable()
     })
     .optional(),
   timing_penalty: z.number().optional(),
@@ -274,10 +290,12 @@ export const practiceRunResponseSchema = z.object({
     .object({
       timings: z.record(z.string(), z.number()),
       selectedProviders: z.object({
-        stt: z.object({
-          kind: z.enum(["local", "openai"]),
-          model: z.string()
-        }),
+        stt: z
+          .object({
+            kind: z.enum(["local", "openai"]),
+            model: z.string()
+          })
+          .nullable(),
         llm: z
           .object({
             kind: z.enum(["local", "openai"]),

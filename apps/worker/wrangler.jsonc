@@ -35,6 +35,7 @@
     },
   ],
   // Secrets (set via `wrangler secret put`): OPENAI_API_KEY, OPENAI_KEY_ENCRYPTION_SECRET, SUPABASE_JWT_SECRET,
+  //   CF_ACCESS_AUD, CF_ACCESS_ISSUER,
   //    "ADMIN_EMAILS": "",
   //    "ADMIN_GROUPS": "",
   // Local model URLs belong to the learner's browser settings. A hosted Worker cannot reach them.

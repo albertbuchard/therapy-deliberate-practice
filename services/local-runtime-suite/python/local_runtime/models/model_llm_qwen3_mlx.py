@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
 from local_runtime.cancellation import CancellationToken, acquire_model_lock
@@ -273,13 +274,25 @@ def load(ctx: RunContext) -> dict[str, Any]:
         from mlx_lm import load as mlx_load  # type: ignore
     except ImportError as exc:
         raise RuntimeError("mlx-lm is required for Qwen3 MLX. Install with `pip install mlx-lm`.") from exc
+    from huggingface_hub import snapshot_download
+
     model_ref = os.getenv("LOCAL_RUNTIME_QWEN3_MLX_MODEL", SPEC["backend"]["model_ref"])
     revision = os.getenv("LOCAL_RUNTIME_QWEN3_MLX_REVISION") or SPEC["backend"]["revision"]
+    local_path = Path(model_ref).expanduser()
+    resolved_model_ref = (
+        str(local_path.resolve())
+        if local_path.exists()
+        else snapshot_download(
+            repo_id=model_ref,
+            revision=revision,
+            cache_dir=ctx.cache_dir,
+        )
+    )
     ctx.logger.info(
         "qwen3_mlx.load",
         extra={"model_id": SPEC["id"], "model_ref": model_ref, "revision": revision},
     )
-    model, tokenizer = mlx_load(model_ref, revision=revision)
+    model, tokenizer = mlx_load(resolved_model_ref, revision=revision)
     return {
         "model": model,
         "tokenizer": tokenizer,
@@ -291,7 +304,7 @@ def load(ctx: RunContext) -> dict[str, Any]:
 
 def warmup(instance: dict[str, Any], ctx: RunContext) -> None:
     prompt = "You are a helpful assistant. Say hello."
-    ctx.logger.info("qwen3_mlx.warmup.start", extra={"model_id": SPEC["id"], "prompt": prompt})
+    ctx.logger.info("qwen3_mlx.warmup.start", extra={"model_id": SPEC["id"]})
     start = time.perf_counter()
     try:
         from mlx_lm import generate  # type: ignore

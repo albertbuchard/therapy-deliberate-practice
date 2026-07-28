@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def native_backend_result(family: str) -> dict:
         "output": {
             "type": "dict",
             "keys": ["text"] if is_stt else ["output_text"],
-            "text_chars": 0,
+            "text_chars": 0 if is_stt else 1,
         },
         "timing_ms": {"load": 1.0, "request": 1.0},
     }
@@ -398,6 +399,111 @@ def test_valid_complete_release_passes(tmp_path) -> None:
     verify_release_artifacts.verify_release(tmp_path, f"v{VERSION}", SOURCE_SHA)
 
 
+def test_manifest_writer_cli_requires_native_backend_receipt(tmp_path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WRITER_PATH),
+            "--target",
+            "aarch64-apple-darwin",
+            "--bundle-dir",
+            str(tmp_path),
+            "--packages-dir",
+            str(tmp_path),
+            "--provenance",
+            str(tmp_path / "provenance.json"),
+            "--smoke-receipt",
+            str(tmp_path / "smoke.json"),
+            "--desktop-shell-receipt",
+            str(tmp_path / "shell.json"),
+            "--signature-receipt",
+            str(tmp_path / "signature.json"),
+            "--output",
+            str(tmp_path / "manifest.json"),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "--native-backend-receipt" in result.stderr
+
+
+def test_unsigned_build_workflow_cannot_skip_required_native_smoke() -> None:
+    workflow = (SCRIPT_PATH.parents[4] / ".github" / "workflows" / "desktop-build.yml").read_text("utf-8")
+
+    assert "run_native_backend_smoke" not in workflow
+    assert "endsWith(matrix.target, '-apple-darwin')" in workflow
+    assert "if: runner.os == 'Windows'" in workflow
+    assert workflow.count("--native-backend-receipt") == 1
+    assert "resolve_source:" in workflow
+    assert "source_sha: ${{ steps.source.outputs.source_sha }}" in workflow
+    assert "ref: ${{ needs.resolve_source.outputs.source_sha }}" in workflow
+    assert "checked_out_sha" in workflow
+    assert "BUILD_SOURCE_SHA=$checked_out_sha" in workflow
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("wrong_target", "identity or provenance"),
+        ("wrong_sha", "identity or provenance"),
+        ("wrong_provenance", "identity or provenance"),
+        ("missing_family", "required families"),
+        ("extra_family", "required families"),
+        ("failed_result", "did not pass"),
+        ("blank_output", "output evidence"),
+        ("boolean_output", "output evidence"),
+        ("missing_output_key", "output evidence"),
+        ("missing_stt_output_key", "output evidence"),
+    ],
+)
+def test_manifest_writer_rejects_invalid_native_backend_evidence(case, message) -> None:
+    target = "x86_64-apple-darwin" if case == "extra_family" else "aarch64-apple-darwin"
+    provenance = {"target": target, "runtime_source_sha256": "c" * 64}
+    receipt = native_backend_receipt(target, provenance)
+    assert receipt is not None
+    source_sha = SOURCE_SHA
+
+    if case == "wrong_target":
+        receipt["platform"]["target"] = "x86_64-unknown-linux-gnu"
+    elif case == "wrong_sha":
+        receipt["source"]["git_sha"] = "b" * 40
+    elif case == "wrong_provenance":
+        receipt["runtime_provenance"] = {}
+    elif case == "missing_family":
+        receipt["backends"] = receipt["backends"][1:]
+    elif case == "extra_family":
+        receipt["backends"].append(native_backend_result("qwen-transformers"))
+    elif case == "failed_result":
+        receipt["backends"][0]["result"] = "failed"
+    elif case == "blank_output":
+        qwen = next(backend for backend in receipt["backends"] if backend["family"] == "qwen-transformers")
+        qwen["output"]["text_chars"] = 0
+    elif case == "boolean_output":
+        qwen = next(backend for backend in receipt["backends"] if backend["family"] == "qwen-transformers")
+        qwen["output"]["text_chars"] = True
+    elif case == "missing_output_key":
+        qwen = next(backend for backend in receipt["backends"] if backend["family"] == "qwen-transformers")
+        qwen["output"]["keys"] = []
+    elif case == "missing_stt_output_key":
+        faster_whisper = next(
+            backend for backend in receipt["backends"] if backend["family"] == "faster-whisper"
+        )
+        faster_whisper["output"]["keys"] = []
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(f"Unknown test case: {case}")
+
+    with pytest.raises(RuntimeError, match=message):
+        write_artifact_manifest.validate_native_backend_receipt(
+            target,
+            receipt,
+            provenance=provenance,
+            source_sha=source_sha,
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -523,6 +629,7 @@ def test_manifest_writer_requires_linux_transform_to_bind_both_launcher_hashes()
     "target",
     [
         "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
         "x86_64-pc-windows-msvc",
         "x86_64-unknown-linux-gnu",
     ],
@@ -541,12 +648,83 @@ def test_required_native_backend_receipt_cannot_be_omitted(tmp_path, target) -> 
         )
 
 
-def test_apple_silicon_receipt_requires_both_pinned_mlx_families(tmp_path) -> None:
+def test_apple_silicon_receipt_requires_every_advertised_backend_family(tmp_path) -> None:
     path = write_valid_target(tmp_path, "aarch64-apple-darwin")
     manifest = json.loads(path.read_text())
-    manifest["native_backend_smoke"]["backends"][0]["revision"] = "c" * 40
+    manifest["native_backend_smoke"]["backends"] = [
+        backend
+        for backend in manifest["native_backend_smoke"]["backends"]
+        if backend["family"] != "qwen-transformers"
+    ]
 
-    with pytest.raises(RuntimeError, match="pinned fixture revision"):
+    with pytest.raises(RuntimeError, match="required families"):
+        verify_release_artifacts.verify_manifest(
+            path,
+            manifest,
+            expected_version=VERSION,
+            source_sha=SOURCE_SHA,
+        )
+
+
+def test_intel_macos_receipt_requires_faster_whisper(tmp_path) -> None:
+    path = write_valid_target(tmp_path, "x86_64-apple-darwin")
+    manifest = json.loads(path.read_text())
+    manifest["native_backend_smoke"]["backends"] = []
+
+    with pytest.raises(RuntimeError, match="required families"):
+        verify_release_artifacts.verify_manifest(
+            path,
+            manifest,
+            expected_version=VERSION,
+            source_sha=SOURCE_SHA,
+        )
+
+
+def test_native_backend_receipt_rejects_an_unadvertised_extra_family(tmp_path) -> None:
+    path = write_valid_target(tmp_path, "x86_64-apple-darwin")
+    manifest = json.loads(path.read_text())
+    manifest["native_backend_smoke"]["backends"].append(native_backend_result("qwen-transformers"))
+
+    with pytest.raises(RuntimeError, match="required families"):
+        verify_release_artifacts.verify_manifest(
+            path,
+            manifest,
+            expected_version=VERSION,
+            source_sha=SOURCE_SHA,
+        )
+
+
+@pytest.mark.parametrize(
+    ("family", "mutation"),
+    [
+        ("qwen-transformers", "blank"),
+        ("qwen-mlx", "blank"),
+        ("qwen-transformers", "boolean"),
+        ("faster-whisper", "boolean"),
+        ("qwen-transformers", "missing_key"),
+        ("faster-whisper", "missing_key"),
+    ],
+)
+def test_native_backend_receipt_rejects_invalid_output_evidence(
+    tmp_path,
+    family,
+    mutation,
+) -> None:
+    path = write_valid_target(tmp_path, "aarch64-apple-darwin")
+    manifest = json.loads(path.read_text())
+    backend = next(
+        entry for entry in manifest["native_backend_smoke"]["backends"] if entry["family"] == family
+    )
+    if mutation == "blank":
+        backend["output"]["text_chars"] = 0
+    elif mutation == "boolean":
+        backend["output"]["text_chars"] = True
+    elif mutation == "missing_key":
+        backend["output"]["keys"] = []
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(f"Unknown mutation: {mutation}")
+
+    with pytest.raises(RuntimeError, match="output evidence"):
         verify_release_artifacts.verify_manifest(
             path,
             manifest,

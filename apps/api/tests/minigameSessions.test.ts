@@ -7,7 +7,8 @@ import {
   minigamePlayers,
   minigameRoundResults,
   minigameRounds,
-  minigameSessions
+  minigameSessions,
+  tasks,
 } from "../src/db/schema";
 import {
   listMinigameSessions,
@@ -69,6 +70,21 @@ const setupDb = () => {
       overall_pass INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      skill_domain TEXT NOT NULL,
+      base_difficulty INTEGER NOT NULL,
+      general_objective TEXT,
+      tags TEXT NOT NULL,
+      language TEXT NOT NULL,
+      is_published INTEGER NOT NULL,
+      parent_task_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
   const db = drizzle(sqlite);
   return { db, sqlite };
@@ -77,6 +93,21 @@ const setupDb = () => {
 test("listMinigameSessions scopes by user and excludes deleted", async () => {
   const { db } = setupDb();
   const now = Date.now();
+  await db.insert(tasks).values({
+    id: "task-1",
+    slug: "task-1",
+    title: "Task",
+    description: "Description",
+    skill_domain: "validation",
+    base_difficulty: 2,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: true,
+    parent_task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
   await db.insert(minigameSessions).values([
     {
       id: "session-1",
@@ -163,6 +194,21 @@ test("listMinigameSessions scopes by user and excludes deleted", async () => {
 test("updateMinigameResume updates pointers and last_active_at", async () => {
   const { db } = setupDb();
   const now = Date.now();
+  await db.insert(tasks).values({
+    id: "task-1",
+    slug: "task-1",
+    title: "Task",
+    description: "Description",
+    skill_domain: "validation",
+    base_difficulty: 2,
+    general_objective: null,
+    tags: [],
+    language: "en",
+    is_published: true,
+    parent_task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
   await db.insert(minigameSessions).values({
     id: "session-1",
     user_id: "user-1",
@@ -176,6 +222,38 @@ test("updateMinigameResume updates pointers and last_active_at", async () => {
     current_round_id: null,
     current_player_id: null,
     deleted_at: null
+  });
+  await db.insert(minigamePlayers).values([
+    {
+      id: "player-9",
+      session_id: "session-1",
+      name: "Player",
+      avatar: "a",
+      team_id: null,
+      created_at: now,
+    },
+    {
+      id: "player-unassigned",
+      session_id: "session-1",
+      name: "Unassigned",
+      avatar: "b",
+      team_id: null,
+      created_at: now,
+    },
+  ]);
+  await db.insert(minigameRounds).values({
+    id: "round-9",
+    session_id: "session-1",
+    position: 0,
+    task_id: "task-1",
+    example_id: "example-1",
+    player_a_id: "player-9",
+    player_b_id: null,
+    team_a_id: null,
+    team_b_id: null,
+    status: "pending",
+    started_at: null,
+    completed_at: null
   });
 
   const updated = await updateMinigameResume(db, {
@@ -195,6 +273,87 @@ test("updateMinigameResume updates pointers and last_active_at", async () => {
   assert.equal(session?.current_round_id, "round-9");
   assert.equal(session?.current_player_id, "player-9");
   assert.equal(session?.last_active_at, now);
+
+  const invalidPointer = await updateMinigameResume(db, {
+    userId: "user-1",
+    sessionId: "session-1",
+    currentRoundId: "round-from-another-session",
+    currentPlayerId: "player-9",
+    lastActiveAt: now + 1
+  });
+  assert.equal(invalidPointer, false);
+
+  const unassignedFfaPointer = await updateMinigameResume(db, {
+    userId: "user-1",
+    sessionId: "session-1",
+    currentRoundId: "round-9",
+    currentPlayerId: "player-unassigned",
+    lastActiveAt: now + 2,
+  });
+  assert.equal(unassignedFfaPointer, false);
+
+  await db.insert(minigameSessions).values({
+    id: "session-tdm",
+    user_id: "user-1",
+    game_type: "tdm",
+    visibility_mode: "normal",
+    task_selection: {},
+    settings: {},
+    created_at: now,
+    ended_at: null,
+    last_active_at: now,
+    current_round_id: null,
+    current_player_id: null,
+    deleted_at: null,
+  });
+  await db.insert(minigamePlayers).values([
+    {
+      id: "tdm-a",
+      session_id: "session-tdm",
+      name: "A",
+      avatar: "a",
+      team_id: "red",
+      created_at: now,
+    },
+    {
+      id: "tdm-b",
+      session_id: "session-tdm",
+      name: "B",
+      avatar: "b",
+      team_id: "blue",
+      created_at: now,
+    },
+    {
+      id: "tdm-unassigned",
+      session_id: "session-tdm",
+      name: "C",
+      avatar: "c",
+      team_id: "blue",
+      created_at: now,
+    },
+  ]);
+  await db.insert(minigameRounds).values({
+    id: "round-tdm",
+    session_id: "session-tdm",
+    position: 0,
+    task_id: "task-1",
+    example_id: "example-1",
+    player_a_id: "tdm-a",
+    player_b_id: "tdm-b",
+    team_a_id: "red",
+    team_b_id: "blue",
+    status: "pending",
+    started_at: null,
+    completed_at: null,
+  });
+  const unassignedTdmPointer = await updateMinigameResume(db, {
+    userId: "user-1",
+    sessionId: "session-tdm",
+    currentRoundId: "round-tdm",
+    currentPlayerId: "tdm-unassigned",
+    lastActiveAt: now + 3,
+  });
+  assert.equal(unassignedTdmPointer, false);
 });
 
 test("softDeleteMinigameSession hides session from list", async () => {

@@ -1,20 +1,21 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 const variantStyles = {
   tip: {
     container: "border-teal-400/30 bg-teal-400/10 text-teal-100",
     icon: "text-teal-300",
-    label: "Tip"
+    labelKey: "help.callout.tip"
   },
   note: {
     container: "border-sky-400/30 bg-sky-400/10 text-sky-100",
     icon: "text-sky-300",
-    label: "Note"
+    labelKey: "help.callout.note"
   },
   warning: {
     container: "border-amber-400/30 bg-amber-400/10 text-amber-100",
     icon: "text-amber-300",
-    label: "Warning"
+    labelKey: "help.callout.warning"
   }
 } as const;
 
@@ -27,6 +28,7 @@ type CalloutProps = {
 };
 
 export const Callout = ({ variant = "note", title, children }: CalloutProps) => {
+  const { t } = useTranslation();
   const styles = variantStyles[variant];
 
   return (
@@ -42,7 +44,7 @@ export const Callout = ({ variant = "note", title, children }: CalloutProps) => 
       </span>
       <div className="space-y-1 text-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.25em] text-white/70">
-          {title ?? styles.label}
+          {title ?? t(styles.labelKey)}
         </p>
         <div className="text-sm leading-relaxed text-white/90">{children}</div>
       </div>
